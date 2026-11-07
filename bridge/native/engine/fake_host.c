@@ -32,6 +32,9 @@ static double __stdcall scale(double v, int k) { return v * k; }
  *   prehooked  cdecl (a) -> 3a, starts with a jmp into "another plugin" (rel32 to relocate)
  *   msvc_float cdecl (float a) -> a in st0                 55 8b ec d9 45 08 */
 extern int msvc_this(void), msvc_seh(void), prehooked(void), msvc_float(void);
+/* Probe targets: tiny is a thiscall getter too short for an entry jump (8b 01 c3); site_caller reaches it
+ * with a direct call (site_call is that call instruction), vt_caller through slot 1 of tiny_vtable (.rdata). */
+extern int tiny(void), site_caller(void), site_call(void), vt_caller(void), tiny_vtable(void);
 __asm__(
     ".text\n"
     ".globl _msvc_this\n"
@@ -75,7 +78,30 @@ __asm__(
     "  movl %esp, %ebp\n"
     "  flds 8(%ebp)\n"
     "  popl %ebp\n"
-    "  ret\n");
+    "  ret\n"
+    ".globl _tiny\n"
+    "_tiny:\n"
+    "  movl (%ecx), %eax\n"
+    "  ret\n"
+    ".globl _site_caller\n"
+    "_site_caller:\n"
+    "  movl 4(%esp), %ecx\n"
+    ".globl _site_call\n"
+    "_site_call:\n"
+    "  call _tiny\n"
+    "  ret\n"
+    ".globl _vt_caller\n"
+    "_vt_caller:\n"
+    "  movl 4(%esp), %ecx\n"
+    "  movl $_tiny_vtable, %eax\n"
+    "  call *4(%eax)\n"
+    "  ret\n"
+    ".section .rdata,\"dr\"\n"
+    ".globl _tiny_vtable\n"
+    "_tiny_vtable:\n"
+    "  .long _msvc_seh\n"
+    "  .long _tiny\n"
+    ".text\n");
 
 static void send(uint32_t type, void *data) {
     Message m = {"NVSE", type, 0, data};
@@ -181,12 +207,14 @@ int main(int argc, char **argv) {
     if (!q || !l || q(&editor, &info) || q(&wrong_build, &info) || !q(&nvse, &info) || !l(&nvse)) return 4;
     static int self_value = 6;
     printf("{\"buffer\":\"0x%08x\",\"chain\":\"0x%08x\",\"chainEnd\":\"0x%08x\",\"add3\":\"0x%08x\",\"sub2\":\"0x%08x\","
-           "\"member\":\"0x%08x\",\"self\":\"0x%08x\",\"fast\":\"0x%08x\",\"halfsum\":\"0x%08x\",\"scale\":\"0x%08x\",\"msvcThis\":\"0x%08x\",\"msvcSeh\":\"0x%08x\",\"prehooked\":\"0x%08x\",\"msvcFloat\":\"0x%08x\"}\n",
+           "\"member\":\"0x%08x\",\"self\":\"0x%08x\",\"fast\":\"0x%08x\",\"halfsum\":\"0x%08x\",\"scale\":\"0x%08x\",\"msvcThis\":\"0x%08x\",\"msvcSeh\":\"0x%08x\",\"prehooked\":\"0x%08x\",\"msvcFloat\":\"0x%08x\",\"tiny\":\"0x%08x\",\"siteCaller\":\"0x%08x\",\"siteCall\":\"0x%08x\",\"vtCaller\":\"0x%08x\",\"tinyVtable\":\"0x%08x\"}\n",
            (unsigned)(uintptr_t)memory, (unsigned)(uintptr_t)&chain_a, (unsigned)(uintptr_t)chain_b,
            (unsigned)(uintptr_t)add3, (unsigned)(uintptr_t)sub2, (unsigned)(uintptr_t)member,
            (unsigned)(uintptr_t)&self_value, (unsigned)(uintptr_t)fast, (unsigned)(uintptr_t)halfsum,
            (unsigned)(uintptr_t)scale, (unsigned)(uintptr_t)msvc_this, (unsigned)(uintptr_t)msvc_seh,
-           (unsigned)(uintptr_t)prehooked, (unsigned)(uintptr_t)msvc_float);
+           (unsigned)(uintptr_t)prehooked, (unsigned)(uintptr_t)msvc_float, (unsigned)(uintptr_t)tiny,
+           (unsigned)(uintptr_t)site_caller, (unsigned)(uintptr_t)site_call, (unsigned)(uintptr_t)vt_caller,
+           (unsigned)(uintptr_t)tiny_vtable);
     fflush(stdout);
     send(18, NULL);  /* DeferredInit */
     send(14, NULL);  /* NewGame */

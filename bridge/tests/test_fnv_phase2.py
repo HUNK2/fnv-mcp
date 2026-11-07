@@ -134,5 +134,87 @@ class Helpers(unittest.TestCase):
         self.assertGreater(space['free'] + space['used'], 0)
 
 
+class ProbePlanning(unittest.TestCase):
+    """The N1 planner, with a tiny hand-built image and engine (no game, no real exe)."""
+
+    class Image:
+        def __init__(self, functions):
+            self.bytes = {}
+            self.path = __file__
+            for a, code in functions.items():
+                self.bytes[a] = code
+
+        def read(self, address, length):
+            for a, code in self.bytes.items():
+                if a <= address < a + len(code):
+                    o = address - a
+                    return (code[o:o + length]).ljust(length, b'\x00')
+            return None
+
+    def engine(self, functions, rtti=None):
+        from types import SimpleNamespace
+        funcs = {a: {'address': '0x%08X' % a, 'name': n, 'status': s, 'size': len(code)}
+                 for a, (n, s, code) in functions.items()}
+        e = SimpleNamespace(functions=funcs, addresses=sorted(funcs), rtti=rtti or {},
+                            vtables={}, callers={}, calls={}, tails={})
+        e.resolve = lambda ref: int(ref, 16) if isinstance(ref, str) else ref
+        e.summary = lambda a, with_location=True: {'address': '0x%08X' % a, 'name': funcs[a]['name'],
+                                                   'status': funcs[a]['status']}
+        e.containing = lambda a: next(((x, a - x) for x in funcs if x <= a < x + funcs[x]['size']), None)
+        return e
+
+    def test_entry_sites_and_rejections(self):
+        from geck_mcp import fnv_probe
+        # 0x1000 normal prologue (entry). 0x1100 a 3-byte getter reached by a direct call from 0x1200 and two vtable
+        # slots. 0x1300 has a short jump landing inside its own first 5 bytes, plus a call site from 0x1400 (so it
+        # cannot take an entry jump but is still probeable at the site).
+        normal = b'\x55\x8b\xec\x83\xec\x08\xc3'          # push ebp; mov ebp,esp; sub esp,8; ret
+        getter = b'\x8b\x01\xc3'                          # mov eax,[ecx]; ret   (too short for an entry jump)
+        caller = b'\x51\xe8' + struct.pack('<i', 0x1100 - (0x1201 + 5)) + b'\xc3'  # call 0x1100, rel32 at 0x1202
+        # clean 6-byte prologue, then a jmp at 0x1306 back to 0x1302 -- inside the moved bytes 0x1300..0x1305
+        selfjmp = b'\x55\x8b\xec\x83\xec\x08\xeb\xfa\xc3'
+        bcaller = b'\xe8' + struct.pack('<i', 0x1300 - (0x1400 + 5)) + b'\xc3'      # call 0x1300
+        functions = {
+            0x1000: ('Clean::Method', 'unnamed', normal),
+            0x1100: ('Tiny::Get', 'unnamed', getter),
+            0x1200: ('Caller::Fn', 'decomp', caller),
+            0x1300: ('Branchy::Fn', 'unnamed', selfjmp),
+            0x1400: ('BCaller::Fn', 'decomp', bcaller),
+        }
+        rtti = {'Tiny': {'vtables': [{'address': '0x4000', 'slots': ['0x00001100', '0x00001100']}]}}
+        e = self.engine(functions, rtti)
+        e.callers = {0x1100: [(0x1200, 'call')], 0x1300: [(0x1400, 'call')]}
+        img = self.Image({a: code for a, (_, _, code) in functions.items()})
+        p = fnv_probe.ProbePlanner(e, img)
+        self.assertEqual(p.analyse(0x1000)['mode'], 'entry')
+        tiny = p.analyse(0x1100)
+        self.assertEqual(tiny['mode'], 'sites')
+        kinds = sorted(k for k, _ in tiny['sites'])
+        self.assertEqual(kinds, [fnv_probe.SITE_POINTER, fnv_probe.SITE_POINTER, fnv_probe.SITE_REL32])
+        self.assertIn((fnv_probe.SITE_REL32, 0x1202), tiny['sites'])  # the rel32 of the E8 call
+        self.assertIn((fnv_probe.SITE_POINTER, 0x4004), tiny['sites'])  # slot 1 of the vtable
+        branchy = p.analyse(0x1300)
+        self.assertEqual(branchy['mode'], 'sites')
+        self.assertIn('lands inside the moved bytes', branchy['entryProblem'])
+        self.assertIn('quarantined', fnv_probe.ProbePlanner(e, img, {0x1000}).analyse(0x1000)['reason'])
+        summary = fnv_probe.summarise(p.plan([0x1000, 0x1100, 0x1300]), e)
+        self.assertEqual((summary['entry'], summary['sites']), (1, 2))
+
+
+class DoseResponse(unittest.TestCase):
+    def test_fit_classifies(self):
+        from geck_mcp import fnv_atlas
+        per_unit = [(0, 0), (0, 0), (1, 2), (2, 4), (4, 8), (1, 2), (2, 4), (4, 8)]
+        fit = fnv_atlas.classify(per_unit)
+        self.assertEqual(fit['kind'], 'per_unit')
+        self.assertAlmostEqual(fit['per_unit'], 2.0, places=3)
+        with_action = [(0, 0), (0, 0), (1, 1), (2, 1), (4, 1)]
+        self.assertEqual(fnv_atlas.classify(with_action)['kind'], 'with_action')
+        background = [(0, 30), (1, 31), (2, 29), (4, 30)]
+        self.assertIsNone(fnv_atlas.classify(background))
+        noisy = [(0, 5), (1, 40), (2, 20), (4, 90)]  # high but no clean line
+        self.assertIsNone(fnv_atlas.classify(noisy))
+
+
 if __name__ == '__main__':
     unittest.main()

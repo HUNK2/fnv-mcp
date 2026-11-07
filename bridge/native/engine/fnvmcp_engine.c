@@ -24,6 +24,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <sddl.h>
+#include <tlhelp32.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -392,7 +393,8 @@ typedef struct {
     unsigned char *skip_stub;
     char script[256];
 } Hook;
-typedef struct { uint32_t ret_slot, ret; Hook *hook; uint64_t t0; LONG seq; uint32_t ecx, a0, a1, override; } ShadowFrame;
+/* A frame is a watch hook's (hook set) or a mass probe's (probe = index + 1, sample = its sample record). */
+typedef struct { uint32_t ret_slot, ret; Hook *hook; uint64_t t0; LONG seq; uint32_t ecx, a0, a1, override, probe; uint32_t *sample; } ShadowFrame;
 typedef struct { int count; ShadowFrame frames[SHADOW]; } Shadow;
 static Hook *hooks[HOOKS];
 static int hook_count;
@@ -402,10 +404,14 @@ static DWORD shadow_tls = TLS_OUT_OF_INDEXES;
 static LARGE_INTEGER qpc_frequency;
 
 uint32_t fnvmcp_on_enter(uint32_t *fr);
-uint32_t fnvmcp_on_exit(uint32_t *fr);
+uint32_t fnvmcp_on_exit(uint32_t *fr, const uint32_t *fpu);
+uint32_t fnvmcp_probe_enter(uint32_t *fr);
 extern void fnvmcp_enter_common(void);
 extern void fnvmcp_exit_stub(void);
-/* frame (low to high): eflags edi esi ebp esp ebx edx ecx eax slot ret args... */
+extern void fnvmcp_probe_common(void);
+/* frame (low to high): eflags edi esi ebp esp ebx edx ecx eax slot ret args...
+ * The exit stub also reads st0 without popping it: fxam tells an empty register (an integer result) from a
+ * float result, which fsts copies; fpu = {status word, float bits}. */
 __asm__(
     ".text\n"
     ".globl _fnvmcp_enter_common\n"
@@ -426,10 +432,36 @@ __asm__(
     "  pushl $0\n"
     "  pushal\n"
     "  pushfl\n"
+    "  movl %esp, %ebx\n"
+    "  subl $8, %esp\n"
+    "  movl $0, 4(%esp)\n"
+    "  fxam\n"
+    "  fnstsw %ax\n"
+    "  andl $0xffff, %eax\n"
+    "  movl %eax, 0(%esp)\n"
+    "  andl $0x4500, %eax\n"
+    "  cmpl $0x4100, %eax\n"
+    "  je 1f\n"
+    "  fsts 4(%esp)\n"
+    "1:\n"
     "  movl %esp, %eax\n"
     "  cld\n"
     "  pushl %eax\n"
+    "  pushl %ebx\n"
     "  call _fnvmcp_on_exit\n"
+    "  addl $16, %esp\n"
+    "  movl %eax, 36(%esp)\n"
+    "  popfl\n"
+    "  popal\n"
+    "  ret\n"
+    ".globl _fnvmcp_probe_common\n"
+    "_fnvmcp_probe_common:\n"
+    "  pushal\n"
+    "  pushfl\n"
+    "  movl %esp, %eax\n"
+    "  cld\n"
+    "  pushl %eax\n"
+    "  call _fnvmcp_probe_enter\n"
     "  addl $4, %esp\n"
     "  movl %eax, 36(%esp)\n"
     "  popfl\n"
@@ -553,13 +585,16 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
         f->a0 = fr[11];
         f->a1 = fr[12];
         f->override = act == ACT_RESULT;
+        f->probe = 0;
+        f->sample = NULL;
         fr[10] = (uint32_t)(uintptr_t)fnvmcp_exit_stub;
     }
 done:
     SetLastError(error);
     return (uint32_t)(uintptr_t)h->trampoline;
 }
-uint32_t fnvmcp_on_exit(uint32_t *fr) {
+static void probe_exit(const ShadowFrame *f, const uint32_t *fr, const uint32_t *fpu, uint64_t elapsed);
+uint32_t fnvmcp_on_exit(uint32_t *fr, const uint32_t *fpu) {
     DWORD error = GetLastError();
     Shadow *s = TlsGetValue(shadow_tls);
     uint32_t sp = (uint32_t)(uintptr_t)&fr[10]; /* esp when the hooked function returned */
@@ -579,6 +614,11 @@ uint32_t fnvmcp_on_exit(uint32_t *fr) {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     uint64_t elapsed = (uint64_t)now.QuadPart - f.t0;
+    if (f.probe) {
+        probe_exit(&f, fr, fpu, elapsed);
+        SetLastError(error);
+        return f.ret;
+    }
     Hook *h = f.hook;
     uint32_t returned = fr[8];
     if (f.override) fr[8] = h->act_value;
@@ -835,6 +875,440 @@ static void op_hooks(void) {
     emit("]}");
 }
 
+/* ------------------------------------------------------------------------------------ mass probes
+ * Probes (fnv-mcp NAMING-PLAN N2): light call counters on thousands of functions at once, for naming the
+ * decomp's unnamed functions from what actually runs. The bridge plans them offline (whole-instruction
+ * prologues, no branch back into the moved bytes, no call before the last moved instruction, bytes equal
+ * to the clean exe) and sends batches:
+ *   probe init <capacity> <samples> <exit samples> <every>   allocate a set (refused while one is armed)
+ *   probe add <hex>    12-byte records: target u32, mode u8 (0 entry jump, 1 sites only: the stub jumps
+ *                      straight to the target), stolen u8, relocation count u8, 3 relocation offsets u8, pad 2
+ *   probe site <hex>   12-byte records: probe index u32, kind u8 (1 pointer slot such as a vtable entry,
+ *                      2 rel32 field of a call or jmp), pad 3, address u32
+ *   probe arm          patch every staged or disarmed probe and site with every other thread suspended; a
+ *                      probe whose moved bytes a suspended thread is executing stays for the next arm
+ *   probe disarm       put the original bytes back (same suspension); stubs stay allocated
+ *   probe tag <n>      the current action id, stored in each sample
+ *   probe config <samples> <exit samples> <every>
+ *   probe clear        zero counters, samples and caller tables
+ *   probe info         the arrays' addresses (the bridge reads them in bulk with ReadProcessMemory)
+ *   probe list <first> <count>   hex of (target u32, state u8) per probe
+ * Stub:    push eax; mov eax,1; lock xadd [count],eax; inc eax; cmp eax,[limit]; jbe sample;
+ *          test [mask],eax; jz sample; pop eax; jmp tramp
+ * sample:  pop eax; push index; jmp probe_common
+ * The fast path changes only arithmetic flags, which no compiled caller expects to survive a call. A sampled
+ * call (the first <samples>, then one in <every>) adds its caller to a 16-entry table; the first <samples>
+ * also record ecx, edx, the caller, 6 stack words and the vtables at ecx/arg0/arg1, and the first
+ * <exit samples> of those the result (eax, and st0 when it holds a float) through the shared shadow stack.
+ * Sample words: 0 action, 1 thread, 2 ecx, 3 edx, 4 caller, 5..10 stack words, 11..13 vtables of ecx/arg0/
+ * arg1, 14 eax at exit, 15 st0 float bits, 16 exit state (0 none, 1 pending, 2 int, 3 float), 17 frame,
+ * 18 elapsed QPC ticks, 19 sample number. */
+#define PROBE_WORDS 20u
+#define PROBE_CALLERS 16u
+#define PROBE_STUB 80u
+#define PROBE_TRAMP 56u
+#define PROBE_MAX 65536u
+#define PROBE_SITES 65536u
+#define PROBE_THREADS 512u
+#define PROBE_PAGES 8192u
+enum { PROBE_STAGED, PROBE_ARMED, PROBE_DISARMED, PROBE_CHANGED };
+typedef struct { uint32_t target; uint8_t mode, stolen, state, pad; unsigned char original[16]; unsigned char *stub, *tramp; } Probe;
+typedef struct { uint32_t probe, address, original, value; uint8_t kind, state, pad[2]; } ProbeSite;
+static Probe *probes;
+static ProbeSite *probe_sites;
+static uint32_t probe_capacity, probe_used, probe_site_used, probe_samples_per;
+static volatile LONG *probe_counts;  /* [capacity] calls */
+static volatile LONG *probe_meta;    /* [capacity][2]: sampled calls, caller-table overflow */
+static uint32_t *probe_samples;      /* [capacity][samples_per][PROBE_WORDS] */
+static volatile LONG *probe_callers; /* [capacity][PROBE_CALLERS][2]: return address, count */
+static unsigned char *probe_code;
+static volatile uint32_t probe_limit, probe_mask = 0xFFFFFFFFu, probe_action, probe_exit_samples;
+
+uint32_t fnvmcp_probe_enter(uint32_t *fr) {
+    DWORD error = GetLastError();
+    uint32_t i = fr[9], ret = fr[10];
+    volatile LONG *table = &probe_callers[(size_t)i * PROBE_CALLERS * 2];
+    bool placed = false;
+    for (uint32_t k = 0; k < PROBE_CALLERS && !placed; k++) {
+        LONG seen = table[2 * k];
+        if (!seen) seen = InterlockedCompareExchange(&table[2 * k], (LONG)ret, 0);
+        if (!seen || seen == (LONG)ret) {
+            InterlockedIncrement(&table[2 * k + 1]);
+            placed = true;
+        }
+    }
+    if (!placed) InterlockedIncrement(&probe_meta[2 * i + 1]);
+    LONG n = InterlockedIncrement(&probe_meta[2 * i]);
+    if ((uint32_t)n <= probe_samples_per && (uint32_t)n <= probe_limit) {
+        uint32_t *s = &probe_samples[((size_t)i * probe_samples_per + (uint32_t)(n - 1)) * PROBE_WORDS];
+        s[16] = 0;
+        s[0] = probe_action;
+        s[1] = GetCurrentThreadId();
+        s[2] = fr[7];
+        s[3] = fr[6];
+        s[4] = ret;
+        if (!read_bytes((uint32_t)(uintptr_t)&fr[11], &s[5], 24)) memset(&s[5], 0, 24);
+        if (!read_u32(fr[7], &s[11])) s[11] = 0;
+        if (!read_u32(s[5], &s[12])) s[12] = 0;
+        if (!read_u32(s[6], &s[13])) s[13] = 0;
+        s[14] = s[15] = s[18] = 0;
+        s[17] = (uint32_t)frame;
+        s[19] = (uint32_t)n;
+        Shadow *sh = (uint32_t)n <= probe_exit_samples ? shadow_get() : NULL;
+        if (sh && sh->count < SHADOW) {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            ShadowFrame *f = &sh->frames[sh->count++];
+            memset(f, 0, sizeof(*f));
+            f->ret_slot = (uint32_t)(uintptr_t)&fr[10];
+            f->ret = ret;
+            f->t0 = (uint64_t)now.QuadPart;
+            f->ecx = fr[7];
+            f->a0 = s[5];
+            f->a1 = s[6];
+            f->probe = i + 1;
+            f->sample = s;
+            s[16] = 1;
+            fr[10] = (uint32_t)(uintptr_t)fnvmcp_exit_stub;
+        }
+    }
+    SetLastError(error);
+    return (uint32_t)(uintptr_t)probes[i].tramp;
+}
+static void probe_exit(const ShadowFrame *f, const uint32_t *fr, const uint32_t *fpu, uint64_t elapsed) {
+    uint32_t *s = f->sample;
+    bool is_float = (fpu[0] & 0x4500u) != 0x4100u;
+    s[14] = fr[8];
+    s[15] = is_float ? fpu[1] : 0;
+    s[18] = elapsed > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)elapsed;
+    MemoryBarrier();
+    s[16] = is_float ? 3 : 2;
+}
+static unsigned char *put32(unsigned char *c, uint32_t v) { memcpy(c, &v, 4); return c + 4; }
+static uint32_t addr_of(const volatile void *p) { return (uint32_t)(uintptr_t)p; }
+static bool probe_build(uint32_t i, const unsigned char *record) {
+    Probe *p = &probes[i];
+    memset(p, 0, sizeof(*p));
+    memcpy(&p->target, record, 4);
+    p->mode = record[4];
+    p->stolen = record[5];
+    uint8_t nrel = record[6];
+    if (p->mode > 1 || nrel > 3 || (p->mode == 0 && (p->stolen < 5 || p->stolen > 16))) return false;
+    if (p->mode == 0 && !read_bytes(p->target, p->original, p->stolen)) return false;
+    p->stub = probe_code + (size_t)i * PROBE_STUB;
+    p->tramp = p->stub + PROBE_TRAMP;
+    unsigned char *c = p->stub, *t = p->tramp;
+    *c++ = 0x50;                                                     /* push eax */
+    *c++ = 0xB8; c = put32(c, 1);                                    /* mov eax, 1 */
+    *c++ = 0xF0; *c++ = 0x0F; *c++ = 0xC1; *c++ = 0x05;              /* lock xadd [count], eax */
+    c = put32(c, addr_of(&probe_counts[i]));
+    *c++ = 0x40;                                                     /* inc eax */
+    *c++ = 0x3B; *c++ = 0x05; c = put32(c, addr_of(&probe_limit));   /* cmp eax, [limit] */
+    *c++ = 0x76; unsigned char *j1 = c++;                            /* jbe sample */
+    *c++ = 0x85; *c++ = 0x05; c = put32(c, addr_of(&probe_mask));    /* test [mask], eax */
+    *c++ = 0x74; unsigned char *j2 = c++;                            /* jz sample */
+    *c++ = 0x58;                                                     /* pop eax */
+    *c++ = 0xE9; c = put32(c, addr_of(t) - (addr_of(c) + 4));        /* jmp tramp */
+    *j1 = (unsigned char)(c - (j1 + 1));
+    *j2 = (unsigned char)(c - (j2 + 1));
+    *c++ = 0x58;                                                     /* sample: pop eax */
+    *c++ = 0x68; c = put32(c, i);                                    /* push index */
+    *c++ = 0xE9; c = put32(c, addr_of((void *)fnvmcp_probe_common) - (addr_of(c) + 4));
+    if (p->mode == 0) {
+        memcpy(t, p->original, p->stolen);
+        for (uint8_t k = 0; k < nrel; k++) {
+            uint8_t offset = record[7 + k];
+            uint32_t rel;
+            if (offset + 4u > p->stolen) return false;
+            memcpy(&rel, t + offset, 4);
+            rel += p->target - addr_of(t);
+            memcpy(t + offset, &rel, 4);
+        }
+        t[p->stolen] = 0xE9;
+        put32(t + p->stolen + 1, p->target + p->stolen - (addr_of(t + p->stolen) + 5));
+    } else {
+        t[0] = 0xE9;
+        put32(t + 1, p->target - (addr_of(t) + 5));
+    }
+    p->state = PROBE_STAGED;
+    return true;
+}
+/* Every other thread of the process is suspended while code is patched: nothing that allocates or locks
+ * runs in between (no emit, no heap). */
+static HANDLE probe_threads[PROBE_THREADS];
+static uint32_t probe_eips[PROBE_THREADS];
+static unsigned probe_thread_count, probe_thread_failures;
+static struct { uint32_t page; DWORD old; } probe_pages[PROBE_PAGES];
+static unsigned probe_page_count;
+static void probe_suspend(void) {
+    probe_thread_count = probe_thread_failures = 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te;
+    te.dwSize = sizeof(te);
+    DWORD self = GetCurrentThreadId();
+    for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid || te.th32ThreadID == self || probe_thread_count >= PROBE_THREADS) continue;
+        HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+        if (!h) { probe_thread_failures++; continue; }
+        if (SuspendThread(h) == (DWORD)-1) { CloseHandle(h); probe_thread_failures++; continue; }
+        CONTEXT context;
+        memset(&context, 0, sizeof(context));
+        context.ContextFlags = CONTEXT_CONTROL;
+        probe_eips[probe_thread_count] = GetThreadContext(h, &context) ? context.Eip : 0;
+        probe_threads[probe_thread_count++] = h;
+    }
+    CloseHandle(snap);
+}
+static void probe_resume(void) {
+    for (unsigned k = 0; k < probe_thread_count; k++) {
+        ResumeThread(probe_threads[k]);
+        CloseHandle(probe_threads[k]);
+    }
+    probe_thread_count = 0;
+}
+static bool probe_writable(uint32_t address, uint32_t length) {
+    for (uint32_t page = address & ~0xFFFu; page < address + length; page += 0x1000) {
+        bool known = false;
+        for (unsigned k = probe_page_count; k-- > 0;)
+            if (probe_pages[k].page == page) { known = true; break; }
+        if (known) continue;
+        if (probe_page_count >= PROBE_PAGES) return false;
+        DWORD old;
+        if (!VirtualProtect((LPVOID)(uintptr_t)page, 0x1000, PAGE_EXECUTE_READWRITE, &old)) return false;
+        probe_pages[probe_page_count].page = page;
+        probe_pages[probe_page_count++].old = old;
+    }
+    return true;
+}
+static void probe_protect_back(void) {
+    for (unsigned k = 0; k < probe_page_count; k++) {
+        DWORD old;
+        VirtualProtect((LPVOID)(uintptr_t)probe_pages[k].page, 0x1000, probe_pages[k].old, &old);
+    }
+    probe_page_count = 0;
+    FlushInstructionCache(GetCurrentProcess(), NULL, 0);
+}
+static bool probe_thread_inside(uint32_t start, uint32_t end) {
+    for (unsigned k = 0; k < probe_thread_count; k++)
+        if (probe_eips[k] > start && probe_eips[k] < end) return true;
+    return false;
+}
+static void probe_arm(void) {
+    unsigned armed = 0, busy = 0, changed = 0, sites = 0, site_changed = 0, unwritable = 0;
+    ULONGLONG t0 = GetTickCount64();
+    probe_suspend();
+    for (uint32_t i = 0; i < probe_used; i++) {
+        Probe *p = &probes[i];
+        if (p->mode != 0 || (p->state != PROBE_STAGED && p->state != PROBE_DISARMED)) continue;
+        if (probe_thread_inside(p->target, p->target + p->stolen)) { busy++; continue; }
+        if (memcmp((const void *)(uintptr_t)p->target, p->original, p->stolen)) { p->state = PROBE_CHANGED; changed++; continue; }
+        if (!probe_writable(p->target, p->stolen)) { unwritable++; continue; }
+        unsigned char *code = (unsigned char *)(uintptr_t)p->target;
+        uint32_t rel = addr_of(p->stub) - (p->target + 5);
+        for (uint8_t k = 5; k < p->stolen; k++) code[k] = 0x90;
+        memcpy(code + 1, &rel, 4);
+        code[0] = 0xE9;
+        p->state = PROBE_ARMED;
+        armed++;
+    }
+    for (uint32_t k = 0; k < probe_site_used; k++) {
+        ProbeSite *s = &probe_sites[k];
+        if (s->state != PROBE_STAGED && s->state != PROBE_DISARMED) continue;
+        uint32_t *field = (uint32_t *)(uintptr_t)s->address;
+        if (*field != s->original) { s->state = PROBE_CHANGED; site_changed++; continue; }
+        if (!probe_writable(s->address, 4)) { unwritable++; continue; }
+        *field = s->value;
+        s->state = PROBE_ARMED;
+        if (probes[s->probe].state != PROBE_ARMED) probes[s->probe].state = PROBE_ARMED;
+        sites++;
+    }
+    probe_protect_back();
+    unsigned threads = probe_thread_count, failures = probe_thread_failures;
+    probe_resume();
+    emit("{\"ok\":true,\"armed\":%u,\"sitesArmed\":%u,\"busy\":%u,\"changed\":%u,\"sitesChanged\":%u,\"unwritable\":%u,"
+         "\"threadsSuspended\":%u,\"threadsNotSuspended\":%u,\"ms\":%llu}",
+         armed, sites, busy, changed, site_changed, unwritable, threads, failures, GetTickCount64() - t0);
+}
+static void probe_disarm(void) {
+    unsigned restored = 0, overwritten = 0, sites = 0;
+    ULONGLONG t0 = GetTickCount64();
+    probe_suspend();
+    for (uint32_t i = 0; i < probe_used; i++) {
+        Probe *p = &probes[i];
+        if (p->mode != 0 || p->state != PROBE_ARMED) continue;
+        unsigned char expected[5] = {0xE9};
+        uint32_t rel = addr_of(p->stub) - (p->target + 5);
+        memcpy(expected + 1, &rel, 4);
+        if (memcmp((const void *)(uintptr_t)p->target, expected, 5)) { overwritten++; p->state = PROBE_CHANGED; continue; }
+        if (!probe_writable(p->target, p->stolen)) continue;
+        memcpy((void *)(uintptr_t)p->target, p->original, p->stolen);
+        p->state = PROBE_DISARMED;
+        restored++;
+    }
+    for (uint32_t k = 0; k < probe_site_used; k++) {
+        ProbeSite *s = &probe_sites[k];
+        if (s->state != PROBE_ARMED) continue;
+        uint32_t *field = (uint32_t *)(uintptr_t)s->address;
+        if (*field != s->value) { s->state = PROBE_CHANGED; overwritten++; continue; }
+        if (!probe_writable(s->address, 4)) continue;
+        *field = s->original;
+        s->state = PROBE_DISARMED;
+        if (probes[s->probe].mode == 1) probes[s->probe].state = PROBE_DISARMED;
+        sites++;
+    }
+    probe_protect_back();
+    unsigned threads = probe_thread_count;
+    probe_resume();
+    emit("{\"ok\":true,\"restored\":%u,\"sitesRestored\":%u,\"overwritten\":%u,\"threadsSuspended\":%u,\"ms\":%llu}",
+         restored, sites, overwritten, threads, GetTickCount64() - t0);
+}
+static bool probe_any_armed(void) {
+    for (uint32_t i = 0; i < probe_used; i++)
+        if (probes[i].state == PROBE_ARMED) return true;
+    return false;
+}
+static void probe_config(uint32_t samples, uint32_t exits, uint32_t every) {
+    probe_limit = samples < probe_samples_per ? samples : probe_samples_per;
+    probe_exit_samples = exits;
+    probe_mask = every ? every - 1 : 0xFFFFFFFFu;
+}
+static void *probe_alloc(size_t bytes, DWORD protect) {
+    return VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, protect);
+}
+static void probe_info(void) {
+    unsigned armed = 0, staged = 0, disarmed = 0, changed = 0;
+    for (uint32_t i = 0; i < probe_used; i++) {
+        uint8_t s = probes[i].state;
+        armed += s == PROBE_ARMED;
+        staged += s == PROBE_STAGED;
+        disarmed += s == PROBE_DISARMED;
+        changed += s == PROBE_CHANGED;
+    }
+    emit("{\"ok\":true,\"capacity\":%u,\"used\":%u,\"armed\":%u,\"staged\":%u,\"disarmed\":%u,\"changed\":%u,"
+         "\"sites\":%u,\"counts\":\"0x%08x\",\"meta\":\"0x%08x\",\"samples\":\"0x%08x\",\"callers\":\"0x%08x\","
+         "\"code\":\"0x%08x\",\"codeSize\":%u,\"stubSize\":%u,\"samplesPer\":%u,\"words\":%u,\"callerSlots\":%u,"
+         "\"limit\":%u,\"mask\":\"0x%08x\",\"exitSamples\":%u,\"action\":%u,\"qpcFrequency\":%lld}",
+         probe_capacity, probe_used, armed, staged, disarmed, changed, probe_site_used, addr_of(probe_counts),
+         addr_of(probe_meta), addr_of(probe_samples), addr_of(probe_callers), addr_of(probe_code),
+         probe_capacity * PROBE_STUB, PROBE_STUB, probe_samples_per, PROBE_WORDS, PROBE_CALLERS, probe_limit, probe_mask,
+         probe_exit_samples, probe_action, (long long)qpc_frequency.QuadPart);
+}
+static void op_probe(int argc, char **argv) {
+    uint32_t v[4];
+    const char *what = argc > 1 ? argv[1] : "";
+    if (!strcmp(what, "init")) {
+        if (argc != 6 || !parse_u32(argv[2], &v[0]) || !parse_u32(argv[3], &v[1]) || !parse_u32(argv[4], &v[2]) ||
+            !parse_u32(argv[5], &v[3]) || !v[0] || v[0] > PROBE_MAX || v[1] > 64 || (v[3] & (v[3] - 1)))
+            return fail("bad_arguments");
+        if (probe_any_armed()) return fail("probes_armed");
+        /* Arrays are reused when they are big enough (nothing is armed, so no stub runs any more); the code area
+         * is always new: a thread preempted inside an old stub finishes on the old code. */
+        if (!probes || v[0] > probe_capacity || v[1] > probe_samples_per) {
+            uint32_t per = v[1] ? v[1] : 1;
+            probes = probe_alloc((size_t)v[0] * sizeof(Probe), PAGE_READWRITE);
+            probe_counts = probe_alloc((size_t)v[0] * 4, PAGE_READWRITE);
+            probe_meta = probe_alloc((size_t)v[0] * 8, PAGE_READWRITE);
+            probe_samples = probe_alloc((size_t)v[0] * per * PROBE_WORDS * 4, PAGE_READWRITE);
+            probe_callers = probe_alloc((size_t)v[0] * PROBE_CALLERS * 8, PAGE_READWRITE);
+            if (!probe_sites) probe_sites = probe_alloc((size_t)PROBE_SITES * sizeof(ProbeSite), PAGE_READWRITE);
+            if (!probes || !probe_counts || !probe_meta || !probe_samples || !probe_callers || !probe_sites) {
+                probes = NULL;
+                return fail("out_of_memory");
+            }
+            probe_capacity = v[0];
+            probe_samples_per = per;
+        } else {
+            memset((void *)probe_counts, 0, (size_t)probe_capacity * 4);
+            memset((void *)probe_meta, 0, (size_t)probe_capacity * 8);
+            memset(probe_samples, 0, (size_t)probe_capacity * probe_samples_per * PROBE_WORDS * 4);
+            memset((void *)probe_callers, 0, (size_t)probe_capacity * PROBE_CALLERS * 8);
+        }
+        probe_code = probe_alloc((size_t)probe_capacity * PROBE_STUB, PAGE_EXECUTE_READWRITE);
+        if (!probe_code) return fail("out_of_memory");
+        if (shadow_tls == TLS_OUT_OF_INDEXES && (shadow_tls = TlsAlloc()) == TLS_OUT_OF_INDEXES) return fail("no_tls");
+        probe_used = probe_site_used = 0;
+        probe_config(v[1], v[2], v[3]);
+        return probe_info();
+    }
+    if (!probes) return fail("not_initialized");
+    if (!strcmp(what, "add") || !strcmp(what, "site")) {
+        if (argc != 3) return fail("bad_arguments");
+        long n = unhex(argv[2]);
+        if (n < 0 || n % 12) return fail("bad_arguments");
+        const unsigned char *r = (const unsigned char *)argv[2];
+        uint32_t first = !strcmp(what, "add") ? probe_used : probe_site_used, added = 0;
+        for (long k = 0; k < n; k += 12, r += 12) {
+            if (!strcmp(what, "add")) {
+                if (probe_used >= probe_capacity) return fail("probe_set_full");
+                if (!probe_build(probe_used, r)) {
+                    emit("{\"ok\":false,\"error\":\"bad_probe\",\"at\":%ld,\"added\":%u}", k / 12, added);
+                    return;
+                }
+                probe_used++;
+            } else {
+                if (probe_site_used >= PROBE_SITES) return fail("site_table_full");
+                ProbeSite *s = &probe_sites[probe_site_used];
+                memset(s, 0, sizeof(*s));
+                memcpy(&s->probe, r, 4);
+                s->kind = r[4];
+                memcpy(&s->address, r + 8, 4);
+                if (s->probe >= probe_used || probes[s->probe].mode != 1 || (s->kind != 1 && s->kind != 2) ||
+                    !read_u32(s->address, &s->original)) {
+                    emit("{\"ok\":false,\"error\":\"bad_site\",\"at\":%ld,\"added\":%u}", k / 12, added);
+                    return;
+                }
+                uint32_t stub = addr_of(probes[s->probe].stub), target = probes[s->probe].target;
+                if (s->kind == 1 ? s->original != target : s->address + 4 + s->original != target) {
+                    emit("{\"ok\":false,\"error\":\"site_does_not_reach_target\",\"at\":%ld,\"added\":%u}", k / 12, added);
+                    return;
+                }
+                s->value = s->kind == 1 ? stub : stub - (s->address + 4);
+                s->state = PROBE_STAGED;
+                probe_site_used++;
+            }
+            added++;
+        }
+        emit("{\"ok\":true,\"first\":%u,\"added\":%u}", first, added);
+        return;
+    }
+    if (!strcmp(what, "arm")) return probe_arm();
+    if (!strcmp(what, "disarm")) return probe_disarm();
+    if (!strcmp(what, "tag")) {
+        if (argc != 3 || !parse_u32(argv[2], &v[0])) return fail("bad_arguments");
+        probe_action = v[0];
+        emit("{\"ok\":true,\"action\":%u}", v[0]);
+        return;
+    }
+    if (!strcmp(what, "config")) {
+        if (argc != 5 || !parse_u32(argv[2], &v[0]) || !parse_u32(argv[3], &v[1]) || !parse_u32(argv[4], &v[2]) ||
+            (v[2] & (v[2] - 1)))
+            return fail("bad_arguments");
+        probe_config(v[0], v[1], v[2]);
+        return probe_info();
+    }
+    if (!strcmp(what, "clear")) {
+        memset((void *)probe_counts, 0, (size_t)probe_capacity * 4);
+        memset((void *)probe_meta, 0, (size_t)probe_capacity * 8);
+        memset(probe_samples, 0, (size_t)probe_capacity * probe_samples_per * PROBE_WORDS * 4);
+        memset((void *)probe_callers, 0, (size_t)probe_capacity * PROBE_CALLERS * 8);
+        emit("{\"ok\":true}");
+        return;
+    }
+    if (!strcmp(what, "info")) return probe_info();
+    if (!strcmp(what, "list")) {
+        if (argc != 4 || !parse_u32(argv[2], &v[0]) || !parse_u32(argv[3], &v[1])) return fail("bad_arguments");
+        uint32_t end = v[0] + (v[1] > 8192 ? 8192 : v[1]);
+        if (end > probe_used) end = probe_used;
+        emit("{\"ok\":true,\"first\":%u,\"probes\":\"", v[0]);
+        for (uint32_t i = v[0]; i < end && !response_overflow; i++)
+            emit("%08x%02x", probes[i].target, probes[i].state);
+        emit("\"}");
+        return;
+    }
+    fail("bad_arguments");
+}
+
 /* ------------------------------------------------------------------------------------ crash context
  * A first vectored exception handler that only observes: on a hardware fault it writes what a crash log
  * cannot know (the hooked engine calls active on the faulting thread with their this/arguments and form
@@ -906,6 +1380,12 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *e) {
     for (int i = s ? s->count - 1 : -1, first = 1; i >= 0 && i >= s->count - 16; i--, first = 0) {
         ShadowFrame *f = &s->frames[i];
         ctx("%s{\"label\":", first ? "" : ",");
+        if (f->probe) {
+            ctx("\"probe\",\"probeIndex\":%u,\"caller\":\"0x%08x\"", f->probe - 1, f->ret);
+            ctx_form("this", f->ecx);
+            ctx("}");
+            continue;
+        }
         ctx_text(f->hook->label, sizeof(f->hook->label));
         ctx(",\"target\":\"0x%08x\",\"caller\":\"0x%08x\"", f->hook->target, f->ret);
         ctx_form("this", f->ecx);
@@ -1237,6 +1717,7 @@ static void serve_op(char *op) {
     else if (!strcmp(argv[0], "hooks")) op_hooks();
     else if (!strcmp(argv[0], "hookfilter")) op_hookfilter(argc, argv);
     else if (!strcmp(argv[0], "hookact")) op_hookact(argc, argv);
+    else if (!strcmp(argv[0], "probe")) op_probe(argc, argv);
     else fail("unknown_op");
 }
 /* Serves one request line on the main thread; ops run in order within the same frame. */

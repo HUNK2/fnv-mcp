@@ -598,6 +598,85 @@ class CompanionPipeTests(unittest.TestCase):
         self.assertEqual(self.link.one('call', w(t['msvcFloat']), 'f', '0', '0', f(2.5))['st0'], 2.5)
         self.assertTrue(self.link.one('unhook', w(h['id']))['ok'])
 
+    def test_probes(self):
+        # Mass probes: entry jumps, a vtable slot and a call site for a 3-byte getter, counts, caller tables,
+        # samples with results (int and float), sampling one in N, disarm and re-arm.
+        from geck_mcp import fnv_probe
+        t, w = self.targets, fnv_link.word
+        before = self.link.one('probe', 'info')
+        if not before.get('ok'):
+            self.assertEqual(before['error'], 'not_initialized')
+        originals = {k: self.link.read(t[k], 16) for k in ('msvcThis', 'msvcSeh', 'msvcFloat')}
+        self.assertTrue(self.link.one('probe', 'init', '10', '4', '4', '0')['ok'])
+        records = b''
+        for k in ('msvcThis', 'msvcSeh', 'msvcFloat'):
+            stolen, relocs = fnv_deep.decode_prologue(originals[k] + b'\0' * 16)
+            records += struct.pack('<IBBB3sH', t[k], 0, stolen, len(relocs), bytes((relocs + [0, 0, 0])[:3]), 0)
+        records += struct.pack('<IBBB3sH', t['tiny'], 1, 0, 0, b'\0\0\0', 0)
+        self.assertEqual(self.link.one('probe', 'add', records.hex())['added'], 4)
+        sites = struct.pack('<IB3xI', 3, 1, t['tinyVtable'] + 4) + struct.pack('<IB3xI', 3, 2, t['siteCall'] + 1)
+        self.assertEqual(self.link.one('probe', 'site', sites.hex())['added'], 2)
+        bad = struct.pack('<IB3xI', 3, 2, t['siteCaller'])  # not a call to tiny
+        self.assertFalse(self.link.one('probe', 'site', bad.hex())['ok'])
+        arm = self.link.one('probe', 'arm')
+        self.assertEqual((arm['armed'], arm['sitesArmed'], arm['busy']), (3, 2, 0), arm)
+        self.assertGreaterEqual(arm['threadsSuspended'], 1)  # the companion's pipe thread at least
+        self.assertEqual(self.link.read(t['msvcThis'], 1), b'\xe9')
+        call = lambda k, *args: int(self.link.one('call', w(t[k]), 'i', *args)['eax'], 16)
+        self.assertEqual(call('msvcThis', w(t['self']), '0', '7', '3'), 27)
+        self.assertEqual(call('msvcThis', w(t['self']), '0', '1', '1'), 7)
+        self.assertEqual(call('msvcSeh', '0', '0', '4'), 5)
+        f = '%x' % struct.unpack('<I', struct.pack('<f', 2.5))[0]
+        self.assertEqual(self.link.one('call', w(t['msvcFloat']), 'f', '0', '0', f)['st0'], 2.5)
+        self.assertEqual(call('siteCaller', '0', '0', w(t['self'])), 6)
+        self.assertEqual(call('vtCaller', '0', '0', w(t['self'])), 6)
+        info = self.link.one('probe', 'info')
+        memory = fnv_probe.ProcessMemory(self.host.pid)
+        try:
+            self.assertEqual(list(memory.u32s(int(info['counts'], 16), 4)), [2, 1, 1, 2])
+            per = info['samplesPer']
+            raw = memory.u32s(int(info['samples'], 16), 4 * per * fnv_probe.WORDS)
+            sample = lambda k, j: raw[(k * per + j) * fnv_probe.WORDS:(k * per + j + 1) * fnv_probe.WORDS]
+            first = sample(0, 0)
+            self.assertEqual((first[2], first[5], first[6], first[16], first[14], first[19]), (t['self'], 7, 3, 2, 27, 1))
+            self.assertEqual(first[11], 6)  # [ecx]: the "vtable" word read from this
+            self.assertEqual((sample(0, 1)[14], sample(0, 1)[19]), (7, 2))
+            fl = sample(2, 0)
+            self.assertEqual(fl[16], 3)
+            self.assertEqual(struct.unpack('<f', struct.pack('<I', fl[15]))[0], 2.5)
+            self.assertEqual(sample(1, 0)[16], 2)  # msvcSeh returned an integer: no float
+            callers = memory.u32s(int(info['callers'], 16) + 3 * fnv_probe.CALLER_SLOTS * 8, 2 * fnv_probe.CALLER_SLOTS)
+            seen = {callers[2 * j]: callers[2 * j + 1] for j in range(fnv_probe.CALLER_SLOTS) if callers[2 * j]}
+            self.assertEqual(sorted(seen.values()), [1, 1])
+            self.assertIn(t['siteCall'] + 5, seen)  # the direct call's return address
+        finally:
+            memory.close()
+        # One in 2 after the first 0 samples: counts keep going, sampled calls are every second one.
+        self.assertTrue(self.link.one('probe', 'config', '0', '0', '2')['ok'])
+        self.assertTrue(self.link.one('probe', 'clear')['ok'])
+        for _ in range(5):
+            call('msvcSeh', '0', '0', '4')
+        meta = self.link.read(int(info['meta'], 16) + 8, 4)
+        self.assertEqual(struct.unpack('<I', self.link.read(int(info['counts'], 16) + 4, 4))[0], 5)
+        self.assertEqual(struct.unpack('<I', meta)[0], 2)  # calls 2 and 4
+        self.assertTrue(self.link.one('probe', 'tag', '7')['ok'])
+        self.assertEqual(self.link.one('probe', 'init', '4', '1', '1', '0')['error'], 'probes_armed')
+        listed = bytes.fromhex(self.link.one('probe', 'list', '0', '10')['probes'])
+        self.assertEqual([listed[5 * k + 4] for k in range(4)], [1, 1, 1, 1])
+        off = self.link.one('probe', 'disarm')
+        self.assertEqual((off['restored'], off['sitesRestored'], off['overwritten']), (3, 2, 0), off)
+        for k, original in originals.items():
+            self.assertEqual(self.link.read(t[k], 16), original)
+        self.assertEqual(call('msvcSeh', '0', '0', '4'), 5)
+        self.assertEqual(call('vtCaller', '0', '0', w(t['self'])), 6)
+        self.assertEqual(struct.unpack('<I', self.link.read(int(info['counts'], 16) + 4, 4))[0], 5)  # not counted
+        self.assertEqual(self.link.one('probe', 'arm')['armed'], 3)  # re-arm
+        self.assertEqual(call('msvcSeh', '0', '0', '4'), 5)
+        self.assertEqual(struct.unpack('<I', self.link.read(int(info['counts'], 16) + 4, 4))[0], 6)
+        self.assertEqual(self.link.one('probe', 'disarm')['restored'], 3)
+        again = self.link.one('probe', 'init', '4', '2', '0', '0')
+        self.assertTrue(again['ok'] and again['used'] == 0)
+
     def test_hook_stack_scan(self):
         t, w = self.targets, fnv_link.word
         h = self._hook(t['msvcSeh'], fnv_deep.HF_RECORD | 8, nargs=1, label='stack')

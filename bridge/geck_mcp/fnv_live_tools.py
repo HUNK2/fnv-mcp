@@ -122,6 +122,9 @@ FNV_LIVE_TOOLS = {
     'fnv_vats_odds': ('read', 'VATS hit chance per target and limb from the game formula, term by term, with perks'),
     'fnv_window': ('control', 'free or recapture the mouse (DirectInput background mode), close the pause menu, persist it'),
     'fnv_frame_profile': ('read', 'time per frame by subsystem (scripts, AI wait, render, audio, cells...) from timing hooks'),
+    # naming from the running game (NAMING-PLAN N1-N3)
+    'fnv_probe': ('act', 'count calls of thousands of functions at once (entry jumps, vtable slots, call sites): plan, install, read, remove'),
+    'fnv_atlas': ('act', 'run scripted game actions with doses against the probe set: which functions run per action, and how often'),
     # milestone 10: setup
     'fnv_setup_check': ('read', 'is this machine ready for the fnv tools? each prerequisite with its state and the fix'),
 }
@@ -152,6 +155,11 @@ def register(server, project, annotations, result_type):
     from .fnv_world import WorldTools
     world = WorldTools(agent)
     live.world = world
+    from .fnv_probe import ProbeTools
+    probe_tools = ProbeTools(live)
+    live.probe_tools = probe_tools
+    from .fnv_atlas import AtlasTools
+    atlas = AtlasTools(live, probe_tools, world)
     read, act, control = annotations
 
     def service_call(name, fn, kind):
@@ -1082,6 +1090,79 @@ def register(server, project, annotations, result_type):
         bBackground Mouse=1 to the dev profile's Fallout.ini so every launch leaves the mouse free (false undoes it).
         Works without the game for persist."""
         return await invoke('fnv_window', lambda: world.window(action, persist), 'control')
+
+    # ------------------------------------------------------------------ naming from the running game
+    @server.tool(annotations=act)
+    async def fnv_probe(action: Literal['plan', 'install', 'status', 'read', 'remove', 'clear', 'config'] = 'status',
+                        statuses: list[str] | None = None, functions: list[str] | None = None,
+                        start: str | None = None, end: str | None = None, cls: str | None = None,
+                        callees_of: list[str] | None = None, limit: int | None = None, part: str | None = None,
+                        samples: int = 8, exit_samples: int = 4, every: int = 64, dry_run: bool = False,
+                        top: int = 25) -> result_type:
+        """Probes count the calls of thousands of engine functions at once, so you can see which unnamed functions run.
+        plan: (no game needed) choose functions (statuses, default every not-proven status; or functions / start..end /
+        cls / callees_of / part 'k/n') and say how each can be probed: an entry jump, its vtable slots and direct call
+        sites (functions too small for a jump), or why not. install: plan, check the live bytes against your clean exe,
+        build the stubs and patch them all at once with the game's other threads suspended (samples: first calls
+        recorded with this/args/vtables, exit_samples of those with the result, every: one in N later calls adds its
+        caller). status: counts, most-called functions. read: decoded samples and callers (with the call kind: direct,
+        virtual slot, pointer) for functions. remove: put every original byte back (also fnv_undo). clear: zero the
+        counters. config: change samples / exit_samples / every live."""
+        def action_fn():
+            selection = {k: v for k, v in (('statuses', statuses), ('addresses', functions if action in ('plan', 'install') else None),
+                                           ('start', int(start, 16) if start else None), ('end', int(end, 16) if end else None),
+                                           ('cls', cls), ('callees_of', callees_of), ('limit', limit), ('part', part))
+                         if v is not None}
+            if action == 'plan':
+                return probe_tools.plan(selection)[0]
+            if action == 'install':
+                return probe_tools.install(selection, samples, exit_samples, every, dry_run)
+            if action == 'status':
+                return probe_tools.status(top)
+            if action == 'read':
+                if not functions:
+                    raise ValueError('read needs functions')
+                return {'functions': probe_tools.read(functions)}
+            if action == 'remove':
+                return probe_tools.remove()
+            if action == 'clear':
+                return probe_tools.clear()
+            return probe_tools.config(samples, exit_samples, every)
+        return await invoke('fnv_probe', action_fn, 'read' if action in ('plan', 'status', 'read') else 'control')
+
+    @server.tool(annotations=act)
+    async def fnv_atlas(action: Literal['actions', 'run', 'runs', 'function', 'action', 'import_frida'] = 'actions',
+                        actions: list[str] | None = None, reps: int = 2, doses: list[int] | None = None,
+                        name: str | None = None, function: str | None = None, kind: str | None = None,
+                        run: int | None = None, statuses: list[str] | None = None, exclusive: bool = False,
+                        include_console_machinery: bool = False, path: str | None = None, notes: str | None = None,
+                        limit: int = 60) -> result_type:
+        """Which functions run for which game action, measured with the probe set (install it with fnv_probe first).
+        actions: the scripted action library. run: for each action, idle segments and segments doing it 1, 2 and 4
+        times (reps repetitions), counters read before and after each; a fit per function gives calls per action
+        (per_unit) or 'only while acting' (with_action). Results go to state/atlas.sqlite. runs: the runs stored.
+        function: every fit and caller recorded for one function. action: the functions an action runs (kind,
+        statuses e.g. ['unnamed'], exclusive: no other action runs them; console machinery left out unless asked).
+        import_frida: load fnvsym's Frida trace file (path) as a run of its own."""
+        def action_fn():
+            if action == 'actions':
+                return atlas.list_actions()
+            if action == 'run':
+                return atlas.run(actions, reps, doses, notes)
+            if action == 'runs':
+                return atlas.runs()
+            if action == 'function':
+                if not function:
+                    raise ValueError('function needs function')
+                return atlas.function(function)
+            if action == 'action':
+                if not name:
+                    raise ValueError('action needs name')
+                return atlas.action(name, kind, run, statuses, exclusive, include_console_machinery, limit)
+            if not path:
+                raise ValueError('import_frida needs path')
+            return atlas.import_frida(path)
+        return await invoke('fnv_atlas', action_fn, 'read' if action in ('actions', 'runs', 'function', 'action') else 'control')
 
     @server.tool(annotations=read)
     async def fnv_setup_check() -> result_type:

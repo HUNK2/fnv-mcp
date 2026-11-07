@@ -86,6 +86,26 @@ The companion also installs a vectored exception handler that only observes: at 
 their `this`/argument form ids, the op being served, the console line being run, recent events). It writes
 nothing once xNVSE has announced the game is exiting.
 
+### Mass probes and the action atlas
+
+Watch hooks are rich but installed one at a time; to answer "which of the 43,000 unnamed functions runs when
+the player does X", the companion installs thousands of lightweight call counters at once. The planner
+(`fnv_probe.py`, offline, capstone against the clean exe) sorts each target into an **entry** probe (a
+5-byte jump over whole prologue instructions, when the stolen bytes fit the function, have ≤3 relocs and no
+branch in the body lands inside them) or, when the function is too small or branches into its own first five
+bytes, **site** probes: the rel32 of every direct call or jump to it and the vtable slots that hold it. A
+stub increments a counter and, one call in 2ⁿ, records a sample (this/edx/caller/stack/vtables; the exit
+reads eax and detects an st0 float with `fxam`/`fnstsw`). Arming suspends the other threads (Toolhelp
+snapshot) and refuses while any thread's EIP is inside the bytes being moved. Counters are read in bulk with
+`ReadProcessMemory`, no pipe traffic per function.
+
+The atlas (`fnv_atlas.py`) turns counts into attribution by dose and response: it reads the counters, runs a
+scripted action a set number of times (0, 1, 2, 4), reads again, and least-squares fits each function's
+delta against the dose. A clean slope through the origin is `per_unit` (n calls per action); a constant rise
+only when the action happens at all is `with_action`; noise is `background`. Functions whose counts track a
+`console_noop` dose are marked `driver` (console machinery, not the action). Runs, segments, counts and fits
+are kept in `state/atlas.sqlite`, and an existing Frida `fnvsym-trace/1` capture can be imported as a run.
+
 ## Setup
 
 The full guide, from an empty machine, is [FNV-MCP-SETUP.md](FNV-MCP-SETUP.md); `fnv_setup_check` says what is
@@ -192,6 +212,8 @@ missing. In short:
 | `fnv_vats_odds` | read | VATS hit chance per target and limb from CombatFormulas::GetVATSChanceToHit and the ep 8 perk layer, the percent the menu shows, and the gun formula term by term |
 | `fnv_frame_profile` | read | Time per frame by subsystem from timing hooks on the main loop's children, removed afterwards |
 | `fnv_window` | control | Free the user's mouse while the game runs (DirectInput non-exclusive background mode on the game window), capture it again, close the pause menu; persist writes `bBackground Mouse=1` to the dev profile's Fallout.ini (checked: launch starts with it, live toggles return S_OK) |
+| `fnv_probe` | act | Count calls of thousands of unnamed functions at once. The probe kind is chosen offline per function against the clean exe (entry jump when the prologue is whole instructions, ≤ the function, ≤3 relocs and nothing branches into the moved bytes; otherwise the rel32 of direct calls and the vtable slots that hold it; otherwise none): `plan` classifies a selection, `install` arms with other threads suspended (none mid-instruction), `read` returns counts and decoded samples (this/edx/caller/stack/vtables, result int or st0 float) with a per-caller table, `remove` disarms and restores the bytes. Journaled; a function that crashed the game while probed is quarantined |
+| `fnv_atlas` | act | Dose and response over the probe set: run a scripted game action 0/1/2/4 times, read the counters before and after each segment, least-squares fit the counts to the dose to classify each function `per_unit` (runs n× per action), `with_action` (once per action) or `background`; functions that scale with `console_noop` are marked `driver`. Stored in `state/atlas.sqlite`; `import_frida` loads an existing `fnvsym-trace/1` run |
 
 Act tools journal every change in `state/fnv/journal.jsonl` and back up the dev profile's saves before the
 first change of a game session (`state/fnv/save-backups`, newest 10 kept). Console lines, scripts and
