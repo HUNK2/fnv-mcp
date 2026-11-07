@@ -502,10 +502,17 @@ class NamingTools:
                     (engine.functions[a].get('signature') or '') else None
                 if squeeze:
                     entry['layoutSqueeze'] = squeeze
+                    # refuter (PROOF 4.5): a proven class the squeeze's owner contradicts
+                    pname = proven_name(engine.functions[a])
+                    if squeeze.get('owner') and pname and \
+                            '::' in pname and pname.rsplit('::', 1)[0] != squeeze['owner']:
+                        entry['recheck'] = ('class %s, but the layout squeeze puts the method in %s (fields %s)' %
+                                            (pname.rsplit('::', 1)[0], squeeze['owner'],
+                                             ', '.join(list(squeeze.get('fields') or {})[:3])))
                 # refuter (PROOF 4.5): a proven Class::Method whose `this` was never that class nor derived from it
-                name = engine.functions[a]['name']
-                cls = name.split('::')[0] if '::' in name else None
-                if engine.functions[a]['status'] == 'proven' and cls in (engine.rtti or {}) and len(observed) >= 8 \
+                name = proven_name(engine.functions[a]) or ''
+                cls = name.rsplit('::', 1)[0] if '::' in name else None
+                if cls and cls in (engine.rtti or {}) and len(observed) >= 8 \
                         and '__thiscall' in (engine.functions[a].get('signature') or '') \
                         and not any(is_a(engine, o, cls) for o in set(observed)):
                     entry['recheck'] = ('proven as %s, but `this` was %s in %d samples, none of them %s or derived '
@@ -754,6 +761,16 @@ def layout_squeeze(engine, image, address, observed):
             'window %s .. %s holds more than one class' % (lower, upper)}
 
 
+def proven_name(f):
+    """The name (or, for class proven, the class) the proof record holds; None when nothing is proven. The engine
+    map's own `name` can be the decomp's stand-in (S00d22760_Capsule), which is no claim at all."""
+    proof = f.get('proof') or {}
+    if f.get('status') not in ('proven', 'class_proven') or not proof.get('name'):
+        return None
+    name = proof['name']
+    return name if '::' in name else name + '::'
+
+
 def calibration_summary(state_dir):
     """The measured accuracy of each runtime method (PROOF 4.1), from the newest blind runs in state/: oracle claims
     scored by the answer key plus the independent judgement of unkeyed claims, and the experiment battery."""
@@ -783,6 +800,12 @@ def calibration_summary(state_dir):
         out['experiment'] = {'file': bat[-1].name, 'cases': b['cases'], 'claims': claims, 'correct': b['correct'],
                              'wrong': b['wrong'], 'precision': b.get('precision'),
                              'passesGate41': claims >= 50 and b['correct'] / claims >= 0.98}
+    sq = sorted(state_dir.glob('squeeze_calibration_*.json'))
+    if sq:
+        c = json.loads(sq[-1].read_text(encoding='utf-8'))
+        out['layoutSqueeze'] = {k: c.get(k) for k in ('cases', 'claims', 'correct', 'wrong', 'precision',
+                                                      'shuffledControlCorrectFromDifferentEvidence', 'passesGate41')}
+        out['layoutSqueeze']['file'] = sq[-1].name
     out['fieldWatch'] = {'note': 'no blind calibration yet: a field watch names the function that touched the field; '
                                  'the field\'s meaning must be proven separately (PROOF 4.2)', 'passesGate41': False}
     return out
