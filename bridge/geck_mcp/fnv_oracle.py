@@ -540,6 +540,44 @@ class OracleTools:
             db.close()
 
     # ------------------------------------------------------------------ blind calibration
+    def sweep(self, limit=3000, radius=20000.0, statuses=('unnamed', 'decomp', 'class_proven', 'probable', 'rejected'),
+              harvest=None):
+        """The oracle over every not-proven zero-argument thiscall getter whose code is pure and whose `this` class is
+        known (from probe samples or vtable slots) and a form class: results stored for the dossier and the export."""
+        engine = self.live.engine()
+        pur = self.purity()
+        cands = []
+        for a in engine.addresses:
+            f = engine.functions[a]
+            if f['status'] not in statuses or '__thiscall' not in (f.get('signature') or ''):
+                continue
+            p = pur.check(a)
+            if not p['pure'] or p['pops']:
+                continue
+            cls = self._this_class(a, harvest)
+            if cls and cls in (engine.rtti or {}) and is_a(engine, cls, 'TESForm'):
+                cands.append(a)
+        unpause = self.live.game.keep_unpaused(3600)
+        found = []
+        try:
+            objs = self.objects(radius)
+            oracles = self.oracle_values(objs)
+            for a in cands[:limit]:
+                try:
+                    r = self.run(hx(a), mode='call', objects=dict(objs), oracles=oracles, harvest=harvest)
+                except Exception as e:  # noqa: BLE001 - one function failing must not stop the sweep
+                    found.append({'address': hx(a), 'error': str(e)[:160]})
+                    continue
+                best = [m for m in r['matches'] if m['meetsRule42']]
+                if best:
+                    found.append({'address': hx(a), 'name': engine.functions[a]['name'],
+                                  'status': engine.functions[a]['status'], 'matches': [m['oracle'] for m in best[:4]],
+                                  'objects': best[0]['objects'], 'distinct': best[0]['distinct']})
+        finally:
+            self.live.game.stop_task(unpause)
+        return {'candidates': len(cands), 'run': min(len(cands), limit),
+                'matched': [f for f in found if 'matches' in f], 'errors': sum(1 for f in found if 'error' in f)}
+
     def calibration_set(self, limit=200):
         """Proven zero-argument thiscall getters on reference/actor classes whose code is pure: the candidates
         for a blind run. Returned without names (the answer key is kept apart)."""

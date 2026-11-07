@@ -121,8 +121,33 @@ class FieldWatchTools:
             hits = self.link.one('dbg', 'read', str(seq)).get('hits') or []
         finally:
             self.link.one('dbg', 'clear', 'f')
-        return dict(self._summarise(address, hits[:max_hits]), trigger=ran, journalId=entry['id'], access=access,
-                    scope=scope, length=length)
+        out = dict(self._summarise(address, hits[:max_hits]), trigger=ran, journalId=entry['id'], access=access,
+                   scope=scope, length=length)
+        self._store(out, ref, offset)
+        return out
+
+    def _store(self, out, ref, offset):
+        import json as _json
+        db = self.naming.db()
+        try:
+            db.execute('CREATE TABLE IF NOT EXISTS watches (at REAL, address INTEGER, function INTEGER, access TEXT, '
+                       'hits INTEGER, field TEXT, result TEXT)')
+            field = None
+            if ref is not None:
+                try:
+                    ptr = self._ptr(ref)
+                    cls = (self.live.rtti([ptr]).get(ptr) or {}).get('class')
+                    field = self.field_name(cls, int(offset))
+                except Exception:  # noqa: BLE001 - a name for the field is optional
+                    field = None
+            for f in out['functions']:
+                if f.get('address'):
+                    db.execute('INSERT INTO watches VALUES (?,?,?,?,?,?,?)',
+                               (time.time(), int(out['address'], 16), int(f['address'], 16), out['access'], f['hits'],
+                                field, _json.dumps(f, default=str)))
+            db.commit()
+        finally:
+            db.close()
 
     def _summarise(self, address, hits):
         engine = self.live.engine()

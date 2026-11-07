@@ -128,6 +128,7 @@ FNV_LIVE_TOOLS = {
     'fnv_name_dossier': ('read', "one function's full case for naming: static facts, fnvsym claims, runtime callers (virtual slots resolved), this/result profile, actions, suggested tests"),
     'fnv_name_oracle': ('act', 'does a function compute a value the game already knows (script commands, form headers) on the same objects; blind calibration'),
     'fnv_name_test': ('act', 'experiments: skip or force a function during an action, with a control; blind battery re-identification'),
+    'fnv_name_export': ('read', 'write the runtime evidence as fnvsym-trace/2 into fnvsym/traces for the runtime2 evidence pass, with the calibration of each method'),
     'fnv_field_watch': ('act', 'hardware watchpoints: which functions write or read one field of a live object, with the values; find the field an action changes'),
     # milestone 10: setup
     'fnv_setup_check': ('read', 'is this machine ready for the fnv tools? each prerequisite with its state and the fix'),
@@ -1172,7 +1173,7 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_name_dossier', lambda: naming.dossier(function, harvest, max_items))
 
     @server.tool(annotations=act)
-    async def fnv_name_oracle(action: Literal['run', 'purity', 'calibrate'] = 'run',
+    async def fnv_name_oracle(action: Literal['run', 'purity', 'calibrate', 'sweep'] = 'run',
                               function: str | None = None, mode: Literal['auto', 'call', 'sampled'] = 'auto',
                               harvest: int | None = None, radius: float = 8000.0, limit: int = 400) -> result_type:
         """Does the function return a value the game already knows, on the same objects? run: its results - from probe
@@ -1181,10 +1182,12 @@ def register(server, project, annotations, result_type):
         (GetLevel, GetScale, GetAV x, GetRace, GetStage, GetCellFlag n, ...) and form header fields. A match needs >= 20
         objects, no mismatch, a chance of matching by a random pairing <= 1e-6, and no shuffled pairing matching (PROOF
         4.2). purity: the side-effect check alone. calibrate: the method run blind on proven getters and scored after
-        (state/oracle_calibration_*.json)."""
+        (state/oracle_calibration_*.json). sweep: run it on every not-proven pure getter whose this class is known."""
         def action_fn():
             if action == 'calibrate':
                 return oracle.calibrate(limit, radius)
+            if action == 'sweep':
+                return oracle.sweep(limit, radius, harvest=harvest)
             if not function:
                 raise ValueError('%s needs function' % action)
             if action == 'purity':
@@ -1213,6 +1216,13 @@ def register(server, project, annotations, result_type):
                 raise ValueError('test needs hypothesis')
             return experiments.test(hypothesis)
         return await invoke('fnv_name_test', action_fn, 'read' if action == 'panels' else 'control')
+
+    @server.tool(annotations=read)
+    async def fnv_name_export(path: Annotated[str, Field(max_length=500)] | None = None) -> result_type:
+        """Write everything the naming tools recorded (harvested probe sets, atlas fits, resolved callers, this classes,
+        result shapes, oracle matches, experiment verdicts, field watches) as fnvsym-trace/2 into fnvsym/traces, with the
+        measured accuracy of each method (PROOF 4.1). fnvsym's `python -m namer.runtime2` turns it into evidence."""
+        return await invoke('fnv_name_export', lambda: naming.export(path))
 
     @server.tool(annotations=act)
     async def fnv_field_watch(action: Literal['find', 'watch'] = 'watch', ref: str | None = None,

@@ -401,6 +401,108 @@ class NamingTools:
             db.close()
         return {'counts': counts, 'callers': callers, 'samples': samples, 'fits': fits, 'idle': seconds}
 
+    def export(self, path=None, max_callers=8):
+        """Write everything recorded at runtime as fnvsym-trace/2 (a superset of fnvsym's Frida trace): per function
+        the calls, the atlas fits, resolved callers, `this` classes, the result's shape, oracle matches, experiment
+        verdicts and field watches, with the calibration of each method."""
+        engine = self.live.engine()
+        image = self.live.deep._image(required=False)
+        db = self.db()
+        try:
+            for ddl in ('CREATE TABLE IF NOT EXISTS oracle_results (at REAL, address INTEGER, mode TEXT, objects INTEGER, '
+                        'oracle TEXT, meets INTEGER, result TEXT, calibration INTEGER)',
+                        'CREATE TABLE IF NOT EXISTS experiments (at REAL, address INTEGER, verdict TEXT, hypothesis TEXT, '
+                        'result TEXT)',
+                        'CREATE TABLE IF NOT EXISTS watches (at REAL, address INTEGER, function INTEGER, access TEXT, '
+                        'hits INTEGER, field TEXT, result TEXT)'):
+                db.execute(ddl)
+            runs = [dict(zip(('id', 'started', 'source', 'probes', 'notes'), r))
+                    for r in db.execute('SELECT id, started, source, probes, notes FROM runs')]
+            harvests = [dict(zip(('id', 'run', 'at', 'probes', 'functions', 'notes'), r))
+                        for r in db.execute('SELECT id, run, at, probes, functions, notes FROM harvests')]
+            called = {a for (a,) in db.execute('SELECT DISTINCT address FROM harvest_counts WHERE calls > 0')}
+            oracle = {}
+            for a, res in db.execute('SELECT address, result FROM oracle_results WHERE meets = 1 ORDER BY at'):
+                oracle[a] = json.loads(res)
+            experiments = defaultdict(list)
+            for a, verdict, hyp in db.execute('SELECT address, verdict, hypothesis FROM experiments ORDER BY at'):
+                experiments[a].append({'verdict': verdict, 'hypothesis': json.loads(hyp)})
+            watches = defaultdict(list)
+            for watched, fn, access, hits, field in db.execute('SELECT address, function, access, hits, field FROM watches'):
+                watches[fn].append({'address': hx(watched), 'access': access, 'hits': hits, 'field': field})
+        finally:
+            db.close()
+        functions = {}
+        for a in sorted(called | set(oracle) | set(experiments) | set(watches)):
+            if a not in engine.functions:
+                continue
+            rt = self.runtime(a)
+            entry = {'name': engine.functions[a]['name'], 'status': engine.functions[a]['status'],
+                     'calls': sum(c[1] for c in rt['counts'])}
+            fits = [{'run': r[0], 'action': r[1], 'kind': r[2], 'perUnit': r[3], 'r2': r[4]} for r in rt['fits'] if not r[7]]
+            if fits:
+                entry['actions'] = fits
+            if rt['callers']:
+                vts = [s[1] for s in rt['samples'] if s[1]]
+                cs = []
+                for ret, n in rt['callers'][:max_callers]:
+                    c = resolve_caller(engine, image, a, ret, n, vts)
+                    k = c['call']
+                    cs.append({k2: v for k2, v in (('return', c['returnAddress']), ('calls', n),
+                                                   ('from', (c.get('function') or {}).get('name')),
+                                                   ('fromAddress', (c.get('function') or {}).get('address')),
+                                                   ('kind', k.get('kind')), ('resolved', k.get('resolved')),
+                                                   ('slot', k.get('slotIndex') if k.get('slotOf') else None),
+                                                   ('slotOf', k.get('slotOf')), ('declaredBy', k.get('declaredBy')))
+                               if v is not None})
+                entry['callers'] = cs
+            observed = [s[2] for s in rt['samples'] if s[2]]
+            if observed:
+                entry['this'] = {'classes': dict(Counter(observed).most_common(8)), 'samples': len(observed),
+                                 'distinct': len({s[0] for s in rt['samples'] if s[0]}),
+                                 'commonBase': common_ancestor(engine, observed)}
+                squeeze = layout_squeeze(engine, image, a, observed) if '__thiscall' in \
+                    (engine.functions[a].get('signature') or '') else None
+                if squeeze:
+                    entry['layoutSqueeze'] = squeeze
+                # refuter (PROOF 4.5): a proven Class::Method whose `this` was never that class nor derived from it
+                name = engine.functions[a]['name']
+                cls = name.split('::')[0] if '::' in name else None
+                if engine.functions[a]['status'] == 'proven' and cls in (engine.rtti or {}) and len(observed) >= 8 \
+                        and '__thiscall' in (engine.functions[a].get('signature') or '') \
+                        and not any(is_a(engine, o, cls) for o in set(observed)):
+                    entry['recheck'] = ('proven as %s, but `this` was %s in %d samples, none of them %s or derived '
+                                        'from it' % (name, ', '.join(sorted(set(observed))[:4]), len(observed), cls))
+            if rt['samples']:
+                entry['returns'] = return_profile(rt['samples'], return_width(engine.functions[a].get('signature')))
+                entry['threads'] = dict(Counter('main' if s[13] else 'worker' for s in rt['samples']))
+            if a in oracle:
+                entry['oracle'] = [{k: m.get(k) for k in ('oracle', 'source', 'meaning', 'objects', 'classes', 'distinct',
+                                                          'chance', 'shuffledMatches')}
+                                   for m in oracle[a]['matches'] if m.get('meetsRule42')][:4]
+                entry['oracleMode'] = oracle[a].get('mode')
+            if a in experiments:
+                entry['experiments'] = experiments[a][-4:]
+            if a in watches:
+                entry['fieldWatch'] = watches[a][:4]
+            functions[hx(a)] = entry
+        out = {'format': 'fnvsym-trace/2', 'tool': 'fnv-mcp (geck-mcp-nv bridge)', 'game': 'FalloutNV.exe 1.4.0.525',
+               'exported': time.strftime('%Y-%m-%d %H:%M:%S'), 'engineMap': engine.identity(),
+               'methods': calibration_summary(self.live.project.state_dir), 'runs': runs, 'harvests': harvests,
+               'functions': functions}
+        path = Path(path) if path else FNVSYM / 'traces' / ('fnvmcp-%s.json' % time.strftime('%Y%m%d'))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(out, indent=1, default=str), encoding='utf-8')
+        return {'path': str(path), 'functions': len(functions),
+                'withOracle': sum(1 for f in functions.values() if 'oracle' in f),
+                'withExperiments': sum(1 for f in functions.values() if 'experiments' in f),
+                'withFieldWatch': sum(1 for f in functions.values() if 'fieldWatch' in f),
+                'withVirtualCallers': sum(1 for f in functions.values()
+                                          if any(c.get('slotOf') for c in f.get('callers') or [])),
+                'ownerByLayoutSqueeze': sum(1 for f in functions.values() if (f.get('layoutSqueeze') or {}).get('owner')),
+                'recheck': sum(1 for f in functions.values() if f.get('recheck')),
+                'methods': out['methods']}
+
     def callers(self, ref, harvest=None):
         engine = self.live.engine()
         address = engine.resolve(ref)
@@ -531,6 +633,122 @@ def return_width(signature):
         if re.search(r'(?<![A-Za-z_])%s(?![A-Za-z_])' % word, head):
             return bits
     return 32
+
+
+_LAYOUTS = None
+
+
+def community_layouts():
+    """fnvsym's evidence/layouts.json: per class, the members community headers declare, with `via` naming the
+    base class that declares an inherited member."""
+    global _LAYOUTS
+    if _LAYOUTS is None:
+        path = FNVSYM / 'evidence' / 'layouts.json'
+        _LAYOUTS = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    return _LAYOUTS
+
+
+def this_offsets(engine, image, address, max_size=4000):
+    """Field offsets the body reads or writes through `this` (ecx at entry, and registers copied from it until
+    they are overwritten), from a linear scan of its machine code. Conservative: stops tracking a register at the
+    first write to it."""
+    import capstone
+    from capstone import x86
+    size = int(engine.functions[address].get('size') or 0)
+    if not size or size > max_size or image is None:
+        return []
+    code = image.read(address, size)
+    if not code:
+        return []
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+    md.detail = True
+    tracked = {'ecx'}
+    offs = set()
+    for i in md.disasm(code, address):
+        ops = i.operands
+        for op in ops:
+            if op.type == x86.X86_OP_MEM and op.mem.base and not op.mem.index:
+                if i.reg_name(op.mem.base) in tracked and op.mem.disp >= 0:
+                    offs.add(op.mem.disp)
+        if i.mnemonic == 'mov' and len(ops) == 2 and ops[0].type == x86.X86_OP_REG:
+            dst = i.reg_name(ops[0].reg)
+            if ops[1].type == x86.X86_OP_REG and i.reg_name(ops[1].reg) in tracked:
+                tracked.add(dst)
+                continue
+            tracked.discard(dst)
+        elif ops and ops[0].type == x86.X86_OP_REG and (ops[0].access & 2):
+            tracked.discard(i.reg_name(ops[0].reg))
+        if i.mnemonic == 'call':
+            tracked -= {'eax', 'ecx', 'edx'}
+        if not tracked:
+            break
+    return sorted(offs)
+
+
+def layout_squeeze(engine, image, address, observed):
+    """PROOF 4.4: the owner class lies between an upper bound (the common ancestor of every observed `this`
+    class) and a lower bound (the most derived class that declares a field the body uses through `this`). When
+    they are the same class, that class is the only one the method can belong to."""
+    if len(observed) < 20:
+        return None
+    upper = common_ancestor(engine, observed)
+    if not upper:
+        return None
+    layout = community_layouts().get(upper)
+    if not layout:
+        return {'upper': upper, 'owner': None, 'why': 'no community layout for %s' % upper}
+    chain = ancestors(engine, upper)
+    declared = {}
+    for off in this_offsets(engine, image, address):
+        hits = [m for m in layout if m.get('offset') is not None and m['offset'] <= off < m['offset'] +
+                max(1, m.get('size_guess') or 1)]
+        if hits:
+            declared[off] = hits[0].get('via') or upper
+    if not declared:
+        return {'upper': upper, 'owner': None, 'why': 'the body uses no field the community layout of %s names' % upper}
+    known = [c for c in declared.values() if c in chain]
+    if not known:
+        return {'upper': upper, 'owner': None, 'why': 'declaring classes are not in the RTTI chain of %s' % upper}
+    lower = min(known, key=chain.index)  # the most derived declaring class
+    return {'upper': upper, 'lower': lower, 'owner': upper if lower == upper else None,
+            'fields': {'0x%X' % o: c for o, c in sorted(declared.items())},
+            'samples': len(observed),
+            'why': 'upper bound = lower bound' if lower == upper else
+            'window %s .. %s holds more than one class' % (lower, upper)}
+
+
+def calibration_summary(state_dir):
+    """The measured accuracy of each runtime method (PROOF 4.1), from the newest blind runs in state/: oracle claims
+    scored by the answer key plus the independent judgement of unkeyed claims, and the experiment battery."""
+    state_dir = Path(state_dir)
+    out = {}
+    cal = sorted(state_dir.glob('oracle_calibration_*.json'))
+    if cal:
+        c = json.loads(cal[-1].read_text(encoding='utf-8'))
+        judged = {}
+        for j in sorted(state_dir.glob('oracle_judgement_*.json')):
+            for row in json.loads(j.read_text(encoding='utf-8')):
+                judged[row['address']] = row['verdict']
+        correct, wrong = c['correct'], c['wrong']
+        for u in c.get('unkeyed') or []:
+            v = judged.get(u['address'])
+            correct += v == 'correct'
+            wrong += v == 'wrong'
+        claims = correct + wrong
+        out['oracle'] = {'file': cal[-1].name, 'cases': c['cases'], 'claims': claims, 'correct': correct, 'wrong': wrong,
+                         'precision': round(correct / claims, 4) if claims else None,
+                         'shuffledControlClaims': c.get('shuffledControlClaims'),
+                         'passesGate41': claims >= 50 and correct / claims >= 0.98 and not c.get('shuffledControlClaims')}
+    bat = sorted(state_dir.glob('experiment_battery_*.json'))
+    if bat:
+        b = json.loads(bat[-1].read_text(encoding='utf-8'))
+        claims = b['correct'] + b['wrong']
+        out['experiment'] = {'file': bat[-1].name, 'cases': b['cases'], 'claims': claims, 'correct': b['correct'],
+                             'wrong': b['wrong'], 'precision': b.get('precision'),
+                             'passesGate41': claims >= 50 and b['correct'] / claims >= 0.98}
+    out['fieldWatch'] = {'note': 'no blind calibration yet: a field watch names the function that touched the field; '
+                                 'the field\'s meaning must be proven separately (PROOF 4.2)', 'passesGate41': False}
+    return out
 
 
 def return_profile(samples, bits=32):
