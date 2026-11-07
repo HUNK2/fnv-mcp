@@ -52,10 +52,46 @@ PANELS = {
                         'observe': 'GetAV Luck', 'expect': ['delta', -1], 'teardown': ['RestoreAV Luck 100']},
     'rewardxp': {'target': 'player', 'setup': [], 'trigger': ['RewardXP 25'], 'observe': 'GetAV XP',
                  'expect': ['delta', 25]},
-    'removeitem': {'target': 'player', 'setup': ['AddItem Caps001 10'], 'trigger': ['RemoveItem Caps001 3'],
-                   'observe': 'GetItemCount Caps001', 'expect': ['delta', -3]},
-    'additem': {'target': 'player', 'setup': [], 'trigger': ['AddItem Caps001 4'], 'observe': 'GetItemCount Caps001',
+    'removeitem': {'target': 'player', 'setup': ['AddItem f 10'], 'trigger': ['RemoveItem f 3'],
+                   'observe': 'GetItemCount f', 'expect': ['delta', -3]},
+    'additem': {'target': 'player', 'setup': [], 'trigger': ['AddItem f 4'], 'observe': 'GetItemCount f',
                 'expect': ['delta', 4]},
+    'forceav': {'target': 'npc', 'setup': ['SetAV Luck 5'], 'trigger': ['ForceAV Luck 9'], 'observe': 'GetAV Luck',
+                'expect': ['equals', 9], 'teardown': ['SetAV Luck 5']},
+    'modav': {'target': 'npc', 'setup': ['SetAV Luck 5'], 'trigger': ['ModAV Luck 2'], 'observe': 'GetAV Luck',
+              'expect': ['delta', 2], 'teardown': ['SetAV Luck 5']},
+    'restoreav': {'target': 'npc', 'setup': ['RestoreAV Luck 100', 'DamageAV Luck 2'], 'trigger': ['RestoreAV Luck 2'],
+                  'observe': 'GetAV Luck', 'expect': ['delta', 2], 'teardown': ['RestoreAV Luck 100']},
+    'setposx': {'target': 'npc', 'setup': ['SetPos X 100'], 'trigger': ['SetPos X 132'], 'observe': 'GetPos X',
+                'expect': ['equals', 132]},
+    'setrestrained': {'target': 'npc', 'setup': ['SetRestrained 0'], 'trigger': ['SetRestrained 1'],
+                      'observe': 'GetRestrained', 'expect': ['equals', 1], 'teardown': ['SetRestrained 1']},
+    'setunconscious': {'target': 'npc', 'setup': ['SetUnconscious 0'], 'trigger': ['SetUnconscious 1'],
+                       'observe': 'GetUnconscious', 'expect': ['equals', 1], 'teardown': ['SetUnconscious 0']},
+    'setalert': {'target': 'npc', 'setup': ['SetAlert 0'], 'trigger': ['SetAlert 1'], 'observe': 'GetIsAlerted',
+                 'expect': ['equals', 1], 'teardown': ['SetAlert 0']},
+    'setteammate': {'target': 'npc', 'setup': ['SetPlayerTeammate 0'], 'trigger': ['SetPlayerTeammate 1'],
+                    'observe': 'GetPlayerTeammate', 'expect': ['equals', 1], 'teardown': ['SetPlayerTeammate 0']},
+    'setlevel': {'target': 'npc', 'setup': ['SetLevel 3'], 'trigger': ['SetLevel 7'], 'observe': 'GetLevel',
+                 'expect': ['equals', 7]},
+    'setignorefriendlyhits': {'target': 'npc', 'setup': ['SetIgnoreFriendlyHits 0'], 'trigger': ['SetIgnoreFriendlyHits 1'],
+                              'observe': 'GetIgnoreFriendlyHits', 'expect': ['equals', 1],
+                              'teardown': ['SetIgnoreFriendlyHits 0']},
+    'setforcerun': {'target': 'npc', 'setup': ['SetForceRun 0'], 'trigger': ['SetForceRun 1'], 'observe': 'GetForceRun',
+                    'expect': ['equals', 1], 'teardown': ['SetForceRun 0']},
+    'setforcesneak': {'target': 'npc', 'setup': ['SetForceSneak 0'], 'trigger': ['SetForceSneak 1'],
+                      'observe': 'GetForceSneak', 'expect': ['equals', 1], 'teardown': ['SetForceSneak 0']},
+    'addtofaction': {'target': 'npc', 'setup': ['RemoveFromFaction 1B2A4'], 'trigger': ['AddToFaction 1B2A4 0'],
+                     'observe': 'GetInFaction 1B2A4', 'expect': ['equals', 1], 'teardown': ['RemoveFromFaction 1B2A4']},
+    'removefromfaction': {'target': 'npc', 'setup': ['AddToFaction 1B2A4 0'], 'trigger': ['RemoveFromFaction 1B2A4'],
+                          'observe': 'GetInFaction 1B2A4', 'expect': ['equals', 0]},
+    'setfactionrank': {'target': 'npc', 'setup': ['AddToFaction 1B2A4 0'], 'trigger': ['SetFactionRank 1B2A4 1'],
+                       'observe': 'GetFactionRank 1B2A4', 'expect': ['equals', 1],
+                       'teardown': ['RemoveFromFaction 1B2A4']},
+    'lock': {'target': 'door', 'setup': ['Unlock'], 'trigger': ['Lock 10'], 'observe': 'GetLocked',
+             'expect': ['equals', 1], 'teardown': ['Unlock']},
+    'setopenstate': {'target': 'door', 'setup': ['SetOpenState 0'], 'trigger': ['SetOpenState 1'],
+                     'observe': 'GetOpenState', 'expect': ['equals', 1], 'teardown': ['SetOpenState 0']},
 }
 
 # Answer key, written from the names before any run: the panels each name's function must block when skipped
@@ -74,7 +110,30 @@ BATTERY_KEY = {
     'PlayerCharacter::DamageActorValue': (['player_damageav'], ['player_damageav']),
     'PlayerCharacter::RewardXP': (['rewardxp'], ['rewardxp']),
     'TESObjectREFR::RemoveItem': (['removeitem'], ['removeitem']),
+    'Actor::SetAlert': (['setalert'], ['setalert']),
+    'Actor::SetFactionRank': (['setfactionrank'], ['setfactionrank', 'addtofaction', 'removefromfaction']),
+    'Actor::SetPlayerTeammate': (['setteammate'], ['setteammate']),
+    'ExtraDataList::SetGhost': (['setghost'], ['setghost']),
+    'ExtraDataList::SetScale': (['setscale'], ['setscale']),
+    'MobileObject::SetPosition': (['setposx'], ['setposx']),
+    'TESActorBaseData::SetLevel': (['setlevel'], ['setlevel']),
+    'TESObjectREFR::SetAngleOnReferenceZ': (['setangle'], ['setangle']),
+    'REFR_LOCK::SetLocked': (['lock'], ['lock']),
 }
+# The console's own command handlers (proven from the game's command table): each blocks its command's panel.
+for _cmd, _panels in {
+        'SetScale': ['setscale'], 'Disable': ['disable'], 'Enable': ['enable'], 'SetAngle': ['setangle'],
+        'SetDestroyed': ['setdestroyed'], 'SetGhost': ['setghost'],
+        'SetActorValue': ['npc_setav', 'creature_setav', 'player_setav'],
+        'DamageActorValue': ['npc_damageav', 'creature_damageav', 'player_damageav'], 'RewardXP': ['rewardxp'],
+        'RemoveItem': ['removeitem'], 'AddItem': ['additem'], 'ForceActorValue': ['forceav'],
+        'ModActorValue': ['modav'], 'RestoreActorValue': ['restoreav'], 'SetPos': ['setposx'],
+        'SetRestrained': ['setrestrained'], 'SetUnconscious': ['setunconscious'], 'SetAlert': ['setalert'],
+        'SetPlayerTeammate': ['setteammate'], 'SetLevel': ['setlevel'], 'SetIgnoreFriendlyHits': ['setignorefriendlyhits'],
+        'AddToFaction': ['addtofaction'], 'RemoveFromFaction': ['removefromfaction'], 'SetFactionRank': ['setfactionrank'],
+        'SetForceRun': ['setforcerun'], 'SetForceSneak': ['setforcesneak'], 'Lock': ['lock'],
+        'SetOpenState': ['setopenstate']}.items():
+    BATTERY_KEY['Cmd_%s_Execute' % _cmd] = (_panels, _panels)
 
 
 def ret_pop(engine, image, address):
@@ -118,6 +177,10 @@ class ExperimentTools:
                     self.link.console(line, ref=ptr)
                 out[key] = ptr
                 out[key + 'FormId'] = r['formId']
+        doors = self.live.refs_near(radius=20000, form_type=28, limit=10)['refs']
+        if doors:
+            out['door'] = self.live.resolve(doors[0]['formId'])['ptr']
+            out['doorFormId'] = doors[0]['formId']
         return out
 
     # ------------------------------------------------------------------ one hypothesis
@@ -139,11 +202,46 @@ class ExperimentTools:
             return abs(after - value) <= 1e-3 * max(1.0, abs(value))
         return abs((after - before) - value) <= 1e-3 * max(1.0, abs(value))
 
-    def trial(self, spec, ptr, function=None, intervention=None):
-        """One repetition: setup, read, (hook), trigger, read, (unhook), teardown. Returns the readings."""
+    # one hook per candidate for a whole battery: installed once, its skip switched on only around the trigger
+    # (each install allocates stub memory the companion never frees, so calls already inside can finish)
+    def _arm(self, function):
+        from .fnv_control import ACT_PREFIX
+        pop = ret_pop(self.live.engine(), self.live.deep._image(required=True), int(function, 16))
+        self.control.hook_set(function, action='skip', value=0, pop_bytes=pop, allow_unproven=True)
+        h = self.control.deep.hook(ACT_PREFIX + '%08X' % int(function, 16))
+        hook = {'id': h['id'], 'pop': pop}
+        self._switch(hook, False)
+        return hook
+
+    def _switch(self, hook, on):
+        from .fnv_link import word
+        r = self.link.one('hookact', word(hook['id']), word(1 if on else 0), word(0), word(hook['pop'] if on else 0),
+                          word(0), '-')
+        if not r.get('ok'):
+            raise LinkError('HOOK_SWITCH_FAILED', 'hookact failed: %s' % r.get('error'))
+
+    def _disarm(self, function):
+        try:
+            self.control.hook_set(function, action='remove', allow_unproven=True)
+        except Exception:  # noqa: BLE001 - already gone
+            pass
+
+    def trial(self, spec, ptr, function=None, intervention=None, toggle=None):
+        """One repetition: setup, read, (hook), trigger, read, (unhook), teardown. Returns the readings. With
+        `toggle` (a hook from _arm) the installed hook's skip is switched on just for the trigger."""
         self._lines(spec.get('setup'), ptr)
         time.sleep(0.15)
         before = self._read(spec['observe'], ptr)
+        if toggle is not None:
+            self._switch(toggle, True)
+            try:
+                self._lines(spec['trigger'], ptr)
+                time.sleep(0.25)
+            finally:
+                self._switch(toggle, False)
+            after = self._read(spec['observe'], ptr)
+            self._lines(spec.get('teardown'), ptr)
+            return {'before': before, 'after': after, 'effect': self._effect(spec, before, after)}
         hooked = False
         if function is not None:
             iv = dict(intervention or {'action': 'skip'})
@@ -247,26 +345,22 @@ class ExperimentTools:
                 spec = PANELS[p]
                 ptr = targets.get(spec['target'])
                 baseline[p] = None if not ptr else self.trial(spec, ptr)['effect']
+            usable = [p for p in panels if targets.get(PANELS[p]['target']) and baseline[p]]
             for a in cands:
-                blocked = []
-                for p in panels:
-                    spec = PANELS[p]
-                    ptr = targets.get(spec['target'])
-                    if not ptr or not baseline[p]:
-                        continue
-                    t = self.trial(spec, ptr, hx(a), {'action': 'skip'})
-                    if t['effect'] is False:
-                        # confirm with reps: control works and the skip blocks, every time
-                        ok = True
-                        for _ in range(reps - 1):
-                            c = self.trial(spec, ptr)
-                            t2 = self.trial(spec, ptr, hx(a), {'action': 'skip'})
-                            if not c['effect'] or t2['effect'] is not False:
-                                ok = False
-                                break
-                        if ok:
-                            blocked.append(p)
-                results[a] = blocked
+                hook = self._arm(hx(a))
+                try:
+                    hits = {p: 0 for p in usable}
+                    for r in range(reps):
+                        # round 1: every panel; later rounds confirm, with a control, only what stayed blocked
+                        for p in (usable if r == 0 else [q for q in usable if hits[q] == r]):
+                            spec, ptr = PANELS[p], targets[PANELS[p]['target']]
+                            if r and not self.trial(spec, ptr)['effect']:
+                                continue
+                            if self.trial(spec, ptr, toggle=hook)['effect'] is False:
+                                hits[p] += 1
+                finally:
+                    self._disarm(hx(a))
+                results[a] = [p for p in usable if hits[p] == reps]
         except LinkError as e:
             return {'error': 'the game stopped answering: %s' % e, 'partial': {hx(a): b for a, b in results.items()}}
         finally:
