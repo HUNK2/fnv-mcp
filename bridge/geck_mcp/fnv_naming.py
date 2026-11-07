@@ -86,7 +86,7 @@ def resolve_caller(engine, image, callee, ret, calls, this_vtables=()):
                 owners = _slot_owners(engine, callee, src['slotIndex'], this_vtables)
                 if owners:
                     out['call'] = dict(trial, resolved='vtable slot (through %s)' % k.get('operand'), slotOf=owners,
-                                       declaredBy=slot_introducer(engine, owners, src['slotIndex']),
+                                       declaredBy=slot_introducer(engine, owners, src['slotIndex'], this_vtables),
                                        loadedFrom=src['operand'])
                     return out
     if k.get('kind') == 'virtual':
@@ -103,7 +103,7 @@ def resolve_caller(engine, image, callee, ret, calls, this_vtables=()):
         if owners:
             out['call']['resolved'] = 'vtable slot'
             out['call']['slotOf'] = sorted(set(owners))
-            out['call']['declaredBy'] = slot_introducer(engine, owners, slot)
+            out['call']['declaredBy'] = slot_introducer(engine, owners, slot, this_vtables)
         else:
             out['call']['resolved'] = 'unconfirmed (no sampled vtable holds the callee at this slot)'
     elif k.get('kind') == 'direct':
@@ -158,15 +158,52 @@ def register_source(image, site, reg, window=40):
     return None
 
 
-def slot_introducer(engine, owners, slot):
-    """The most-base class (along the first owner's ancestors) whose own vtable already has this slot."""
-    best = None
-    for cls in ancestors(engine, owners[0]):
+def primary_chain(engine, cls):
+    """cls, its first direct base, that one's first direct base, ...: the classes that share the object's start
+    (and so its primary vtable). Other bases are separate subobjects with vtables of their own."""
+    out, seen = [], set()
+    while cls and cls not in seen:
+        seen.add(cls)
+        out.append(cls)
+        bases = ((engine.rtti or {}).get(cls) or {}).get('directBases') or []
+        cls = bases[0] if bases else None
+    return out
+
+
+def slot_introducer(engine, owners, slot, this_vtables=()):
+    """The class that introduces the slot. For the primary vtable (this offset 0): the most-base ancestor whose
+    primary vtable already has the slot. For a secondary vtable (a base subobject at this+N, e.g. ActorValueOwner
+    inside an actor base): the base class whose primary vtable has the same number of slots, the most-base one; or
+    'secondary vtable at +N' when no ancestor fits that shape (no guess)."""
+    offset, length = 0, None
+    for vt in this_vtables:
+        entry = engine.vtables.get(vt)
+        if entry and entry[0] in owners:
+            offset, length = entry[1].get('thisOffset', 0), len(entry[1].get('slots') or [])
+            break
+    chain = ancestors(engine, owners[0])
+    if offset == 0:
+        best = None
+        for cls in primary_chain(engine, owners[0]):
+            info = (engine.rtti or {}).get(cls) or {}
+            primary = next((vt for vt in info.get('vtables') or [] if vt.get('thisOffset') == 0), None)
+            if primary and slot < len(primary.get('slots') or []):
+                best = cls
+        return best
+    fits = []
+    for cls in chain[1:]:
         info = (engine.rtti or {}).get(cls) or {}
         primary = next((vt for vt in info.get('vtables') or [] if vt.get('thisOffset') == 0), None)
-        if primary and slot < len(primary.get('slots') or []):
-            best = cls
-    return best
+        if primary and len(primary.get('slots') or []) == length:
+            fits.append(cls)
+    if not fits:
+        return 'secondary vtable at +0x%X' % offset
+    # the most-base of the fitting classes: one that no other fitting class derives from... i.e. that is an
+    # ancestor of the others
+    for cls in fits:
+        if all(cls in ancestors(engine, other) for other in fits):
+            return '%s (subobject at +0x%X)' % (cls, offset)
+    return 'secondary vtable at +0x%X (%s)' % (offset, ' or '.join(fits[:3]))
 
 
 # ===================================================================================== static facts

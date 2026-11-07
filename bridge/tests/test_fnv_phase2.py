@@ -261,6 +261,37 @@ class CallKinds(unittest.TestCase):
         self.assertEqual(self.kind(bytes.fromhex('e8') + (0x2000).to_bytes(4, 'little'))['kind'], 'direct')
 
 
+class SlotIntroducer(unittest.TestCase):
+    """Which class a resolved virtual call's slot belongs to: the primary base chain for the primary vtable, the
+    subobject's own class for a secondary vtable (both found wrong by the N8 pilot reviewers)."""
+
+    def test_primary_and_secondary(self):
+        from types import SimpleNamespace
+        from geck_mcp.fnv_naming import slot_introducer
+        vt = lambda addr, off, n: {'address': hex(addr), 'thisOffset': off, 'slots': ['0x1'] * n}
+        rtti = {
+            'Base': {'bases': [], 'directBases': [], 'vtables': [vt(0x100, 0, 20)]},
+            'Side': {'bases': [], 'directBases': [], 'vtables': [vt(0x200, 0, 30)]},   # a side interface, 30 slots
+            'Owner': {'bases': [], 'directBases': [], 'vtables': [vt(0x300, 0, 6)]},   # e.g. ActorValueOwner, 6 slots
+            'Mid': {'bases': ['Base'], 'directBases': ['Base'], 'vtables': [vt(0x400, 0, 25)]},
+            'Leaf': {'bases': ['Mid', 'Base', 'Side', 'Owner'], 'directBases': ['Mid', 'Side', 'Owner'],
+                     'vtables': [vt(0x500, 0, 25), vt(0x510, 0x40, 30), vt(0x520, 0x94, 6)]},
+        }
+        vtables = {}
+        for cls, info in rtti.items():
+            for v in info['vtables']:
+                vtables[int(v['address'], 16)] = (cls, v)
+        e = SimpleNamespace(rtti=rtti, vtables=vtables)
+        # primary vtable, slot 18: Base introduces it (Side has 30 slots but is a separate subobject)
+        self.assertEqual(slot_introducer(e, ['Leaf'], 18, [0x500]), 'Base')
+        self.assertEqual(slot_introducer(e, ['Leaf'], 22, [0x500]), 'Mid')
+        # secondary vtable at +0x94 with 6 slots: the Owner subobject
+        self.assertEqual(slot_introducer(e, ['Leaf'], 2, [0x520]), 'Owner (subobject at +0x94)')
+        # a secondary vtable no ancestor's shape fits: said so, not guessed
+        e.vtables[0x530] = ('Leaf', vt(0x530, 0xA8, 9))
+        self.assertEqual(slot_introducer(e, ['Leaf'], 1, [0x530]), 'secondary vtable at +0xA8')
+
+
 class DoseResponse(unittest.TestCase):
     def test_fit_classifies(self):
         from geck_mcp import fnv_atlas
