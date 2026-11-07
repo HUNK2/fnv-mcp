@@ -1187,6 +1187,8 @@ class LiveService:
             info = self.link.one('probe', 'info')
             if info.get('ok') and info.get('armed'):
                 self.link.one('probe', 'disarm')
+        elif undo['op'] == 'dbg_clear':
+            self.link.one('dbg', 'clear', 'f')
         elif undo['op'] == 'swap_script':
             from .fnv_data import swap_script_code
             swap_script_code(self, int(undo['target'], 16), int(undo['holder'], 16))

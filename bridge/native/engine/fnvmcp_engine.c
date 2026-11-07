@@ -993,8 +993,10 @@ static bool probe_build(uint32_t i, const unsigned char *record) {
     p->mode = record[4];
     p->stolen = record[5];
     uint8_t nrel = record[6];
-    if (p->mode > 1 || nrel > 3 || (p->mode == 0 && (p->stolen < 5 || p->stolen > 16))) return false;
-    if (p->mode == 0 && !read_bytes(p->target, p->original, p->stolen)) return false;
+    if (p->mode > 2 || nrel > 3 || (p->mode == 0 && (p->stolen < 5 || p->stolen > 16)) ||
+        (p->mode == 2 && (p->stolen < 1 || p->stolen > 15)))
+        return false;
+    if (p->mode != 1 && !read_bytes(p->target, p->original, p->stolen)) return false;
     p->stub = probe_code + (size_t)i * PROBE_STUB;
     p->tramp = p->stub + PROBE_TRAMP;
     unsigned char *c = p->stub, *t = p->tramp;
@@ -1014,7 +1016,7 @@ static bool probe_build(uint32_t i, const unsigned char *record) {
     *c++ = 0x58;                                                     /* sample: pop eax */
     *c++ = 0x68; c = put32(c, i);                                    /* push index */
     *c++ = 0xE9; c = put32(c, addr_of((void *)fnvmcp_probe_common) - (addr_of(c) + 4));
-    if (p->mode == 0) {
+    if (p->mode == 0 || p->mode == 2) { /* int3 probes run the same relocated first instruction(s) */
         memcpy(t, p->original, p->stolen);
         for (uint8_t k = 0; k < nrel; k++) {
             uint8_t offset = record[7 + k];
@@ -1032,6 +1034,216 @@ static bool probe_build(uint32_t i, const unsigned char *record) {
     }
     p->state = PROBE_STAGED;
     return true;
+}
+/* int3 probes (mode 2, NAMING-PLAN N7): for functions too small for a jump and with no call site to retarget,
+ * one 0xCC byte at the first instruction. The trap handler counts the call, records the caller from [esp] and
+ * resumes in the trampoline (the relocated first instruction, then a jump back): no single-stepping. A trap
+ * costs microseconds, so a probe that reaches int3_budget calls puts its byte back by itself. */
+static void *probe_alloc(size_t bytes, DWORD protect);
+static uint32_t *int3_sorted; /* probe indexes of every int3 probe, sorted by target */
+static volatile LONG int3_count;
+static volatile uint32_t int3_budget = 200000;
+static volatile LONG int3_hot;
+static void probe_caller(uint32_t i, uint32_t ret) {
+    volatile LONG *table = &probe_callers[(size_t)i * PROBE_CALLERS * 2];
+    for (uint32_t k = 0; k < PROBE_CALLERS; k++) {
+        LONG seen = table[2 * k];
+        if (!seen) seen = InterlockedCompareExchange(&table[2 * k], (LONG)ret, 0);
+        if (!seen || seen == (LONG)ret) {
+            InterlockedIncrement(&table[2 * k + 1]);
+            return;
+        }
+    }
+    InterlockedIncrement(&probe_meta[2 * i + 1]);
+}
+static int int3_find(uint32_t address) {
+    LONG lo = 0, hi = int3_count - 1;
+    while (lo <= hi) {
+        LONG mid = (lo + hi) / 2;
+        uint32_t t = probes[int3_sorted[mid]].target;
+        if (t == address) return (int)int3_sorted[mid];
+        if (t < address) lo = mid + 1; else hi = mid - 1;
+    }
+    return -1;
+}
+static int int3_compare(const void *a, const void *b) {
+    uint32_t x = probes[*(const uint32_t *)a].target, y = probes[*(const uint32_t *)b].target;
+    return x < y ? -1 : x > y;
+}
+static void int3_index(void) {
+    if (!int3_sorted) int3_sorted = probe_alloc((size_t)PROBE_MAX * 4, PAGE_READWRITE);
+    if (!int3_sorted) return;
+    LONG n = 0;
+    for (uint32_t i = 0; i < probe_used; i++)
+        if (probes[i].mode == 2) int3_sorted[n++] = i;
+    qsort(int3_sorted, (size_t)n, 4, int3_compare);
+    int3_count = n;
+}
+/* Hardware watchpoints (NAMING-PLAN N7 field watch): DR0..DR3 on the main thread or every thread. */
+#define DBG_HITS 4096u
+typedef struct { uint32_t seq, slot, eip, thread, value, ret, frame_ret, frame; } DbgHit;
+static DbgHit dbg_hits[DBG_HITS];
+static volatile LONG dbg_seq;
+static uint32_t dbg_addr[4], dbg_len[4], dbg_rw[4], dbg_active;
+static LONG CALLBACK on_trap(EXCEPTION_POINTERS *e) {
+    DWORD code = e->ExceptionRecord->ExceptionCode;
+    CONTEXT *c = e->ContextRecord;
+    if (code == EXCEPTION_BREAKPOINT && int3_count) {
+        int i = int3_find((uint32_t)(uintptr_t)e->ExceptionRecord->ExceptionAddress);
+        if (i < 0) return EXCEPTION_CONTINUE_SEARCH;
+        if (probes[i].state != PROBE_ARMED) { /* disarmed while this trap was in flight */
+            c->Eip = addr_of(probes[i].tramp);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        LONG n = InterlockedIncrement(&probe_counts[i]);
+        uint32_t ret = 0;
+        if (read_u32((uint32_t)c->Esp, &ret)) probe_caller((uint32_t)i, ret);
+        if ((uint32_t)n >= int3_budget) {
+            unsigned char *code_at = (unsigned char *)(uintptr_t)probes[i].target;
+            DWORD old;
+            if (VirtualProtect(code_at, 1, PAGE_EXECUTE_READWRITE, &old)) {
+                if (*code_at == 0xCC) *code_at = probes[i].original[0];
+                VirtualProtect(code_at, 1, old, &old);
+                FlushInstructionCache(GetCurrentProcess(), code_at, 1);
+            }
+            probes[i].state = PROBE_DISARMED;
+            InterlockedIncrement(&int3_hot);
+        }
+        c->Eip = addr_of(probes[i].tramp);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (code == EXCEPTION_SINGLE_STEP && dbg_active) {
+        uint32_t dr6 = (uint32_t)c->Dr6, which = dr6 & dbg_active & 0xF;
+        if (!which) return EXCEPTION_CONTINUE_SEARCH;
+        for (uint32_t s = 0; s < 4; s++) {
+            if (!(which & (1u << s))) continue;
+            LONG n = InterlockedIncrement(&dbg_seq);
+            DbgHit *h = &dbg_hits[(uint32_t)(n - 1) % DBG_HITS];
+            h->seq = (uint32_t)n;
+            h->slot = s;
+            h->eip = (uint32_t)(uintptr_t)e->ExceptionRecord->ExceptionAddress;
+            h->thread = GetCurrentThreadId();
+            if (!read_u32(dbg_addr[s], &h->value)) h->value = 0;
+            if (!read_u32((uint32_t)c->Esp, &h->ret)) h->ret = 0;
+            if (!read_u32((uint32_t)c->Ebp + 4, &h->frame_ret)) h->frame_ret = 0;
+            h->frame = (uint32_t)frame;
+        }
+        c->Dr6 = 0;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+/* dbg set <slot 0-3> <address> <length 1|2|4> <access 1 write|3 read-write> <scope 0 main thread|1 every thread>
+ * dbg clear <slot|f for all>     dbg read <after seq>     dbg info
+ * Debug registers are per thread and a thread cannot load its own, so a helper thread suspends the targets
+ * (the main thread is parked waiting for the helper), sets DR0..DR3/DR7 and resumes them. A hit is recorded by
+ * the trap handler: instruction after the access, thread, the value now at the address, [esp], [ebp+4]. */
+static DWORD dbg_scope_all;
+static DWORD WINAPI dbg_worker(LPVOID arg) {
+    (void)arg;
+    DWORD applied = 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    THREADENTRY32 te;
+    te.dwSize = sizeof(te);
+    DWORD self = GetCurrentThreadId();
+    for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
+        if (!dbg_scope_all && te.th32ThreadID != main_thread) continue;
+        HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, te.th32ThreadID);
+        if (!h) continue;
+        if (SuspendThread(h) != (DWORD)-1) {
+            CONTEXT c;
+            memset(&c, 0, sizeof(c));
+            c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            if (GetThreadContext(h, &c)) {
+                DWORD dr7 = c.Dr7;
+                for (uint32_t k = 0; k < 4; k++) {
+                    dr7 &= ~((3u << (2 * k)) | (0xFu << (16 + 4 * k)));
+                    if (dbg_active & (1u << k)) {
+                        uint32_t len = dbg_len[k] == 1 ? 0 : dbg_len[k] == 2 ? 1 : 3;
+                        dr7 |= (1u << (2 * k)) | ((dbg_rw[k] & 3u) << (16 + 4 * k)) | (len << (18 + 4 * k));
+                    }
+                }
+                c.Dr0 = dbg_active & 1 ? dbg_addr[0] : 0;
+                c.Dr1 = dbg_active & 2 ? dbg_addr[1] : 0;
+                c.Dr2 = dbg_active & 4 ? dbg_addr[2] : 0;
+                c.Dr3 = dbg_active & 8 ? dbg_addr[3] : 0;
+                c.Dr7 = dr7;
+                if (SetThreadContext(h, &c)) applied++;
+            }
+            ResumeThread(h);
+        }
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+    return applied;
+}
+static DWORD dbg_apply(void) {
+    HANDLE t = CreateThread(NULL, 0, dbg_worker, NULL, 0, NULL);
+    if (!t) return 0;
+    WaitForSingleObject(t, 5000);
+    DWORD n = 0;
+    GetExitCodeThread(t, &n);
+    CloseHandle(t);
+    return n;
+}
+static void op_dbg(int argc, char **argv) {
+    uint32_t v[5];
+    const char *what = argc > 1 ? argv[1] : "";
+    if (!strcmp(what, "set")) {
+        if (argc != 7 || !parse_u32(argv[2], &v[0]) || !parse_u32(argv[3], &v[1]) || !parse_u32(argv[4], &v[2]) ||
+            !parse_u32(argv[5], &v[3]) || !parse_u32(argv[6], &v[4]) || v[0] > 3 || (v[2] != 1 && v[2] != 2 && v[2] != 4) ||
+            (v[1] & (v[2] - 1)) || (v[3] != 1 && v[3] != 3) || v[4] > 1 || v[1] < 0x10000)
+            return fail("bad_arguments");
+        uint32_t probe;
+        if (!read_u32(v[1] & ~3u, &probe)) return fail("unreadable");
+        dbg_addr[v[0]] = v[1];
+        dbg_len[v[0]] = v[2];
+        dbg_rw[v[0]] = v[3];
+        dbg_active |= 1u << v[0];
+        dbg_scope_all = v[4];
+        DWORD n = dbg_apply();
+        emit("{\"ok\":%s,\"slot\":%u,\"threads\":%lu,\"seq\":%ld}", n ? "true" : "false", v[0], (unsigned long)n, dbg_seq);
+        return;
+    }
+    if (!strcmp(what, "clear")) {
+        if (argc != 3) return fail("bad_arguments");
+        if (!strcmp(argv[2], "f")) dbg_active = 0;
+        else if (parse_u32(argv[2], &v[0]) && v[0] <= 3) dbg_active &= ~(1u << v[0]);
+        else return fail("bad_arguments");
+        DWORD saved = dbg_scope_all;
+        dbg_scope_all = 1; /* clear everywhere it may have been set */
+        DWORD n = dbg_apply();
+        dbg_scope_all = saved;
+        emit("{\"ok\":true,\"active\":%u,\"threads\":%lu}", dbg_active, (unsigned long)n);
+        return;
+    }
+    if (!strcmp(what, "read")) {
+        if (argc != 3 || !parse_u32(argv[2], &v[0])) return fail("bad_arguments");
+        LONG last = dbg_seq;
+        uint32_t first = v[0] + 1;
+        if (last > (LONG)DBG_HITS && first < (uint32_t)last - DBG_HITS + 1) first = (uint32_t)last - DBG_HITS + 1;
+        emit("{\"ok\":true,\"seq\":%ld,\"hits\":[", last);
+        unsigned shown = 0;
+        for (uint32_t q = first; q <= (uint32_t)last && shown < 300; q++, shown++) {
+            const DbgHit *h = &dbg_hits[(q - 1) % DBG_HITS];
+            emit("%s[%u,%u,\"0x%08x\",%u,\"0x%08x\",\"0x%08x\",\"0x%08x\",%u]", shown ? "," : "", h->seq, h->slot,
+                 h->eip, h->thread, h->value, h->ret, h->frame_ret, h->frame);
+        }
+        emit("]}");
+        return;
+    }
+    if (!strcmp(what, "info")) {
+        emit("{\"ok\":true,\"active\":%u,\"scopeAll\":%s,\"seq\":%ld,\"slots\":[", dbg_active,
+             dbg_scope_all ? "true" : "false", dbg_seq);
+        for (uint32_t k = 0; k < 4; k++)
+            emit("%s{\"address\":\"0x%08x\",\"length\":%u,\"access\":%u,\"on\":%s}", k ? "," : "", dbg_addr[k],
+                 dbg_len[k], dbg_rw[k], dbg_active & (1u << k) ? "true" : "false");
+        emit("]}");
+        return;
+    }
+    fail("bad_arguments");
 }
 /* Every other thread of the process is suspended while code is patched: nothing that allocates or locks
  * runs in between (no emit, no heap). */
@@ -1098,8 +1310,18 @@ static void probe_arm(void) {
     unsigned armed = 0, busy = 0, changed = 0, sites = 0, site_changed = 0, unwritable = 0;
     ULONGLONG t0 = GetTickCount64();
     probe_suspend();
+    int3_index(); /* before any 0xCC is written: a trap is always found */
     for (uint32_t i = 0; i < probe_used; i++) {
         Probe *p = &probes[i];
+        if (p->mode == 2 && (p->state == PROBE_STAGED || p->state == PROBE_DISARMED)) {
+            if (probe_thread_inside(p->target, p->target + p->stolen)) { busy++; continue; }
+            if (memcmp((const void *)(uintptr_t)p->target, p->original, p->stolen)) { p->state = PROBE_CHANGED; changed++; continue; }
+            if (!probe_writable(p->target, 1)) { unwritable++; continue; }
+            *(unsigned char *)(uintptr_t)p->target = 0xCC;
+            p->state = PROBE_ARMED;
+            armed++;
+            continue;
+        }
         if (p->mode != 0 || (p->state != PROBE_STAGED && p->state != PROBE_DISARMED)) continue;
         if (probe_thread_inside(p->target, p->target + p->stolen)) { busy++; continue; }
         if (memcmp((const void *)(uintptr_t)p->target, p->original, p->stolen)) { p->state = PROBE_CHANGED; changed++; continue; }
@@ -1136,6 +1358,15 @@ static void probe_disarm(void) {
     probe_suspend();
     for (uint32_t i = 0; i < probe_used; i++) {
         Probe *p = &probes[i];
+        if (p->mode == 2 && p->state == PROBE_ARMED) {
+            unsigned char *code = (unsigned char *)(uintptr_t)p->target;
+            if (*code != 0xCC) { overwritten++; p->state = PROBE_CHANGED; continue; }
+            if (!probe_writable(p->target, 1)) continue;
+            *code = p->original[0];
+            p->state = PROBE_DISARMED;
+            restored++;
+            continue;
+        }
         if (p->mode != 0 || p->state != PROBE_ARMED) continue;
         unsigned char expected[5] = {0xE9};
         uint32_t rel = addr_of(p->stub) - (p->target + 5);
@@ -1188,11 +1419,12 @@ static void probe_info(void) {
     emit("{\"ok\":true,\"capacity\":%u,\"used\":%u,\"armed\":%u,\"staged\":%u,\"disarmed\":%u,\"changed\":%u,"
          "\"sites\":%u,\"counts\":\"0x%08x\",\"meta\":\"0x%08x\",\"samples\":\"0x%08x\",\"callers\":\"0x%08x\","
          "\"code\":\"0x%08x\",\"codeSize\":%u,\"stubSize\":%u,\"samplesPer\":%u,\"words\":%u,\"callerSlots\":%u,"
-         "\"limit\":%u,\"mask\":\"0x%08x\",\"exitSamples\":%u,\"action\":%u,\"qpcFrequency\":%lld}",
+         "\"limit\":%u,\"mask\":\"0x%08x\",\"exitSamples\":%u,\"action\":%u,\"qpcFrequency\":%lld,"
+         "\"int3\":%ld,\"int3Budget\":%u,\"int3Hot\":%ld}",
          probe_capacity, probe_used, armed, staged, disarmed, changed, probe_site_used, addr_of(probe_counts),
          addr_of(probe_meta), addr_of(probe_samples), addr_of(probe_callers), addr_of(probe_code),
          probe_capacity * PROBE_STUB, PROBE_STUB, probe_samples_per, PROBE_WORDS, PROBE_CALLERS, probe_limit, probe_mask,
-         probe_exit_samples, probe_action, (long long)qpc_frequency.QuadPart);
+         probe_exit_samples, probe_action, (long long)qpc_frequency.QuadPart, int3_count, int3_budget, int3_hot);
 }
 static void op_probe(int argc, char **argv) {
     uint32_t v[4];
@@ -1226,6 +1458,10 @@ static void op_probe(int argc, char **argv) {
         }
         probe_code = probe_alloc((size_t)probe_capacity * PROBE_STUB, PAGE_EXECUTE_READWRITE);
         if (!probe_code) return fail("out_of_memory");
+        if (!int3_sorted) int3_sorted = probe_alloc((size_t)PROBE_MAX * 4, PAGE_READWRITE);
+        if (!int3_sorted) return fail("out_of_memory");
+        int3_count = 0;
+        int3_hot = 0;
         if (shadow_tls == TLS_OUT_OF_INDEXES && (shadow_tls = TlsAlloc()) == TLS_OUT_OF_INDEXES) return fail("no_tls");
         probe_used = probe_site_used = 0;
         probe_config(v[1], v[2], v[3]);
@@ -1274,6 +1510,12 @@ static void op_probe(int argc, char **argv) {
     }
     if (!strcmp(what, "arm")) return probe_arm();
     if (!strcmp(what, "disarm")) return probe_disarm();
+    if (!strcmp(what, "int3budget")) {
+        if (argc != 3 || !parse_u32(argv[2], &v[0]) || !v[0]) return fail("bad_arguments");
+        int3_budget = v[0];
+        emit("{\"ok\":true,\"int3Budget\":%u}", v[0]);
+        return;
+    }
     if (!strcmp(what, "tag")) {
         if (argc != 3 || !parse_u32(argv[2], &v[0])) return fail("bad_arguments");
         probe_action = v[0];
@@ -1529,16 +1771,37 @@ static void op_call(int argc, char **argv) {
     if (argv[2][0] == 'f') emit(isfinite(result.st0) ? ",\"st0\":%.17g" : ",\"st0\":null", result.st0);
     emit(",\"scriptErrors\":%ld}", script_errors - before);
 }
+/* The game exe's image range, from its own PE header (no hard-coded addresses). */
+static bool exe_range(uint32_t *start, uint32_t *end) {
+    static uint32_t s, e;
+    if (!s) {
+        const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
+        if (!base) return false;
+        const IMAGE_NT_HEADERS32 *nt = (const IMAGE_NT_HEADERS32 *)(base + ((const IMAGE_DOS_HEADER *)base)->e_lfanew);
+        s = (uint32_t)(uintptr_t)base;
+        e = s + nt->OptionalHeader.SizeOfImage;
+    }
+    *start = s;
+    *end = e;
+    return true;
+}
+/* A ref argument (0 = none) must be a live object: readable, with a vtable inside the game exe. A form id
+ * passed where a pointer belongs would otherwise crash the script runner. */
 static void *ref_argument(int argc, char **argv, int index, bool *ok) {
     uint32_t ref = 0;
     *ok = argc <= index || parse_u32(argv[index], &ref);
     return (void *)(uintptr_t)ref;
+}
+static bool ref_is_object(void *p) {
+    uint32_t ref = (uint32_t)(uintptr_t)p, vt = 0, lo = 0, hi = 0;
+    return !ref || (read_u32(ref, &vt) && exe_range(&lo, &hi) && vt >= lo && vt < hi);
 }
 static void op_console(int argc, char **argv) {
     bool ok;
     void *ref = ref_argument(argc, argv, 2, &ok);
     if (argc < 2 || argc > 3 || !ok || unhex(argv[1]) <= 0 || strlen(argv[1]) > 511 || strchr(argv[1], '\n'))
         return fail("bad_arguments");
+    if (!ref_is_object(ref)) return fail("bad_ref");
     if (!console || !console->RunScriptLine) return fail("console_api_unavailable");
     route_console();
     LONGLONG before = 0;
@@ -1557,6 +1820,7 @@ static void op_eval(int argc, char **argv, bool expression) {
     bool ok;
     void *ref = ref_argument(argc, argv, 2, &ok);
     if (argc < 2 || argc > 3 || !ok || unhex(argv[1]) <= 0) return fail("bad_arguments");
+    if (!ref_is_object(ref)) return fail("bad_ref");
     if (!scripts || !scripts->CallFunction || !(expression ? (void *)scripts->CompileExpression : (void *)scripts->CompileScript))
         return fail("script_api_unavailable");
     route_console();
@@ -1718,6 +1982,7 @@ static void serve_op(char *op) {
     else if (!strcmp(argv[0], "hookfilter")) op_hookfilter(argc, argv);
     else if (!strcmp(argv[0], "hookact")) op_hookact(argc, argv);
     else if (!strcmp(argv[0], "probe")) op_probe(argc, argv);
+    else if (!strcmp(argv[0], "dbg")) op_dbg(argc, argv);
     else fail("unknown_op");
 }
 /* Serves one request line on the main thread; ops run in order within the same frame. */
@@ -1914,6 +2179,7 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
     }
     QueryPerformanceFrequency(&qpc_frequency);
     AddVectoredExceptionHandler(1, on_exception);
+    AddVectoredExceptionHandler(1, on_trap); /* first: int3 probes and watchpoints are handled, not logged */
     FILETIME creation, exit_time, kernel, user;
     if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit_time, &kernel, &user)) return false;
     pid = GetCurrentProcessId();

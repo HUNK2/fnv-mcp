@@ -125,6 +125,10 @@ FNV_LIVE_TOOLS = {
     # naming from the running game (NAMING-PLAN N1-N3)
     'fnv_probe': ('act', 'count calls of thousands of functions at once (entry jumps, vtable slots, call sites): plan, install, read, remove'),
     'fnv_atlas': ('act', 'run scripted game actions with doses against the probe set: which functions run per action, and how often'),
+    'fnv_name_dossier': ('read', "one function's full case for naming: static facts, fnvsym claims, runtime callers (virtual slots resolved), this/result profile, actions, suggested tests"),
+    'fnv_name_oracle': ('act', 'does a function compute a value the game already knows (script commands, form headers) on the same objects; blind calibration'),
+    'fnv_name_test': ('act', 'experiments: skip or force a function during an action, with a control; blind battery re-identification'),
+    'fnv_field_watch': ('act', 'hardware watchpoints: which functions write or read one field of a live object, with the values; find the field an action changes'),
     # milestone 10: setup
     'fnv_setup_check': ('read', 'is this machine ready for the fnv tools? each prerequisite with its state and the fix'),
 }
@@ -160,6 +164,14 @@ def register(server, project, annotations, result_type):
     live.probe_tools = probe_tools
     from .fnv_atlas import AtlasTools
     atlas = AtlasTools(live, probe_tools, world)
+    from .fnv_naming import NamingTools
+    naming = NamingTools(live, probe_tools, atlas)
+    from .fnv_oracle import OracleTools
+    oracle = OracleTools(live, naming, agent)
+    from .fnv_experiment import ExperimentTools
+    experiments = ExperimentTools(live, control_tools, naming)
+    from .fnv_watch import FieldWatchTools
+    field_watch = FieldWatchTools(live, naming)
     read, act, control = annotations
 
     def service_call(name, fn, kind):
@@ -1093,12 +1105,14 @@ def register(server, project, annotations, result_type):
 
     # ------------------------------------------------------------------ naming from the running game
     @server.tool(annotations=act)
-    async def fnv_probe(action: Literal['plan', 'install', 'status', 'read', 'remove', 'clear', 'config'] = 'status',
+    async def fnv_probe(action: Literal['plan', 'install', 'status', 'read', 'remove', 'clear', 'config', 'harvest',
+                                        'harvests'] = 'status',
                         statuses: list[str] | None = None, functions: list[str] | None = None,
                         start: str | None = None, end: str | None = None, cls: str | None = None,
                         callees_of: list[str] | None = None, limit: int | None = None, part: str | None = None,
                         samples: int = 8, exit_samples: int = 4, every: int = 64, dry_run: bool = False,
-                        top: int = 25) -> result_type:
+                        top: int = 25, int3: bool = False, int3_budget: int | None = None,
+                        notes: str | None = None) -> result_type:
         """Probes count the calls of thousands of engine functions at once, so you can see which unnamed functions run.
         plan: (no game needed) choose functions (statuses, default every not-proven status; or functions / start..end /
         cls / callees_of / part 'k/n') and say how each can be probed: an entry jump, its vtable slots and direct call
@@ -1107,16 +1121,23 @@ def register(server, project, annotations, result_type):
         recorded with this/args/vtables, exit_samples of those with the result, every: one in N later calls adds its
         caller). status: counts, most-called functions. read: decoded samples and callers (with the call kind: direct,
         virtual slot, pointer) for functions. remove: put every original byte back (also fnv_undo). clear: zero the
-        counters. config: change samples / exit_samples / every live."""
+        counters. config: change samples / exit_samples / every live. int3: also probe functions with no entry jump and
+        no call site with a one-byte trap (costs microseconds a call; a probe past int3_budget calls removes itself).
+        harvest: copy every count, sample and caller table into state/atlas.sqlite (fnv_name_dossier reads them);
+        harvests: list them."""
         def action_fn():
             selection = {k: v for k, v in (('statuses', statuses), ('addresses', functions if action in ('plan', 'install') else None),
                                            ('start', int(start, 16) if start else None), ('end', int(end, 16) if end else None),
                                            ('cls', cls), ('callees_of', callees_of), ('limit', limit), ('part', part))
                          if v is not None}
             if action == 'plan':
-                return probe_tools.plan(selection)[0]
+                return probe_tools.plan(selection, int3)[0]
             if action == 'install':
-                return probe_tools.install(selection, samples, exit_samples, every, dry_run)
+                return probe_tools.install(selection, samples, exit_samples, every, dry_run, int3, int3_budget)
+            if action == 'harvest':
+                return naming.harvest(notes)
+            if action == 'harvests':
+                return {'harvests': naming.harvests()}
             if action == 'status':
                 return probe_tools.status(top)
             if action == 'read':
@@ -1128,7 +1149,87 @@ def register(server, project, annotations, result_type):
             if action == 'clear':
                 return probe_tools.clear()
             return probe_tools.config(samples, exit_samples, every)
-        return await invoke('fnv_probe', action_fn, 'read' if action in ('plan', 'status', 'read') else 'control')
+        return await invoke('fnv_probe', action_fn, 'read' if action in ('plan', 'status', 'read', 'harvests') else 'control')
+
+    def _public(out):
+        if isinstance(out, dict):
+            return {k: _public(v) for k, v in out.items() if not str(k).startswith('_')}
+        if isinstance(out, list):
+            return [_public(v) for v in out]
+        return out
+
+    @server.tool(annotations=read)
+    async def fnv_name_dossier(function: Annotated[str, Field(min_length=1, max_length=200)],
+                               harvest: int | None = None, max_items: int = 12) -> result_type:
+        """Everything known about one function, for naming it: engine-map status, size and signature, static callers
+        and callees with proven names, the vtable slots it fills (and whether the body is folded across unrelated
+        classes), strings and settings its decompiled body uses, fnvsym's claims, names.csv and verified.csv rows; and from
+        harvested probe sets (fnv_probe harvest): calls, atlas fits per action, callers with the call resolved (direct, the
+        vtable class and slot of a virtual call - also through a register -, or a callback), `this` classes and their
+        common base, form types, argument classes, the result's shape (constant, bool, enum, int/float range, pointer
+        class), threads and the top caller chains. Ends with suggested next tests (oracle, experiment, family packet,
+        layout squeeze)."""
+        return await invoke('fnv_name_dossier', lambda: naming.dossier(function, harvest, max_items))
+
+    @server.tool(annotations=act)
+    async def fnv_name_oracle(action: Literal['run', 'purity', 'calibrate'] = 'run',
+                              function: str | None = None, mode: Literal['auto', 'call', 'sampled'] = 'auto',
+                              harvest: int | None = None, radius: float = 8000.0, limit: int = 400) -> result_type:
+        """Does the function return a value the game already knows, on the same objects? run: its results - from probe
+        samples, or by calling it on the references, base forms, quests, cells, worldspaces and packages around the
+        player when its machine code is proven free of side effects (purity) - are compared with script commands
+        (GetLevel, GetScale, GetAV x, GetRace, GetStage, GetCellFlag n, ...) and form header fields. A match needs >= 20
+        objects, no mismatch, a chance of matching by a random pairing <= 1e-6, and no shuffled pairing matching (PROOF
+        4.2). purity: the side-effect check alone. calibrate: the method run blind on proven getters and scored after
+        (state/oracle_calibration_*.json)."""
+        def action_fn():
+            if action == 'calibrate':
+                return oracle.calibrate(limit, radius)
+            if not function:
+                raise ValueError('%s needs function' % action)
+            if action == 'purity':
+                engine = live.engine()
+                return dict(oracle.purity().check(engine.resolve(function)), function=engine.summary(engine.resolve(function)))
+            return _public(oracle.run(function, mode, harvest, radius))
+        return await invoke('fnv_name_oracle', action_fn, 'read' if action == 'purity' else 'control')
+
+    @server.tool(annotations=act)
+    async def fnv_name_test(action: Literal['test', 'battery', 'panels'] = 'test', hypothesis: dict | None = None,
+                            functions: list[str] | None = None, panels: list[str] | None = None,
+                            reps: int = 3) -> result_type:
+        """Experiments on one function (PROOF 4.2): test runs a hypothesis {function, intervention {action skip|result|arg,
+        value, arg}, panel (a battery panel name) or target/setup/trigger/observe/expect, predict blocked|normal, reps >= 3}:
+        each repetition does the action without the change (control) and with it; confirmed when the control shows the
+        normal effect and the change the predicted one every time. battery: skip each function during each panel (set
+        scale, disable, enable, set angle, destroyed, ghost, set/damage actor values on an NPC, a creature and the player,
+        XP, items) - the panels it blocks identify it, blind; scored against names afterwards. panels: the battery."""
+        def action_fn():
+            from .fnv_experiment import PANELS
+            if action == 'panels':
+                return {'panels': PANELS}
+            if action == 'battery':
+                return experiments.blind_battery(functions, panels, reps)
+            if not hypothesis:
+                raise ValueError('test needs hypothesis')
+            return experiments.test(hypothesis)
+        return await invoke('fnv_name_test', action_fn, 'read' if action == 'panels' else 'control')
+
+    @server.tool(annotations=act)
+    async def fnv_field_watch(action: Literal['find', 'watch'] = 'watch', ref: str | None = None,
+                              offset: int = 0, address: str | None = None, length: int = 4,
+                              access: Literal['write', 'readwrite'] = 'write', scope: Literal['main', 'all'] = 'main',
+                              trigger: list[str] | None = None, trigger_ref: str | None = None, seconds: float = 0.0,
+                              size: int = 4096) -> result_type:
+        """Which functions write (or read) one field, from the CPU's debug registers. find: snapshot an object (ref,
+        size bytes, and one level into the objects its pointer fields point at) before and after console lines (trigger,
+        run on the ref) and list what changed, named from the class layouts. watch: a hardware watchpoint on address (or
+        ref + offset), length 1/2/4, on the main thread or every thread, while the trigger runs (or for seconds): each
+        function that touched it, the instruction, the values and its callers. Cleared afterwards (also fnv_undo)."""
+        def action_fn():
+            if action == 'find':
+                return field_watch.find(ref or 'player', trigger, size)
+            return field_watch.watch(address, ref, offset, length, access, scope, trigger, seconds, trigger_ref)
+        return await invoke('fnv_field_watch', action_fn, 'control')
 
     @server.tool(annotations=act)
     async def fnv_atlas(action: Literal['actions', 'run', 'runs', 'function', 'action', 'import_frida'] = 'actions',

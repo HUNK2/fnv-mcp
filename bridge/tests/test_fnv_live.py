@@ -598,6 +598,61 @@ class CompanionPipeTests(unittest.TestCase):
         self.assertEqual(self.link.one('call', w(t['msvcFloat']), 'f', '0', '0', f(2.5))['st0'], 2.5)
         self.assertTrue(self.link.one('unhook', w(h['id']))['ok'])
 
+    def test_int3_probes_and_watchpoints(self):
+        # N7: an int3 probe on a 4-byte getter reached only through a function pointer (count, caller, the same
+        # result, budget self-disarm, restore), and a hardware write watchpoint naming the function that wrote.
+        from geck_mcp import fnv_probe
+        t, w = self.targets, fnv_link.word
+        call = lambda k, *args: int(self.link.one('call', w(t[k]), 'i', *args)['eax'], 16)
+        expected = call('ptrCaller', '0', '0', w(t['self']))
+        original = self.link.read(t['tiny2'], 4)
+        self.assertEqual(original, bytes.fromhex('8b4104c3'))
+        info = self.link.one('probe', 'info')
+        if info.get('ok') and info.get('armed'):
+            self.link.one('probe', 'disarm')
+        self.assertTrue(self.link.one('probe', 'init', '4', '2', '0', '0')['ok'])
+        record = struct.pack('<IBBB3sH', t['tiny2'], 2, 3, 0, b'\0\0\0', 0)  # first instruction: 3 bytes
+        self.assertEqual(self.link.one('probe', 'add', record.hex())['added'], 1)
+        arm = self.link.one('probe', 'arm')
+        self.assertEqual(arm['armed'], 1, arm)
+        self.assertEqual(self.link.read(t['tiny2'], 1), b'\xcc')
+        for _ in range(3):
+            self.assertEqual(call('ptrCaller', '0', '0', w(t['self'])), expected)
+        info = self.link.one('probe', 'info')
+        self.assertEqual(info['int3'], 1)
+        memory = fnv_probe.ProcessMemory(self.host.pid)
+        try:
+            self.assertEqual(memory.u32s(int(info['counts'], 16), 1)[0], 3)
+            callers = memory.u32s(int(info['callers'], 16), 2 * fnv_probe.CALLER_SLOTS)
+            self.assertEqual((callers[0], callers[1]), (t['ptrCaller'] + 11, 3))  # after `call *%eax` (4 + 5 + 2 bytes)
+        finally:
+            memory.close()
+        # a budget of 5 calls: the probe puts its byte back by itself and stops counting
+        self.assertTrue(self.link.one('probe', 'int3budget', '5')['ok'])
+        for _ in range(4):
+            self.assertEqual(call('ptrCaller', '0', '0', w(t['self'])), expected)
+        info = self.link.one('probe', 'info')
+        self.assertEqual(info['int3Hot'], 1)
+        self.assertEqual(self.link.read(t['tiny2'], 4), original)
+        self.assertEqual(struct.unpack('<I', self.link.read(int(info['counts'], 16), 4))[0], 5)
+        self.assertTrue(self.link.one('probe', 'int3budget', '200000')['ok'])
+        self.assertEqual(self.link.one('probe', 'arm')['armed'], 1)  # re-arm, then disarm restores
+        self.assertEqual(self.link.one('probe', 'disarm')['restored'], 1)
+        self.assertEqual(self.link.read(t['tiny2'], 4), original)
+        # watchpoint: writes to `watched` on the main thread (where the companion runs `call`)
+        on = self.link.one('dbg', 'set', '0', w(t['watched']), '4', '1', '0')
+        self.assertTrue(on['ok'], on)
+        seq = on['seq']
+        call('writer', '0', '0', w(1234))
+        call('writer', '0', '0', w(99))
+        hits = self.link.one('dbg', 'read', str(seq))['hits']
+        self.assertEqual([int(h[4], 16) for h in hits], [1234, 99])
+        for h in hits:  # the instruction after the store: writer's ret
+            self.assertTrue(t['writer'] < int(h[2], 16) <= t['writer'] + 10, h)
+        self.assertTrue(self.link.one('dbg', 'clear', 'f')['ok'])
+        call('writer', '0', '0', '7')
+        self.assertEqual(self.link.one('dbg', 'read', str(seq))['seq'], seq + 2)  # no more hits
+
     def test_probes(self):
         # Mass probes: entry jumps, a vtable slot and a call site for a 3-byte getter, counts, caller tables,
         # samples with results (int and float), sampling one in N, disarm and re-arm.
@@ -695,6 +750,9 @@ class CompanionPipeTests(unittest.TestCase):
         self.assertEqual(self.link.eval('str')['result']['value'], 'hello "world"')
         self.assertEqual(fnv_link.value_of(self.link.eval('arr')), [7, 8])
         self.assertEqual(self.link.eval('bad')['error'], 'compile_failed')
+        # a form id where a ref pointer belongs is refused instead of crashing the script runner
+        self.assertEqual(self.link.eval('form', ref=0x00104F08)['error'], 'bad_ref')
+        self.assertEqual(self.link.console('player.additem f 5', ref=0x00104F08)['error'], 'bad_ref')
         events = self.link.events(0)['events']
         self.assertIn('script_error', [e['type'] for e in events])
         self.assertEqual(self.link.schedule(0, 'later')['slot'] >= 0, True)

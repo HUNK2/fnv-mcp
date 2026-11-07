@@ -216,6 +216,50 @@ class ProbePlanning(unittest.TestCase):
         q.plan([0x1100], cache_q := {})
         self.assertEqual(cache_q, {})  # quarantine verdicts are not cached
 
+    def test_int3_for_what_nothing_else_reaches(self):
+        from geck_mcp import fnv_probe
+        # 0x1500: an empty function (ret) and 0x1600 a 4-byte getter, neither called directly nor in a vtable
+        functions = {0x1500: ('Empty::Fn', 'unnamed', bytes([0xC3])),
+                     0x1600: ('Getter::Fn', 'unnamed', bytes.fromhex('8b4104c3')),
+                     0x1700: ('Ret4::Fn', 'unnamed', bytes.fromhex('c20400'))}
+        e = self.engine(functions)
+        img = self.Image({a: code for a, (_, _, code) in functions.items()})
+        plain = fnv_probe.ProbePlanner(e, img)
+        self.assertIsNone(plain.analyse(0x1600)['mode'])
+        trap = fnv_probe.ProbePlanner(e, img, int3=True)
+        self.assertEqual(trap.analyse(0x1500), dict(trap.analyse(0x1500), mode='int3', stolen=1, relocs=[]))
+        self.assertEqual((trap.analyse(0x1600)['mode'], trap.analyse(0x1600)['stolen']), ('int3', 3))
+        self.assertEqual(trap.analyse(0x1700)['stolen'], 3)
+        cache = {}
+        trap.plan([0x1500, 0x1600], cache)
+        self.assertEqual(cache, {})  # int3 verdicts depend on the flag: not cached
+
+
+@unittest.skipUnless(HAVE_CAPSTONE, 'capstone (the naming extra) is not installed')
+class CallKinds(unittest.TestCase):
+    """The call instruction before a return address: vtable calls only through [reg] or [reg+disp]."""
+
+    def kind(self, call_bytes):
+        from geck_mcp import fnv_probe
+
+        class Img:
+            def __init__(self, code):
+                self.code = code
+
+            def read(self, a, n):
+                return self.code[a - 0x1000:a - 0x1000 + n]
+        code = bytes([0x90] * 16) + call_bytes + bytes([0x90] * 8)
+        return fnv_probe.call_kind(Img(code), 0x1000 + 16 + len(call_bytes))
+
+    def test_kinds(self):
+        self.assertEqual(self.kind(bytes.fromhex('ff5014'))['slotIndex'], 5)          # call [eax+0x14]
+        self.assertEqual(self.kind(bytes.fromhex('ff10'))['slotIndex'], 0)            # call [eax]
+        self.assertEqual(self.kind(bytes.fromhex('ff55e4'))['kind'], 'pointer')       # call [ebp-0x1c]: a local
+        self.assertEqual(self.kind(bytes.fromhex('ff51fc'))['kind'], 'pointer')       # call [ecx-4]
+        self.assertEqual(self.kind(bytes.fromhex('ffd0'))['kind'], 'register')        # call eax
+        self.assertEqual(self.kind(bytes.fromhex('ff148500104000'))['kind'], 'pointer')  # call [eax*4+table]
+        self.assertEqual(self.kind(bytes.fromhex('e8') + (0x2000).to_bytes(4, 'little'))['kind'], 'direct')
+
 
 class DoseResponse(unittest.TestCase):
     def test_fit_classifies(self):

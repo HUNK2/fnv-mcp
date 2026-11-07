@@ -20,6 +20,7 @@ probed again; it is found from the companion's crash-context file of the crashed
 import ctypes
 import json
 import os
+import re
 import struct
 import time
 from array import array
@@ -35,7 +36,7 @@ ANALYSIS_VERSION = 1
 WORDS = 20
 CALLER_SLOTS = 16
 STATES = {0: 'staged', 1: 'armed', 2: 'disarmed', 3: 'changed'}
-MODE_ENTRY, MODE_SITES = 0, 1
+MODE_ENTRY, MODE_SITES, MODE_INT3 = 0, 1, 2
 SITE_POINTER, SITE_REL32 = 1, 2
 BATCH = 2000
 
@@ -110,10 +111,11 @@ def _target(op_str):
 
 
 class ProbePlanner:
-    def __init__(self, engine, image, quarantine=()):
+    def __init__(self, engine, image, quarantine=(), int3=False):
         self.engine = engine
         self.image = image
         self.quarantine = set(quarantine)
+        self.int3 = int3  # also plan int3 probes for functions with no entry and no call site (N7)
         self.md = disassembler()
         self._slots = None
 
@@ -176,7 +178,27 @@ class ProbePlanner:
         if sites['sites']:
             sites['entryProblem'] = entry['reason']
             return sites
+        if self.int3:
+            trap = self._int3(code)
+            if trap.get('mode'):
+                trap['entryProblem'] = entry['reason']
+                return trap
         return {'mode': None, 'reason': entry['reason'] + '; no vtable slot or direct call site either'}
+
+    @staticmethod
+    def _int3(code):
+        """One 0xCC on the first instruction; the trampoline runs that instruction relocated (rel32 only)."""
+        if code[:1] == bytes([0xC3]):
+            return {'mode': 'int3', 'stolen': 1, 'relocs': []}  # an empty function: `ret` runs anywhere
+        if code[:1] == bytes([0xC2]):
+            return {'mode': 'int3', 'stolen': 3, 'relocs': []}  # `ret n`
+        try:
+            stolen, relocs = decode_prologue(code[:32], need=1)
+        except HookError as e:
+            return {'mode': None, 'reason': str(e.message if hasattr(e, 'message') else e)}
+        if len(relocs) > 3 or stolen > 15:
+            return {'mode': None, 'reason': 'first instruction cannot be relocated'}
+        return {'mode': 'int3', 'stolen': stolen, 'relocs': relocs}
 
     def _entry(self, address, code, size):
         try:
@@ -230,9 +252,11 @@ class ProbePlanner:
         for a in addresses:
             key = '%08X' % a
             r = cache.get(key) if cache is not None else None
+            if r is not None and r.get('mode') is None and self.int3 and not r.get('reason', '').startswith('quarantined'):
+                r = None  # a function the cached plan could not probe may take an int3 probe
             if r is None:
                 r = self.analyse(a)
-                if cache is not None and not (r.get('reason') or '').startswith('quarantined'):
+                if cache is not None and r.get('mode') != 'int3' and not (r.get('reason') or '').startswith('quarantined'):
                     cache[key] = r
             results[a] = r
         return results
@@ -248,6 +272,7 @@ def summarise(results, engine, examples=6):
     none = [a for a, r in results.items() if r['mode'] is None][:examples]
     site_reasons = Counter(_reason_kind(r['entryProblem']) for r in results.values() if r.get('entryProblem'))
     return {'functions': len(results), 'entry': modes.get('entry', 0), 'sites': modes.get('sites', 0),
+            'int3': modes.get('int3', 0),
             'notProbeable': modes.get('none', 0), 'whyAtSites': dict(site_reasons.most_common()),
             'siteCount': sum(len(r.get('sites') or []) for r in results.values()),
             'reasons': dict(reasons.most_common()),
@@ -297,10 +322,10 @@ class ProbeTools:
     def quarantine(self):
         return {int(k, 16): v for k, v in self._load('probe_quarantine.json', {}).items()}
 
-    def planner(self):
+    def planner(self, int3=False):
         engine = self.live.engine()
         image = self.live.deep._image(required=True)
-        return ProbePlanner(engine, image, self.quarantine())
+        return ProbePlanner(engine, image, self.quarantine(), int3=int3)
 
     def _analysis_cache(self, planner):
         g = planner.engine.generated
@@ -312,8 +337,8 @@ class ProbeTools:
             self._cache = loaded if loaded.get('key') == key else {'key': key, 'results': {}}
         return self._cache
 
-    def plan(self, selection=None):
-        planner = self.planner()
+    def plan(self, selection=None, int3=False):
+        planner = self.planner(int3)
         addresses = planner.select(**(selection or {}))
         cache = self._analysis_cache(planner)
         before = len(cache['results'])
@@ -338,13 +363,13 @@ class ProbeTools:
         pid = (self.link.hello or self.link.ping()).get('pid')
         return ProcessMemory(int(pid))
 
-    def install(self, selection=None, samples=8, exit_samples=4, every=64, dry_run=False):
+    def install(self, selection=None, samples=8, exit_samples=4, every=64, dry_run=False, int3=False, int3_budget=None):
         self.live.ready()
         info = self.supported()
         if info.get('ok') and info.get('armed'):
             raise ProbeError('PROBES_ARMED', '%d probes are armed already: remove them first' % info['armed'])
         crash = self._quarantine_from_last_session()
-        summary, results, planner = self.plan(selection)
+        summary, results, planner = self.plan(selection, int3)
         chosen = [(a, r) for a, r in sorted(results.items()) if r['mode']]
         if not chosen:
             raise ProbeError('NOTHING_TO_PROBE', 'No probeable function in the selection', summary)
@@ -375,6 +400,8 @@ class ProbeTools:
         r = self.link.one('probe', 'init', word(len(probes)), word(samples), word(exit_samples), word(every))
         if not r.get('ok'):
             raise ProbeError('PROBE_INIT_FAILED', 'probe init failed: %s' % r.get('error'), r)
+        if int3_budget:
+            self.link.one('probe', 'int3budget', word(int(int3_budget)))
         for k in range(0, len(probes), BATCH):
             records = b''.join(struct.pack('<IBBB3sH', a, mode, stolen, len(relocs), bytes((relocs + [0, 0, 0])[:3]), 0)
                                for a, mode, stolen, relocs in probes[k:k + BATCH])
@@ -414,13 +441,13 @@ class ProbeTools:
         them since (xNVSE and plugins hook game code at start-up)."""
         changed, probes, sites, skipped = [], [], [], []
         for a, r in chosen:
-            if r['mode'] == 'entry':
+            if r['mode'] in ('entry', 'int3'):
                 n = r['stolen']
                 live, clean = memory.read(a, n), planner.image.read(a, n)
                 if live != clean:
                     changed.append({'address': '0x%08X' % a, 'live': live.hex(' '), 'clean': clean.hex(' ')})
                     continue
-                probes.append((a, MODE_ENTRY, n, list(r['relocs'])))
+                probes.append((a, MODE_ENTRY if r['mode'] == 'entry' else MODE_INT3, n, list(r['relocs'])))
             else:
                 good = []
                 for kind, at in r['sites']:
@@ -570,7 +597,7 @@ class ProbeTools:
         image = self.live.deep._image(required=False)
         if not image:
             return None
-        probes = [p for p in session['probes'] if p[1] == MODE_ENTRY]
+        probes = [p for p in session['probes'] if p[1] in (MODE_ENTRY, MODE_INT3)]
         step = max(1, len(probes) // sample)
         memory = self._memory()
         bad = []
@@ -638,14 +665,20 @@ def call_kind(image, ret):
                 op = insn.op_str
                 if '[' not in op:
                     return {'kind': 'register', 'site': '0x%08X' % insn.address, 'operand': op}
-                inner = op[op.index('[') + 1:op.index(']')]
+                inner = op[op.index('[') + 1:op.index(']')].replace(' ', '')
+                site = '0x%08X' % insn.address
                 if inner.startswith('0x'):
-                    return {'kind': 'pointer', 'site': '0x%08X' % insn.address, 'slot': inner}
-                disp = 0
-                if '+' in inner:
-                    tail = inner.split('+')[-1].strip()
-                    disp = int(tail, 16) if tail.startswith('0x') else (int(tail) if tail.isdigit() else 0)
-                return {'kind': 'virtual', 'site': '0x%08X' % insn.address, 'operand': op, 'slotIndex': disp // 4}
+                    return {'kind': 'pointer', 'site': site, 'slot': inner}
+                m = re.fullmatch(r'(eax|ebx|ecx|edx|esi|edi|ebp|esp)(?:([+-])(0x[0-9a-f]+|\d+))?', inner)
+                if not m:  # indexed ([reg*4+table]): a table of function pointers
+                    return {'kind': 'pointer', 'site': site, 'operand': op, 'note': 'indexed function-pointer table'}
+                reg, sign, num = m.group(1), m.group(2), m.group(3)
+                disp = int(num, 0) if num else 0
+                if reg in ('ebp', 'esp'):
+                    return {'kind': 'pointer', 'site': site, 'operand': op, 'note': 'function pointer held in a local'}
+                if sign == '-' or disp % 4:
+                    return {'kind': 'pointer', 'site': site, 'operand': op, 'note': 'function pointer in a struct field'}
+                return {'kind': 'virtual', 'site': site, 'operand': op, 'slotIndex': disp // 4}
             break
     return {'kind': 'unknown'}
 

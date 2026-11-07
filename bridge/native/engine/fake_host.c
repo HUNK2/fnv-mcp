@@ -35,6 +35,10 @@ extern int msvc_this(void), msvc_seh(void), prehooked(void), msvc_float(void);
 /* Probe targets: tiny is a thiscall getter too short for an entry jump (8b 01 c3); site_caller reaches it
  * with a direct call (site_call is that call instruction), vt_caller through slot 1 of tiny_vtable (.rdata). */
 extern int tiny(void), site_caller(void), site_call(void), vt_caller(void), tiny_vtable(void);
+/* int3 and watchpoint targets: tiny2 (8b 41 04 c3) is reached only through a pointer (ptr_caller), writer
+ * stores its argument in `watched` (a data breakpoint on it names writer). */
+extern int tiny2(void), ptr_caller(void), writer(void);
+volatile uint32_t watched;
 __asm__(
     ".text\n"
     ".globl _msvc_this\n"
@@ -101,7 +105,22 @@ __asm__(
     "_tiny_vtable:\n"
     "  .long _msvc_seh\n"
     "  .long _tiny\n"
-    ".text\n");
+    ".text\n"
+    ".globl _tiny2\n"
+    "_tiny2:\n"
+    "  movl 4(%ecx), %eax\n"
+    "  ret\n"
+    ".globl _ptr_caller\n"
+    "_ptr_caller:\n"
+    "  movl 4(%esp), %ecx\n"
+    "  movl $_tiny2, %eax\n"
+    "  call *%eax\n"
+    "  ret\n"
+    ".globl _writer\n"
+    "_writer:\n"
+    "  movl 4(%esp), %eax\n"
+    "  movl %eax, _watched\n"
+    "  ret\n");
 
 static void send(uint32_t type, void *data) {
     Message m = {"NVSE", type, 0, data};
@@ -207,14 +226,15 @@ int main(int argc, char **argv) {
     if (!q || !l || q(&editor, &info) || q(&wrong_build, &info) || !q(&nvse, &info) || !l(&nvse)) return 4;
     static int self_value = 6;
     printf("{\"buffer\":\"0x%08x\",\"chain\":\"0x%08x\",\"chainEnd\":\"0x%08x\",\"add3\":\"0x%08x\",\"sub2\":\"0x%08x\","
-           "\"member\":\"0x%08x\",\"self\":\"0x%08x\",\"fast\":\"0x%08x\",\"halfsum\":\"0x%08x\",\"scale\":\"0x%08x\",\"msvcThis\":\"0x%08x\",\"msvcSeh\":\"0x%08x\",\"prehooked\":\"0x%08x\",\"msvcFloat\":\"0x%08x\",\"tiny\":\"0x%08x\",\"siteCaller\":\"0x%08x\",\"siteCall\":\"0x%08x\",\"vtCaller\":\"0x%08x\",\"tinyVtable\":\"0x%08x\"}\n",
+           "\"member\":\"0x%08x\",\"self\":\"0x%08x\",\"fast\":\"0x%08x\",\"halfsum\":\"0x%08x\",\"scale\":\"0x%08x\",\"msvcThis\":\"0x%08x\",\"msvcSeh\":\"0x%08x\",\"prehooked\":\"0x%08x\",\"msvcFloat\":\"0x%08x\",\"tiny\":\"0x%08x\",\"siteCaller\":\"0x%08x\",\"siteCall\":\"0x%08x\",\"vtCaller\":\"0x%08x\",\"tinyVtable\":\"0x%08x\",\"tiny2\":\"0x%08x\",\"ptrCaller\":\"0x%08x\",\"writer\":\"0x%08x\",\"watched\":\"0x%08x\"}\n",
            (unsigned)(uintptr_t)memory, (unsigned)(uintptr_t)&chain_a, (unsigned)(uintptr_t)chain_b,
            (unsigned)(uintptr_t)add3, (unsigned)(uintptr_t)sub2, (unsigned)(uintptr_t)member,
            (unsigned)(uintptr_t)&self_value, (unsigned)(uintptr_t)fast, (unsigned)(uintptr_t)halfsum,
            (unsigned)(uintptr_t)scale, (unsigned)(uintptr_t)msvc_this, (unsigned)(uintptr_t)msvc_seh,
            (unsigned)(uintptr_t)prehooked, (unsigned)(uintptr_t)msvc_float, (unsigned)(uintptr_t)tiny,
            (unsigned)(uintptr_t)site_caller, (unsigned)(uintptr_t)site_call, (unsigned)(uintptr_t)vt_caller,
-           (unsigned)(uintptr_t)tiny_vtable);
+           (unsigned)(uintptr_t)tiny_vtable, (unsigned)(uintptr_t)tiny2, (unsigned)(uintptr_t)ptr_caller,
+           (unsigned)(uintptr_t)writer, (unsigned)(uintptr_t)&watched);
     fflush(stdout);
     send(18, NULL);  /* DeferredInit */
     send(14, NULL);  /* NewGame */
