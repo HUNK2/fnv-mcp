@@ -134,6 +134,14 @@ class Helpers(unittest.TestCase):
         self.assertGreater(space['free'] + space['used'], 0)
 
 
+try:
+    import capstone  # noqa: F401
+    HAVE_CAPSTONE = True
+except ImportError:
+    HAVE_CAPSTONE = False
+
+
+@unittest.skipUnless(HAVE_CAPSTONE, 'capstone (the naming extra) is not installed')
 class ProbePlanning(unittest.TestCase):
     """The N1 planner, with a tiny hand-built image and engine (no game, no real exe)."""
 

@@ -27,8 +27,6 @@ from collections import Counter
 from ctypes import wintypes
 from pathlib import Path
 
-import capstone
-
 from .fnv_deep import HookError, decode_prologue
 from .fnv_link import word
 
@@ -44,6 +42,23 @@ BATCH = 2000
 
 class ProbeError(HookError):
     pass
+
+
+_DISASSEMBLER = None
+
+
+def disassembler():
+    """capstone (x86-32), imported on first use: it is the optional `naming` extra, so the server still starts
+    without it and only the probe planner and caller decoding need it."""
+    global _DISASSEMBLER
+    if _DISASSEMBLER is None:
+        try:
+            import capstone
+        except ImportError:
+            raise ProbeError('CAPSTONE_MISSING', 'The probe planner needs capstone: pip install "capstone==5.0.7" '
+                             '(the naming extra of the bridge)') from None
+        _DISASSEMBLER = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+    return _DISASSEMBLER
 
 
 # ===================================================================================== reading the game's memory
@@ -99,7 +114,7 @@ class ProbePlanner:
         self.engine = engine
         self.image = image
         self.quarantine = set(quarantine)
-        self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+        self.md = disassembler()
         self._slots = None
 
     # ------------------------------------------------------------------ selection
@@ -599,9 +614,6 @@ def decode_sample(w, engine, main_thread=None):
     return out
 
 
-_MD = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
-
-
 def call_kind(image, ret):
     """The call instruction that returns to `ret`: direct (E8), virtual ([reg+disp]: slot disp/4), pointer
     ([absolute]) or register."""
@@ -614,7 +626,7 @@ def call_kind(image, ret):
         return {'kind': 'direct', 'target': '0x%08X' % ((ret + struct.unpack('<i', code[3:7])[0]) & 0xFFFFFFFF),
                 'site': '0x%08X' % (ret - 5)}
     for n in (6, 3, 2, 7):
-        for insn in _MD.disasm(code[7 - n:], ret - n):
+        for insn in disassembler().disasm(code[7 - n:], ret - n):
             if insn.address + insn.size == ret and insn.mnemonic == 'call':
                 op = insn.op_str
                 if '[' not in op:
