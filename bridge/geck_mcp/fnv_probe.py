@@ -232,7 +232,7 @@ class ProbePlanner:
             r = cache.get(key) if cache is not None else None
             if r is None:
                 r = self.analyse(a)
-                if cache is not None and not r.get('reason', '').startswith('quarantined'):
+                if cache is not None and not (r.get('reason') or '').startswith('quarantined'):
                     cache[key] = r
             results[a] = r
         return results
@@ -352,11 +352,15 @@ class ProbeTools:
             raise ValueError('every must be a power of two (or 0 for no sampling after the first calls)')
         memory = self._memory()
         try:
-            live_changed, probes, sites = self._live_check(memory, planner, chosen)
+            live_changed, probes, sites, skipped = self._live_check(memory, planner, chosen)
         finally:
             memory.close()
         out = {'plan': summary, 'liveChanged': len(live_changed), 'liveChangedExamples': live_changed[:8],
                'probes': len(probes), 'sites': len(sites)}
+        if skipped:
+            # another module hooked these call sites: calls through them are not counted
+            out['sitesSkipped'] = len(skipped)
+            out['sitesSkippedExamples'] = skipped[:8]
         if crash:
             out['quarantinedFromLastCrash'] = crash
         if dry_run:
@@ -408,7 +412,7 @@ class ProbeTools:
     def _live_check(self, memory, planner, chosen):
         """Entry bytes and site fields in the running game must equal the clean exe: another module may have patched
         them since (xNVSE and plugins hook game code at start-up)."""
-        changed, probes, sites = [], [], []
+        changed, probes, sites, skipped = [], [], [], []
         for a, r in chosen:
             if r['mode'] == 'entry':
                 n = r['stolen']
@@ -423,13 +427,16 @@ class ProbeTools:
                     live, clean = memory.read(at, 4), planner.image.read(at, 4)
                     if live == clean:
                         good.append((kind, at))
+                    else:
+                        skipped.append({'function': '0x%08X' % a, 'site': '0x%08X' % at, 'live': live.hex(' '),
+                                        'clean': clean.hex(' ')})
                 if not good:
                     changed.append({'address': '0x%08X' % a, 'note': 'every call site changed'})
                     continue
                 index = len(probes)
                 probes.append((a, MODE_SITES, 0, []))
                 sites.extend((index, kind, at) for kind, at in good)
-        return changed, probes, sites
+        return changed, probes, sites, skipped
 
     def _quarantine_from_last_session(self):
         """If the last probe set was still armed when its game process ended, find the faulting function in the

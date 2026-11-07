@@ -391,7 +391,7 @@ class AtlasTools:
             if exclusive and others.get(address, 0) > 1:
                 continue
             out.append(dict(engine.summary(address, with_location=False), kind=k, perUnit=b, r2=r2, idle=idle,
-                            acted=acted))
+                            acted=acted, driver=bool(drv)))
         out.sort(key=lambda x: (x['kind'] != 'per_unit', -x['r2'], abs(x['perUnit'] - round(x['perUnit']))))
         return {'action': name, 'run': run, 'total': len(out), 'functions': out[:limit]}
 

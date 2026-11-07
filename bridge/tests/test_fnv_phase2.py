@@ -207,6 +207,14 @@ class ProbePlanning(unittest.TestCase):
         self.assertIn('quarantined', fnv_probe.ProbePlanner(e, img, {0x1000}).analyse(0x1000)['reason'])
         summary = fnv_probe.summarise(p.plan([0x1000, 0x1100, 0x1300]), e)
         self.assertEqual((summary['entry'], summary['sites']), (1, 2))
+        # with a cache, as ProbeTools.plan uses it (site results carry reason None)
+        cache = {}
+        first = p.plan([0x1000, 0x1100, 0x1300], cache)
+        self.assertEqual(sorted(cache), ['00001000', '00001100', '00001300'])
+        self.assertEqual(p.plan([0x1000, 0x1100, 0x1300], cache), first)
+        q = fnv_probe.ProbePlanner(e, img, {0x1100})
+        q.plan([0x1100], cache_q := {})
+        self.assertEqual(cache_q, {})  # quarantine verdicts are not cached
 
 
 class DoseResponse(unittest.TestCase):
