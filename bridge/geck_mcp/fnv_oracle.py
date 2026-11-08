@@ -89,7 +89,7 @@ BASE_ORACLES = [
     ('GetWeight', 'GetWeight', 'float', 'TESForm'),
 ]
 # Form oracles: commands that take the form itself by EditorID (vanilla and JIP LN), for forms that are not
-# references: quests, cells, worldspaces, packages. {e} is the EditorID.
+# references: quests, cells, worldspaces, packages, weapons. {e} is the form id (the script compiler does not take EditorIDs).
 FORM_ORACLES = [
     ('GetStage', 'GetStage {e}', 'int', 'TESQuest'),
     ('GetQuestCompleted', 'GetQuestCompleted {e}', 'bool', 'TESQuest'),
@@ -344,7 +344,7 @@ class OracleTools:
                 if o.get('edid'):
                     for name, expr, kind, applies in FORM_ORACLES:
                         if o.get('class') and is_a(engine, o['class'], applies):
-                            ops.append(('eval', _hexs(expr.format(e=o['edid'])), word(0)))
+                            ops.append(('eval', _hexs(expr.format(e=o['formId'])), word(0)))
                             keys.append((name, kind, ptr))
                     continue
                 table, target = (BASE_ORACLES, o['evalPtr']) if o.get('base') else (REF_ORACLES, ptr)
