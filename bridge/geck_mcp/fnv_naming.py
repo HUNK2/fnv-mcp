@@ -776,23 +776,33 @@ def calibration_summary(state_dir):
     scored by the answer key plus the independent judgement of unkeyed claims, and the experiment battery."""
     state_dir = Path(state_dir)
     out = {}
-    cal = sorted(state_dir.glob('oracle_calibration_*.json'))
-    if cal:
-        c = json.loads(cal[-1].read_text(encoding='utf-8'))
+    # the oracle: the newest call-mode run plus the newest passive run (disjoint sets: passive takes only the
+    # getters call mode cannot run), each claim scored by the key or, unkeyed, by the independent judgement
+    runs = [sorted(state_dir.glob(p))[-1] for p in ('oracle_calibration_*.json', 'oracle_passive_*.json')
+            if sorted(state_dir.glob(p))]
+    if runs:
         judged = {}
         for j in sorted(state_dir.glob('oracle_judgement_*.json')):
             for row in json.loads(j.read_text(encoding='utf-8')):
                 judged[row['address']] = row['verdict']
-        correct, wrong = c['correct'], c['wrong']
-        for u in c.get('unkeyed') or []:
-            v = judged.get(u['address'])
-            correct += v == 'correct'
-            wrong += v == 'wrong'
+        correct = wrong = cases = control = unjudged = 0
+        for path in runs:
+            c = json.loads(path.read_text(encoding='utf-8'))
+            correct += c['correct']
+            wrong += c['wrong']
+            cases += c['cases']
+            control += c.get('shuffledControlClaims') or 0
+            for u in c.get('unkeyed') or []:
+                v = judged.get(u['address'])
+                correct += v == 'correct'
+                wrong += v == 'wrong'
+                unjudged += v is None
         claims = correct + wrong
-        out['oracle'] = {'file': cal[-1].name, 'cases': c['cases'], 'claims': claims, 'correct': correct, 'wrong': wrong,
+        out['oracle'] = {'file': ' + '.join(p.name for p in runs), 'cases': cases, 'claims': claims,
+                         'correct': correct, 'wrong': wrong, 'unjudged': unjudged,
                          'precision': round(correct / claims, 4) if claims else None,
-                         'shuffledControlClaims': c.get('shuffledControlClaims'),
-                         'passesGate41': claims >= 50 and correct / claims >= 0.98 and not c.get('shuffledControlClaims')}
+                         'shuffledControlClaims': control,
+                         'passesGate41': claims >= 50 and correct / claims >= 0.98 and not control}
     bat = sorted(state_dir.glob('experiment_battery_*.json'))
     if bat:
         b = json.loads(bat[-1].read_text(encoding='utf-8'))

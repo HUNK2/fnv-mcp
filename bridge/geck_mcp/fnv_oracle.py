@@ -341,7 +341,7 @@ class OracleTools:
         if 'script' in families:
             ops, keys = [], []
             for ptr, o in objects.items():
-                if o.get('edid'):
+                if o.get('edid') or (o.get('form') and o.get('formId')):
                     for name, expr, kind, applies in FORM_ORACLES:
                         if o.get('class') and is_a(engine, o['class'], applies):
                             ops.append(('eval', _hexs(expr.format(e=o['formId'])), word(0)))
@@ -649,11 +649,65 @@ class OracleTools:
             self.live.game.stop_task(unpause)
         return self._finish(rows, engine, key)
 
-    def _blind_rows(self, cases, objs, oracles=None):
+    def passive_set(self):
+        """Proven zero-argument thiscall getters on form classes that call mode cannot run (their code is not
+        provably free of side effects): the blind set for the passive mode, scored from probe samples."""
+        engine = self.live.engine()
+        pur = self.purity()
+        out = []
+        for a in engine.addresses:
+            f = engine.functions[a]
+            sig = f.get('signature') or ''
+            if f['status'] != 'proven' or '__thiscall' not in sig or '(void)' not in sig:
+                continue
+            cls = f['name'].split('::')[0] if '::' in f['name'] else None
+            if not cls or cls not in (engine.rtti or {}) or not is_a(engine, cls, 'TESForm'):
+                continue
+            if not re.match(r'(Get|Is|Has|Can)[A-Z]', f['name'].split('::')[-1]):
+                continue
+            p = pur.check(a)
+            if not (p['pure'] and not p['pops']):
+                out.append(a)
+        return out
+
+    def calibrate_passive(self, harvest, key=None, min_objects=MIN_OBJECTS):
+        """Blind run in the passive mode: each getter's results are the ones the game itself got while probed
+        (harvest `harvest`, this game session, so the `this` pointers are still the same objects). The oracles are
+        read once, now, from the union of the sampled objects; the answer key is the same as for `calibrate`."""
+        engine = self.live.engine()
+        cases, per = [], {}
+        for a in self.passive_set():
+            v = self.sampled_values(a, harvest)
+            if len(v) >= min_objects:
+                cases.append(a)
+                per[a] = v
+        ptrs = sorted({p for v in per.values() for p in v})
+        unpause = self.live.game.keep_unpaused(3600)
+        try:
+            classes = self.live.rtti(ptrs) if ptrs else {}
+            objs = {}
+            for p in ptrs:
+                c = (classes.get(p) or {}).get('class')
+                if c and is_a(engine, c, 'TESForm'):
+                    objs[p] = {'class': c}
+            ids = self.live.u32s([p + 12 for p in objs]) if objs else []
+            form_classes = set(FORM_TYPES.values())
+            for (p, o), fid in zip(objs.items(), ids):
+                o['formId'] = '%08X' % fid
+                o['form'] = any(is_a(engine, o['class'], c) for c in form_classes)
+            oracles = self.oracle_values(objs)
+            rows = self._blind_rows(cases, objs, oracles, mode='sampled', harvest=harvest)
+        finally:
+            self.live.game.stop_task(unpause)
+        return self._finish(rows, engine, key, prefix='oracle_passive', method='oracle (passive: probe samples, '
+                                                                                'harvest %s)' % harvest,
+                            extra={'passiveSet': len(self.passive_set()), 'withEnoughObjects': len(cases)})
+
+    def _blind_rows(self, cases, objs, oracles=None, mode='call', harvest=None):
         rows = []
         for a in cases:
             try:
-                r = self.run(hx(a), mode='call', objects=dict(objs), oracles=oracles)
+                r = self.run(hx(a), mode=mode, objects=dict(objs), oracles=oracles, harvest=harvest)
             except Exception as e:  # noqa: BLE001 - one getter failing must not stop the run
                 rows.append({'address': hx(a), 'error': str(e)[:200]})
                 continue
@@ -677,10 +731,13 @@ class OracleTools:
                          'controlClaim': control})
         return rows
 
-    def _finish(self, rows, engine, key):
+    def _finish(self, rows, engine, key, prefix='oracle_calibration', method=None, extra=None):
         # scoring happens after: names come in only now
         scored = score(rows, engine, key or ANSWER_KEY)
-        path = self.live.project.state_dir / ('oracle_calibration_%s.json' % time.strftime('%Y%m%d-%H%M%S'))
+        if method:
+            scored['method'] = method
+        scored.update(extra or {})
+        path = self.live.project.state_dir / ('%s_%s.json' % (prefix, time.strftime('%Y%m%d-%H%M%S')))
         path.write_text(json.dumps(scored, indent=1, default=str), encoding='utf-8')
         scored['file'] = str(path)
         db = self.naming.db()
