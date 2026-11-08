@@ -130,10 +130,35 @@ FORM_ORACLES = [
     ('GetValue (form)', 'GetValue {e}', 'int', 'TESObjectWEAP'),
     ('GetHealth (form)', 'GetHealth {e}', 'int', 'TESObjectWEAP'),
 ]
+# JIP LN trait and flag commands that read one field of a base form (refs/JIP-LN-NVSE/functions_jip/jip_fn_*.h):
+# (command, class, trait ids, flag word traits). Each numeric trait is offered as an int and as a float oracle,
+# since the match only compares like with like; a flag command is one bool oracle per bit.
+JIP_TRAITS = [
+    ('GetImpactDataTrait', 'BGSImpactData', range(18), (16,)),
+    ('GetWeatherTraitNumeric', 'TESWeather', range(21), (13,)),
+    ('GetClimateTraitNumeric', 'TESClimate', range(7), (5,)),
+    ('GetGrassTraitNumeric', 'TESGrass', range(10), (9,)),
+    ('GetLandTextureTraitNumeric', 'TESLandTexture', range(4), ()),
+    ('GetSoundTraitNumeric', 'TESSound', range(13), ()),
+    ('GetAmmoTraitNumeric', 'TESAmmo', range(4), ()),
+]
+JIP_FLAGS = [('GetProjectileFlag', 'BGSProjectile', 16), ('GetLightFlag', 'TESObjectLIGH', 32),
+             ('GetSoundFlag', 'TESSound', 32)]
+for _cmd, _cls, _ids, _bits in JIP_TRAITS:
+    for _t in _ids:
+        FORM_ORACLES.append(('%s %d' % (_cmd, _t), '%s {e} %d' % (_cmd, _t), 'int', _cls))
+        FORM_ORACLES.append(('%s %d (float)' % (_cmd, _t), '%s {e} %d' % (_cmd, _t), 'float', _cls))
+for _cmd, _cls, _n in JIP_FLAGS:
+    for _b in range(_n):
+        FORM_ORACLES.append(('%s %d' % (_cmd, _b), '%s {e} %d' % (_cmd, _b), 'bool', _cls))
+FORM_ORACLES.append(('GetMessageFlags', 'GetMessageFlags {e}', 'int', 'BGSMessage'))
 FORM_TYPES = {'QUST': 'TESQuest', 'CELL': 'TESObjectCELL', 'WRLD': 'TESWorldSpace', 'PACK': 'TESPackage',
-              'WEAP': 'TESObjectWEAP'}
+              'WEAP': 'TESObjectWEAP', 'IPCT': 'BGSImpactData', 'WTHR': 'TESWeather', 'CLMT': 'TESClimate',
+              'GRAS': 'TESGrass', 'LTEX': 'TESLandTexture', 'SOUN': 'TESSound', 'AMMO': 'TESAmmo',
+              'PROJ': 'BGSProjectile', 'LIGH': 'TESObjectLIGH', 'MESG': 'BGSMessage'}
 # int oracles that are bit fields: each bit set on some object becomes its own bool oracle "<name> & 0xN"
-BIT_ORACLES = ('GetWeaponFlags1', 'GetWeaponFlags2')
+BIT_ORACLES = ('GetWeaponFlags1', 'GetWeaponFlags2', 'GetMessageFlags') + tuple(
+    '%s %d' % (_cmd, _t) for _cmd, _cls, _ids, _bits in JIP_TRAITS for _t in _bits)
 HEADER_ORACLES = [('TESForm.typeID', 4, 'byte'), ('TESForm.flags', 8, 'dword'), ('TESForm.refID', 12, 'dword')]
 FLAG_NAMES = {  # TESForm/TESObjectREFR flag bits named by community headers (cited); other bits stay unnamed
     0x8: 'Initialized (xNVSE GameForms.h:320 kFormFlags_Initialized)',
