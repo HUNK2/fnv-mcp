@@ -34,6 +34,10 @@ PANELS = {
                'expect': ['equals', 0], 'teardown': ['Enable']},
     'setangle': {'target': 'npc', 'setup': ['SetAngle Z 0'], 'trigger': ['SetAngle Z 90'], 'observe': 'GetAngle Z',
                  'expect': ['equals', 90]},
+    'setanglex': {'target': 'npc', 'setup': ['SetAngle X 0'], 'trigger': ['SetAngle X 20'], 'observe': 'GetAngle X',
+                  'expect': ['equals', 20], 'teardown': ['SetAngle X 0']},
+    'setangley': {'target': 'npc', 'setup': ['SetAngle Y 0'], 'trigger': ['SetAngle Y 20'], 'observe': 'GetAngle Y',
+                  'expect': ['equals', 20], 'teardown': ['SetAngle Y 0']},
     'setdestroyed': {'target': 'npc', 'setup': ['SetDestroyed 0'], 'trigger': ['SetDestroyed 1'],
                      'observe': 'GetDestroyed', 'expect': ['equals', 1], 'teardown': ['SetDestroyed 0']},
     'setghost': {'target': 'npc', 'setup': ['SetGhost 0'], 'trigger': ['SetGhost 1'], 'observe': 'GetIsGhost',
@@ -100,7 +104,7 @@ BATTERY_KEY = {
     'TESObjectREFR::SetScale': (['setscale'], ['setscale']),
     'TESObjectREFR::Disable': (['disable'], ['disable']),
     'TESObjectREFR::Enable': (['enable'], ['enable']),
-    'TESObjectREFR::SetAngleOnReference': (['setangle'], ['setangle']),
+    'TESObjectREFR::SetAngleOnReference': (['setangle', 'setanglex', 'setangley'], ['setangle', 'setanglex', 'setangley']),
     'TESForm::SetDestroyed': (['setdestroyed'], ['setdestroyed']),
     'Actor::SetGhost': (['setghost'], ['setghost']),
     'Actor::SetActorValue': (['npc_setav'], ['npc_setav', 'player_setav', 'creature_setav']),
@@ -119,10 +123,19 @@ BATTERY_KEY = {
     'TESActorBaseData::SetLevel': (['setlevel'], ['setlevel']),
     'TESObjectREFR::SetAngleOnReferenceZ': (['setangle'], ['setangle']),
     'REFR_LOCK::SetLocked': (['lock'], ['lock']),
+    'TESObjectREFR::SetAngleOnReferenceX': (['setanglex'], ['setanglex']),
+    'TESObjectREFR::SetAngleOnReferenceY': (['setangley'], ['setangley']),
+    'Actor::AddFaction': (['addtofaction'], ['addtofaction', 'setfactionrank']),
+    'Script::SetAngleBase': (['setangle', 'setanglex', 'setangley'], ['setangle', 'setanglex', 'setangley']),
+    'Script::SetPosBase': (['setposx'], ['setposx']),
+    'Script::SetScaleBase': (['setscale'], ['setscale']),
+    'Actor::SetUnConscious': (['setunconscious'], ['setunconscious']),
+    'TESObjectREFR::AddLock': (['lock'], ['lock']),
 }
 # The console's own command handlers (proven from the game's command table): each blocks its command's panel.
 for _cmd, _panels in {
-        'SetScale': ['setscale'], 'Disable': ['disable'], 'Enable': ['enable'], 'SetAngle': ['setangle'],
+        'SetScale': ['setscale'], 'Disable': ['disable'], 'Enable': ['enable'],
+        'SetAngle': ['setangle', 'setanglex', 'setangley'],
         'SetDestroyed': ['setdestroyed'], 'SetGhost': ['setghost'],
         'SetActorValue': ['npc_setav', 'creature_setav', 'player_setav'],
         'DamageActorValue': ['npc_damageav', 'creature_damageav', 'player_damageav'], 'RewardXP': ['rewardxp'],
@@ -344,7 +357,11 @@ class ExperimentTools:
             for p in panels:
                 spec = PANELS[p]
                 ptr = targets.get(spec['target'])
-                baseline[p] = None if not ptr else self.trial(spec, ptr)['effect']
+                if not ptr:
+                    baseline[p] = None
+                    continue
+                ok = [bool(self.trial(spec, ptr)['effect']) for _ in range(3)]
+                baseline[p] = sum(ok) >= 2
             usable = [p for p in panels if targets.get(PANELS[p]['target']) and baseline[p]]
             for a in cands:
                 hook = self._arm(hx(a))

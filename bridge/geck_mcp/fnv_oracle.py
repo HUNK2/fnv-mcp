@@ -107,8 +107,33 @@ FORM_ORACLES = [
     ('GetWorldspaceWaterType', 'GetWorldspaceWaterType {e}', 'form', 'TESWorldSpace'),
     ('GetWorldspaceImagespace', 'GetWorldspaceImagespace {e}', 'form', 'TESWorldSpace'),
 ] + [('GetWorldspaceFlag %d' % b, 'GetWorldspaceFlag {e} %d' % b, 'bool', 'TESWorldSpace') for b in range(8)] + \
-    [('GetPackageFlag %d' % b, 'GetPackageFlag {e} %d' % b, 'bool', 'TESPackage') for b in range(32)]
-FORM_TYPES = {'QUST': 'TESQuest', 'CELL': 'TESObjectCELL', 'WRLD': 'TESWorldSpace', 'PACK': 'TESPackage'}
+    [('GetPackageFlag %d' % b, 'GetPackageFlag {e} %d' % b, 'bool', 'TESPackage') for b in range(32)] + [
+    # xNVSE weapon commands with the base form as their argument (xNVSE Commands_Inventory.cpp)
+    ('GetWeaponIsAutomatic', 'GetWeaponIsAutomatic {e}', 'bool', 'TESObjectWEAP'),
+    ('GetWeaponHasScope', 'GetWeaponHasScope {e}', 'bool', 'TESObjectWEAP'),
+    ('GetWeaponAmmoUse', 'GetWeaponAmmoUse {e}', 'int', 'TESObjectWEAP'),
+    ('GetWeaponClipRounds', 'GetWeaponClipRounds {e}', 'int', 'TESObjectWEAP'),
+    ('GetWeaponNumProjectiles', 'GetWeaponNumProjectiles {e}', 'int', 'TESObjectWEAP'),
+    ('GetWeaponType', 'GetWeaponType {e}', 'int', 'TESObjectWEAP'),
+    ('GetWeaponHandGrip', 'GetWeaponHandGrip {e}', 'int', 'TESObjectWEAP'),
+    ('GetWeaponSkill', 'GetWeaponSkill {e}', 'int', 'TESObjectWEAP'),
+    ('GetWeaponMinRange', 'GetWeaponMinRange {e}', 'float', 'TESObjectWEAP'),
+    ('GetWeaponMaxRange', 'GetWeaponMaxRange {e}', 'float', 'TESObjectWEAP'),
+    ('GetWeaponFireRate', 'GetWeaponFireRate {e}', 'float', 'TESObjectWEAP'),
+    ('GetWeaponActionPoints', 'GetWeaponActionPoints {e}', 'float', 'TESObjectWEAP'),
+    ('GetWeaponSpread', 'GetWeaponSpread {e}', 'float', 'TESObjectWEAP'),
+    ('GetWeaponMinSpread', 'GetWeaponMinSpread {e}', 'float', 'TESObjectWEAP'),
+    ('GetWeaponSightFOV', 'GetWeaponSightFOV {e}', 'float', 'TESObjectWEAP'),
+    ('GetWeaponFlags1', 'GetWeaponFlags1 {e}', 'int', 'TESObjectWEAP'),
+    ('GetWeaponFlags2', 'GetWeaponFlags2 {e}', 'int', 'TESObjectWEAP'),
+    ('GetWeight (form)', 'GetWeight {e}', 'float', 'TESObjectWEAP'),
+    ('GetValue (form)', 'GetValue {e}', 'int', 'TESObjectWEAP'),
+    ('GetHealth (form)', 'GetHealth {e}', 'int', 'TESObjectWEAP'),
+]
+FORM_TYPES = {'QUST': 'TESQuest', 'CELL': 'TESObjectCELL', 'WRLD': 'TESWorldSpace', 'PACK': 'TESPackage',
+              'WEAP': 'TESObjectWEAP'}
+# int oracles that are bit fields: each bit set on some object becomes its own bool oracle "<name> & 0xN"
+BIT_ORACLES = ('GetWeaponFlags1', 'GetWeaponFlags2')
 HEADER_ORACLES = [('TESForm.typeID', 4, 'byte'), ('TESForm.flags', 8, 'dword'), ('TESForm.refID', 12, 'dword')]
 FLAG_NAMES = {  # TESForm/TESObjectREFR flag bits named by community headers (cited); other bits stay unnamed
     0x8: 'Initialized (xNVSE GameForms.h:320 kFormFlags_Initialized)',
@@ -236,13 +261,13 @@ class OracleTools:
 
     # ------------------------------------------------------------------ objects
     def forms(self, per_type=150, seed=11):
-        """Quests, cells, worldspaces and packages from FalloutNV.esm with EditorIDs, as live objects."""
+        """Quests, cells, worldspaces, packages and weapons from FalloutNV.esm with EditorIDs, as live objects."""
         import sqlite3
         path = self.live.project.state_dir / 'fnv' / 'records.sqlite'
         db = sqlite3.connect(str(path))
         try:
             rows = db.execute("SELECT r.type, r.local, r.edid FROM records r JOIN files f ON f.id = r.file WHERE "
-                              "f.name = 'FalloutNV.esm' AND r.type IN ('QUST','CELL','WRLD','PACK') AND r.edid IS NOT NULL "
+                              "f.name = 'FalloutNV.esm' AND r.type IN (%s) AND" % ','.join("'%s'" % t for t in FORM_TYPES) + " r.edid IS NOT NULL "
                               "AND r.edid != '' AND (r.flags & 0x20) = 0").fetchall()
         finally:
             db.close()
@@ -344,6 +369,14 @@ class OracleTools:
                 else:
                     v = int(round(float(v)))
                 out[name][ptr] = v
+            for name in BIT_ORACLES:
+                vals = out.get(name) or {}
+                seen = 0
+                for v in vals.values():
+                    seen |= v
+                for b in range(32):
+                    if seen & (1 << b):
+                        out['%s & 0x%X' % (name, 1 << b)] = {p: 1 if v & (1 << b) else 0 for p, v in vals.items()}
         if 'header' in families:
             ptrs = [p for p, o in objects.items() if o.get('class') and is_a(engine, o['class'], 'TESForm')]
             words = self.live.u32s([p + 4 for p in ptrs] + [p + 8 for p in ptrs] + [p + 12 for p in ptrs]) if ptrs else []
@@ -704,7 +737,15 @@ ANSWER_KEY = [
     (r'^TESCreature::GetCreatureType$', ['GetCreatureType']), (r'^TESCreature::GetReach$', ['GetCreatureReach']),
     (r'^TESActorBase::(GetSex|IsFemale)$', ['GetIsSex Female (base)']),
     (r'::GetScript$', ['GetScript']),
-    (r'^(TESObjectARMO|TESObjectWEAP|TESObjectMISC|TESAmmo|AlchemyItem|TESObjectBOOK)::GetWeight$', ['GetWeight']),
+    (r'^(TESObjectARMO|TESObjectWEAP|TESObjectMISC|TESAmmo|AlchemyItem|TESObjectBOOK)::GetWeight$',
+     ['GetWeight', 'GetWeight (form)']),
+    # added 2026-11-08 with the weapon form oracles, from the names, before the run that uses them
+    (r'^TESObjectWEAP::(IsAutomaticWeapon|IsAutomatic|GetIsAutomatic)$', ['GetWeaponIsAutomatic']),
+    (r'^TESObjectWEAP::(HasScope|GetHasScope)$', ['GetWeaponHasScope']),
+    (r'^TESObjectWEAP::(GetAmmoPerShot|GetAmmoUse)$', ['GetWeaponAmmoUse']),
+    (r'^TESObjectWEAP::(GetClipRounds|GetClipSize)$', ['GetWeaponClipRounds']),
+    (r'^TESObjectWEAP::(GetNumProjectiles)$', ['GetWeaponNumProjectiles']),
+    (r'^TESObjectWEAP::(GetWeaponType|GetType)$', ['GetWeaponType']),
     (r'^TESQuest::(GetCurrentStage|GetStage)$', ['GetStage']),
     (r'^TESQuest::(GetCompleted|IsCompleted)$', ['GetQuestCompleted']),
     (r'^TESQuest::(IsRunning|GetRunning)$', ['GetQuestRunning']),
@@ -797,7 +838,7 @@ def _oracle_kind(name):
     for n, _e, kind, _a in REF_ORACLES + BASE_ORACLES + FORM_ORACLES:
         if n == name:
             return kind
-    if name.startswith('TESForm.flags & '):
+    if name.startswith('TESForm.flags & ') or any(name.startswith(b + ' & ') for b in BIT_ORACLES):
         return 'bool'
     return 'int'
 
