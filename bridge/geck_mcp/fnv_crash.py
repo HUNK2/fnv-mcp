@@ -509,14 +509,19 @@ def during_shutdown(parsed):
 
 def explain(parsed, engine, project=None, max_frames=40):
     frames = resolve_frames(parsed)
-    for f in frames:
+    for index, f in enumerate(frames):
         if f['kind'] == 'game' and engine is not None:
             address = int(f['absolute'], 16)
-            sym = engine.symbolize(address)
+            # Frame 0 is the fault address (checked on the saved Yvile 5.17 logs: its address equals eip). Every
+            # later frame is a return address, the instruction after a call, so look up the call (address - 1).
+            sym = engine.symbolize(address, return_address=index > 0)
             if sym.get('kind') == 'function':
                 f['function'] = {k: sym[k] for k in ('functionAddress', 'name', 'status', 'decompName', 'location')
                                  if sym.get(k)}
                 f['offset'] = sym['offset']
+                for key in ('source', 'sourceLine'):
+                    if sym.get(key):
+                        f[key] = sym[key]
             elif sym.get('kind') == 'unknown_exe_address':
                 f['function'] = {'name': None,
                                  'note': 'not inside any decomp function: statically linked runtime/library code '

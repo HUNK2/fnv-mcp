@@ -219,6 +219,8 @@ missing. In short:
 | `fnv_name_oracle` | act | Does it compute a value the game already knows? Results from samples, or from calls on ~760 objects (references, base forms, quests, cells, worldspaces, packages) when a disassembly check proves the code writes nothing but its stack frame; compared with script commands, base-form and form commands, and form header fields; match = ≥ 20 objects, no mismatch, exact chance of a random match ≤ 1e-6, shuffled control; `calibrate` runs it blind on proven getters, `sweep` on every not-proven pure getter |
 | `fnv_name_test` | act | Experiments: skip / force the result of / change an argument of a function during an action, with a control in every repetition (≥ 3); skips pop what the function's own `ret n` pops; `battery` re-identifies functions blind from the console effects their skip blocks |
 | `fnv_field_watch` | act | Hardware watchpoints (DR0..DR3, main thread or all threads): `find` lists the fields of an object (and one level into its pointers) a console action changed, named from the layouts; `watch` names each function that wrote or read a field, with the instruction, values and callers |
+| `fnv_warnings` | control | The engine's own warnings (`MASTERFILE:`, `SCRIPTS:`, `MODELS:` lines, Havok messages) from xNVSE's `falloutnv_error.log` and `falloutnv_havok.log`. Actions `status`, `enable`, `read`, `summary`, `clear` (see below) |
+| `fnv_guide` | read | Which tool for which problem: `list`, `topic` (a step by step procedure), `find` (search tool names and descriptions), `engine` (saved research notes and recorded facts). Needs no game (see below) |
 | `fnv_name_export` | read | Everything recorded, as `fnvsym-trace/2` into `fnvsym/traces`, with each method's measured calibration, the layout squeeze (owner class when the observed-class bound and the field-declaration bound meet) and re-check flags for proven names the runtime contradicts; fnvsym's `namer.runtime2` turns it into evidence |
 
 `fnv_probe` also takes `int3` (a one-byte trap probe for functions with no entry jump and no call site, so every
@@ -228,6 +230,34 @@ caller tables into `state/atlas.sqlite`).
 Act tools journal every change in `state/fnv/journal.jsonl` and back up the dev profile's saves before the
 first change of a game session (`state/fnv/save-backups`, newest 10 kept). Console lines, scripts and
 engine calls cannot be undone automatically; the journal says which entries can.
+
+## Warnings and guides: fnv_warnings and fnv_guide (Plan 2, first wave)
+
+The conventions these two tools follow (and every later action-style tool) are in
+[FNV-TOOL-CONVENTIONS.md](FNV-TOOL-CONVENTIONS.md): an `action` argument, the verdict first, paged lists, next steps.
+
+**`fnv_warnings`.** The engine calls its warning function from about 845 places, but in the retail game the
+function is empty. xNVSE hooks it when `[Logging] EnableGameErrorLog=1` is set in `Data/NVSE/nvse_config.ini`.
+It then writes each warning as one line (the formatted text, no time, no caller) to `falloutnv_error.log`,
+and Havok messages to `falloutnv_havok.log`, both in the game folder. The game rewrites both files at each start
+unless `bAppendErrorLogs=1`.
+
+| Action | What it does |
+| --- | --- |
+| `status` | Is the setting on, which config file wins, the two files with size and time, the mark, and what to do next |
+| `enable` | Sets `EnableGameErrorLog=1` in the config file the game reads and keeps every other line. It takes effect at the next game start (a control action: it changes a file). With MO2 it edits the winning `mods/<mod>/NVSE/nvse_config.ini` or `overwrite/NVSE/nvse_config.ini` (a copy is saved in `state/warnings-backups`). When only the real `Data/NVSE` file exists, it copies that file into `overwrite/NVSE` and adds the line there, so the real game folder is not touched. The result names the file written |
+| `read` | Lines since the mark (`since`: `mark`, `start`, or a line number). Filters `category` (`MASTERFILE`, `SCRIPTS`, `MODELS`, `TEXTURES`, `ANIMATION`, `AI`, `Audio`, `other`), `text`, `plugin`, `source` (`engine`, `havok`). Paged. Each row has `seq` (its line number in its file), `source`, `category`, `text`, `plugins` |
+| `summary` | Counts per category and per plugin, and the most repeated messages (hex ids and numbers are masked, so lines that differ only in those group together) |
+| `clear` | The game holds the files open, so they are not emptied: the current end of each file becomes the mark and `read` starts there. A mark is dropped when the game rewrites the file |
+
+The verdict reads, for example, "37 engine warnings since the mark, 31 of them MASTERFILE". `fnv_logs` can also
+return the two files (sources `error` and `havok`). The engine writes through a buffer, so the last lines before a
+crash can be missing. Stage W2 of the plan (an own hook with the caller and the running script) is not built.
+
+**`fnv_guide`.** Guides are Markdown files in `geck_mcp/guides/` (`crash`, `script`), also served as the MCP
+resource `fnv://guide/{name}`. `engine` searches the Markdown files of `fnv.research_dir` (or the environment
+variable `FNV_RESEARCH_DIR`) by heading section, and the facts in `fnv_facts.py`. A test fails when a guide names
+an `fnv_*` or `geck_*` tool that does not exist.
 
 ## Scenario tests
 

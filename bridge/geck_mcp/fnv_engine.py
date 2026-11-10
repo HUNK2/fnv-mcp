@@ -11,6 +11,8 @@ from bisect import bisect_right
 from collections import OrderedDict, deque
 from pathlib import Path
 
+from . import fnv_symdb
+
 GAME_BUILD = '1.4.0.525'
 EXE_RANGE = (0x00400000, 0x01300000)
 STATUS_RANK = {'proven': 0, 'class_proven': 1, 'probable': 2, 'decomp': 3, 'rejected': 4, 'unnamed': 5}
@@ -98,6 +100,15 @@ class EngineMap:
         self.vtable_starts = sorted(self.vtables)
         self._files = OrderedDict()
         self._lock = threading.Lock()
+        self.symdb_path = self.path.parent / 'symdb.sqlite'
+
+    @property
+    def symdb(self):
+        """The attached symbol database (source lines, locals, types), or None when there is none."""
+        try:
+            return fnv_symdb.load(self.symdb_path, self.decomp_root)
+        except Exception:   # an unreadable database must not break symbolizing
+            return None
 
     # ----------------------------------------------------------------------------- basics
     def identity(self):
@@ -297,8 +308,11 @@ class EngineMap:
         return out, capped
 
     # ----------------------------------------------------------------------------- symbolize
-    def symbolize(self, address, modules=None):
-        """Function + offset inside the game exe, a known static object, or a module + offset."""
+    def symbolize(self, address, modules=None, return_address=False):
+        """Function + offset inside the game exe, a known static object, or a module + offset.
+
+        return_address=True: the address is the instruction after a call, so the function and the source line are
+        looked up for address - 1 (the call itself). The reported address and offset stay the real ones."""
         vt = self.vtable_at(address)
         if vt:
             return vt
@@ -311,14 +325,17 @@ class EngineMap:
             if base <= address < base + size and not m['name'].lower().startswith('falloutnv'):
                 return {'address': hx(address), 'module': m['name'], 'kind': 'module',
                         'offset': '0x%X' % (address - base), 'path': m.get('path')}
-        hit = self.containing(address)
+        probe = address - 1 if return_address and address > 0 else address
+        hit = self.containing(probe)
         if hit:
             start, off = hit
+            off += address - probe
             out = {'address': hx(address), 'module': 'FalloutNV.exe', 'kind': 'function',
                    'offset': '0x%X' % off}
             out.update(self.summary(start))
             out['functionAddress'] = out.pop('address')
             out['address'] = hx(address)
+            self._add_source(out, probe)
             return out
         if EXE_RANGE[0] <= address < EXE_RANGE[1]:
             i = bisect_right(self.addresses, address) - 1
@@ -329,6 +346,20 @@ class EngineMap:
                 out['afterOffset'] = '0x%X' % (address - near)
             return out
         return {'address': hx(address), 'kind': 'unknown', 'note': 'outside FalloutNV.exe and the given modules'}
+
+    def _add_source(self, out, address):
+        """source, sourceLine and lineOffset from the symbol database, when it has lines for this address."""
+        db = self.symdb
+        hit = db.line_at(address) if db else None
+        if not hit:
+            return
+        out['source'] = '%s:%d' % (hit['file'], hit['line'])
+        out['lineOffset'] = '0x%X' % hit['lineOffset']
+        try:
+            text = self._lines(hit['file'])[hit['line'] - 1].strip()
+        except (EngineMapError, IndexError, OSError):
+            return
+        out['sourceLine'] = text[:200]
 
     def vtable_at(self, address):
         """A virtual table (or one of its slots) containing this address, from the exe's RTTI."""
@@ -406,8 +437,9 @@ _cache = {}
 _cache_lock = threading.Lock()
 
 
-def load(path, decomp_root=None):
-    """Cached EngineMap for a path, reloaded when the file changes."""
+def load(path, decomp_root=None, symdb=None):
+    """Cached EngineMap for a path, reloaded when the file changes. `symdb` is the symbol database file to
+    attach (default: symdb.sqlite next to the engine map); a missing file just means no database."""
     path = Path(path)
     if not path.exists():
         raise EngineMapError('ENGINE_MAP_UNAVAILABLE', 'engine_map.json not found at %s' % path,
@@ -418,18 +450,23 @@ def load(path, decomp_root=None):
     with _cache_lock:
         cached = _cache.get('map')
         if cached and cached[0] == stamp:
-            return cached[1]
+            engine = cached[1]
+            engine.symdb_path = Path(symdb) if symdb else engine.path.parent / 'symdb.sqlite'
+            return engine
     engine = EngineMap(path, decomp_root)
+    if symdb:
+        engine.symdb_path = Path(symdb)
     with _cache_lock:
         _cache['map'] = (stamp, engine)
     return engine
 
 
 def default_paths(project):
-    """(engine_map path, decomp root or None) from the project's fnv settings, env vars and defaults."""
+    """(engine_map path, decomp root or None, symbol database path) from the project's fnv settings, env vars and
+    defaults. The three go straight into load(): fnv_engine.load(*default_paths(project))."""
     fnv = getattr(project, 'fnv', None)
     engine_map = (fnv.engine_map if fnv and fnv.engine_map else None) or os.environ.get('FNV_ENGINE_MAP')
     decomp = (fnv.decomp_root if fnv and fnv.decomp_root else None) or os.environ.get('FNV_DECOMP')
     if not engine_map:
         engine_map = Path(project.state_dir) / 'engine_map.json'
-    return Path(engine_map), Path(decomp) if decomp else None
+    return Path(engine_map), Path(decomp) if decomp else None, fnv_symdb.default_path(project)

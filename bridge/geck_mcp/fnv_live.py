@@ -95,8 +95,7 @@ class LiveService:
 
     def engine(self):
         if self._engine is None:
-            path, decomp = fnv_engine.default_paths(self.project)
-            self._engine = fnv_engine.load(path, decomp)
+            self._engine = fnv_engine.load(*fnv_engine.default_paths(self.project))
         return self._engine
 
     def run(self, name, action, kind='read'):

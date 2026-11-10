@@ -193,8 +193,9 @@ def module_at(modules, address):
 
 def walk_stack(process, regs, modules, max_frames=48):
     """Return addresses of a suspended thread: the EBP chain (MSVC frame pointers), then return-address
-    candidates from a scan of the stack top for frames the chain skipped (marked heuristic)."""
-    frames = [{'address': regs['eip'], 'how': 'eip'}]
+    candidates from a scan of the stack top for frames the chain skipped (marked heuristic). Each chain frame
+    carries 'ebp', its frame pointer (the top frame's is only valid once its function has set up EBP)."""
+    frames = [{'address': regs['eip'], 'how': 'eip', 'ebp': regs['ebp']}]
     stack, esp = regs.get('stack') or b'', regs['esp']
 
     def stack_u32(address):
@@ -209,7 +210,7 @@ def walk_stack(process, regs, modules, max_frames=48):
         ret, nxt = stack_u32(ebp + 4), stack_u32(ebp)
         if ret is None or not module_at(modules, ret):
             break
-        frames.append({'address': ret, 'how': 'frame'})
+        frames.append({'address': ret, 'how': 'frame', 'ebp': nxt})   # the caller's own EBP is the saved one
         if nxt is None or nxt <= ebp:
             break
         ebp = nxt

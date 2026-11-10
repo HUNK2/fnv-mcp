@@ -226,7 +226,8 @@ class Game:
     def log_paths(self):
         return {'nvse': self.game_root / 'nvse.log', 'console': self.console_log,
                 'crash': self.game_root / 'CrashLogger.log', 'jip': self.game_root / 'jip_ln_nvse.log',
-                'mo2': self.mo2_root / 'logs/mo_interface.log'}
+                'mo2': self.mo2_root / 'logs/mo_interface.log',
+                'error': self.game_root / 'falloutnv_error.log', 'havok': self.game_root / 'falloutnv_havok.log'}
 
     # ------------------------------------------------------------ session record
     def session(self):

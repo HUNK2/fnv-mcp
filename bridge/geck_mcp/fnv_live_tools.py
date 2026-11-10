@@ -15,6 +15,7 @@ from .fnv_live import LiveService
 from .fnv_social import SocialTools
 from .fnv_agent import AgentTools
 from .fnv_scenario import ScenarioRunner, diff, load_snapshot, snapshot
+from .fnv_warnings import Warnings
 
 FNV_LIVE_TOOLS = {
     # milestone 4: game control, tests, logs
@@ -24,7 +25,7 @@ FNV_LIVE_TOOLS = {
     'fnv_restart': ('control', 'quit and launch again'),
     'fnv_install': ('control', 'install a built plugin into the dev profile as an MO2 mod and enable it (game closed)'),
     'fnv_companion_install': ('control', 'build the engine companion with Zig and install it into the dev profile'),
-    'fnv_logs': ('read', 'new lines of nvse.log, the console log, CrashLogger.log, JIP and MO2 logs'),
+    'fnv_logs': ('read', 'new lines of nvse.log, the console log, CrashLogger.log, JIP and MO2 logs, and the engine warning logs'),
     'fnv_test_run': ('control', 'run one YAML scenario test in the game and report each step'),
     'fnv_test_run_all': ('control', 'run every scenario in a folder; summary plus failure details'),
     'fnv_snapshot': ('read', 'capture chosen game state under a name'),
@@ -130,6 +131,9 @@ FNV_LIVE_TOOLS = {
     'fnv_name_test': ('act', 'experiments: skip or force a function during an action, with a control; blind battery re-identification'),
     'fnv_name_export': ('read', 'write the runtime evidence as fnvsym-trace/2 into fnvsym/traces for the runtime2 evidence pass, with the calibration of each method'),
     'fnv_field_watch': ('act', 'hardware watchpoints: which functions write or read one field of a live object, with the values; find the field an action changes'),
+    # Plan 2 wave 0
+    'fnv_warnings': ('control', "the engine's own warnings (missing assets, wrong form types, script problems) from xNVSE's error log: status, enable (changes xNVSE's config file), read, summary, clear"),
+    'fnv_guide': ('read', 'which tool for which problem: guides with tested procedures, search of tools, saved engine research and facts'),
     # milestone 10: setup
     'fnv_setup_check': ('read', 'is this machine ready for the fnv tools? each prerequisite with its state and the fix'),
 }
@@ -238,12 +242,13 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_companion_install', action, 'control')
 
     @server.tool(annotations=read)
-    async def fnv_logs(sources: list[Literal['nvse', 'console', 'crash', 'jip', 'mo2']] | None = None,
+    async def fnv_logs(sources: list[Literal['nvse', 'console', 'crash', 'jip', 'mo2', 'error', 'havok']] | None = None,
                        since: Literal['last', 'start'] = 'last',
                        max_lines: Annotated[int, Field(ge=1, le=5000)] = 200) -> result_type:
         """New lines of the game's logs since the last call (since='last') or the whole file ('start'): nvse.log,
         the companion's console log (everything the console printed, script errors included), CrashLogger.log,
-        JIP LN's log and MO2's log."""
+        JIP LN's log and MO2's log; also error and havok, the engine warning logs xNVSE writes when its config has
+        EnableGameErrorLog=1 (fnv_warnings reads them with filters)."""
         return await invoke('fnv_logs', lambda: live.game.logs(sources, 0 if since == 'start' else 'last', max_lines))
 
     @server.tool(annotations=control)
@@ -1274,6 +1279,43 @@ def register(server, project, annotations, result_type):
                 raise ValueError('import_frida needs path')
             return atlas.import_frida(path)
         return await invoke('fnv_atlas', action_fn, 'read' if action in ('actions', 'runs', 'function', 'action') else 'control')
+
+    @server.tool(annotations=control)
+    async def fnv_warnings(action: Literal['status', 'enable', 'read', 'summary', 'clear'] = 'status',
+                           since: int | Literal['mark', 'start'] = 'mark',
+                           category: Annotated[str, Field(max_length=40)] | None = None,
+                           text: Annotated[str, Field(max_length=200)] | None = None,
+                           plugin: Annotated[str, Field(max_length=100)] | None = None,
+                           source: Literal['engine', 'havok'] | None = None,
+                           limit: Annotated[int, Field(ge=1, le=500)] = 100, offset: Annotated[int, Field(ge=0)] = 0,
+                           brief: bool = False, top: Annotated[int, Field(ge=1, le=100)] = 10) -> result_type:
+        """The engine's own warnings, such as "Form (id) in file X has wrong type", missing files and script
+        problems. They exist only when xNVSE's config has [Logging] EnableGameErrorLog=1; xNVSE then writes
+        falloutnv_error.log (engine) and falloutnv_havok.log (Havok) in the game folder. status: is the setting on,
+        the files, what to do next. enable: set it in xNVSE's config (a file in the MO2 overwrite folder or mod that
+        the game reads; other lines stay); it takes effect at the next game start. read: lines since the mark
+        (since=start: whole files; a number: from that line) with filters category (MASTERFILE, SCRIPTS, MODELS,
+        TEXTURES, ANIMATION, AI, Audio, other), text, plugin, source; paged. summary: counts per category and
+        plugin, and the most repeated messages with ids and numbers masked. clear: remember the end of the files
+        as the mark (the game keeps the files open, so they are not emptied)."""
+        return await invoke('fnv_warnings', lambda: Warnings.from_game(live.game).run(
+            action, since=since, category=category, text=text, plugin=plugin, source=source, limit=limit,
+            offset=offset, brief=brief, top=top), 'control' if action == 'enable' else 'read')
+
+    @server.tool(annotations=read)
+    async def fnv_guide(action: Literal['list', 'topic', 'find', 'engine'] = 'list',
+                        words: Annotated[str, Field(max_length=300)] | None = None,
+                        limit: Annotated[int, Field(ge=1, le=100)] = 20, offset: Annotated[int, Field(ge=0)] = 0,
+                        brief: bool = False) -> result_type:
+        """Which tool to use for a problem. list: the guides (for example "the game crashed", "a script does not
+        run"). topic: one guide, by name or by words that describe the problem: tools in order, what each answer
+        means, known traps, checks that prove the fix. find: search the tool names and descriptions and the guides
+        ("which tool for X"). engine: search the saved engine research notes (fnv.research_dir or FNV_RESEARCH_DIR)
+        and the recorded engine facts for how the engine does something. Needs no running game."""
+        from .fnv_guide import GuideTools
+        research = getattr(project.fnv, 'research_dir', None) if project.fnv else None
+        guide = GuideTools(str(research) if research else None)
+        return await invoke('fnv_guide', lambda: guide.run(action, words, limit, offset, brief))
 
     @server.tool(annotations=read)
     async def fnv_setup_check() -> result_type:

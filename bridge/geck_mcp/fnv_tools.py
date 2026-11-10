@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import fnv_engine
+from . import fnv_engine, fnv_symdb
 from .fnv_engine import EngineMapError, hx, parse_address
 
 Status = Literal['proven', 'class_proven', 'probable', 'decomp', 'rejected', 'unnamed']
@@ -23,6 +23,7 @@ FNV_TOOLS = {
     'fnv_func_callers': 'offline read: direct callers (call graph from the exe), several levels',
     'fnv_func_callees': 'offline read: direct callees and import calls, several levels',
     'fnv_symbolize': 'offline read: addresses -> exe function + offset, static object, or module + offset',
+    'fnv_symbols': 'offline read: compiler symbol database: source line per code address, named locals, exact type layouts',
     'fnv_name_status': 'offline read: is a name proven, by which evidence (fnvsym verified.csv)',
     'fnv_class_layout': 'offline read: fields with offsets, types and checks from the decomp headers',
     'fnv_class_vtable': 'offline read: vtable slots with implementing functions (exe RTTI) and header declarations',
@@ -69,8 +70,7 @@ class FnvService:
                     'elapsedMs': round((time.monotonic() - started) * 1000)}
 
     def engine(self):
-        path, decomp = fnv_engine.default_paths(self.project)
-        return fnv_engine.load(path, decomp)
+        return fnv_engine.load(*fnv_engine.default_paths(self.project))
 
     # ----------------------------------------------------------------------------- engine knowledge
     def func_find(self, query, mode='auto', status=None, limit=25, offset=0):
@@ -181,7 +181,7 @@ class FnvService:
                     'identity': e.identity()}
         return self.run('fnv_name_status', action)
 
-    def class_layout(self, class_name, include_virtuals=False):
+    def class_layout(self, class_name, include_virtuals=False, compiler=False):
         def action():
             e = self.engine()
             key, layout = e.class_layout(class_name)
@@ -206,9 +206,209 @@ class FnvService:
                 out['otherDefinitions'] = layout['otherDefinitionCount']
             if include_virtuals:
                 out['virtuals'] = layout.get('virtuals', [])
+            db = e.symdb
+            built = (db.layout(key) or db.layout(class_name)) if db else None
+            if built and built['kind'] != 'enum':
+                out['compilerLayout'] = {'size': '0x%X' % built['size'] if built['size'] is not None else None,
+                                         'members': len(built['members']), 'variants': built['variants'],
+                                         'conflicts': ['0x%X' % c for c in built['conflicts']]}
+                if compiler:
+                    out['compilerLayout']['memberList'] = [
+                        {'offset': '0x%X' % m['offset'], 'name': m['name'], 'type': m['type'], 'size': m['size'],
+                         **({'bitPos': m['bitPos'], 'bitLen': m['bitLen']} if m['bitLen'] else {})}
+                        for m in built['members']]
+                    out['compilerLayout']['bases'] = built['bases']
             out['identity'] = e.identity()
             return out
         return self.run('fnv_class_layout', action)
+
+    # ----------------------------------------------------------------------------- symbol database
+    def symdb(self):
+        """The attached symbol database; without one an error whose evidence holds the build command."""
+        path = fnv_symdb.default_path(self.project)
+        db = fnv_symdb.load(path, fnv_engine.default_paths(self.project)[1])
+        if db is None:
+            raise fnv_symdb.SymbolDbError('SYMDB_UNAVAILABLE', 'No symbol database at %s' % path,
+                                          {'available': False, 'next': self._symdb_build_command(path)})
+        return db
+
+    def _symdb_build_command(self, path):
+        decomp = fnv_engine.default_paths(self.project)[1]
+        return ('python -m engine_map.symdb --decomp %s --image <your unpacked FalloutNV.exe> --out %s'
+                % (decomp or '<decomp>', path))
+
+    def _symdb_engine(self):
+        try:
+            return self.engine()
+        except EngineMapError:
+            return None
+
+    @staticmethod
+    def _symdb_function(db, engine, ref):
+        """Function row of the database for an address or name; names go through the engine map first."""
+        if engine is not None:
+            try:
+                row = db.function(engine.resolve(ref))
+                if row:
+                    return row
+            except EngineMapError as e:
+                if e.code == 'AMBIGUOUS':
+                    raise
+        return db.resolve(ref)
+
+    @staticmethod
+    def _source_text(engine, file, line):
+        if engine is None:
+            return None
+        try:
+            return engine._lines(file)[line - 1].strip()[:200]
+        except (EngineMapError, IndexError, OSError):
+            return None
+
+    def symbols(self, action, function=None, address=None, file=None, line=None, name=None, limit=50, offset=0):
+        def act():
+            if action == 'status':
+                return self._symbols_status()
+            db = self.symdb()
+            engine = self._symdb_engine()
+            ident = db.identity(engine.decomp_root if engine is not None else None)
+            if action in ('lines', 'locals'):
+                ref = function or (address if action == 'locals' else None)
+                if not ref:
+                    raise ValueError('action=%s needs function (address or name)%s' % (
+                        action, ' or address' if action == 'locals' else ''))
+                f = self._symdb_function(db, engine, ref)
+                head = {'address': '0x%08X' % f['addr'], 'name': f['name'] or f['decorated'], 'size': f['size'],
+                        'verified': bool(f['verified']), 'hasDebug': bool(f['has_debug'])}
+                if action == 'lines':
+                    return self._symbols_lines(db, engine, f, head, limit, offset, ident)
+                return self._symbols_locals(db, f, head, address, ident)
+            if action == 'where':
+                if not file or line is None:
+                    raise ValueError('action=where needs file (a path or its ending, e.g. playercharacter.cpp) '
+                                     'and line')
+                return self._symbols_where(db, engine, file, line, ident)
+            if action == 'type':
+                if not name:
+                    raise ValueError('action=type needs name (a class, struct, union or enum)')
+                return self._symbols_type(db, name, limit, offset, ident)
+            raise ValueError('unknown action %r: status, lines, locals, where or type' % action)
+        return self.run('fnv_symbols', act)
+
+    def _symbols_status(self):
+        path = fnv_symdb.default_path(self.project)
+        build = self._symdb_build_command(path)
+        try:
+            db = fnv_symdb.load(path, fnv_engine.default_paths(self.project)[1])
+        except fnv_symdb.SymbolDbError as e:
+            return {'available': False, 'verdict': str(e), 'path': str(path), 'next': build}
+        if db is None:
+            return {'available': False, 'verdict': 'No symbol database at %s' % path, 'path': str(path),
+                    'next': build}
+        engine = self._symdb_engine()
+        ident = db.identity(engine.decomp_root if engine is not None else None)
+        cov = db.coverage()
+        verdict = ('Symbol database present: %d functions, %d with source lines, %d verified; %d of %d units not ok'
+                   % (cov['functions'], cov['functionsWithLines'], cov['functionsVerified'], cov['unitsNotOk'],
+                      cov['units']))
+        out = {'available': True, 'verdict': verdict, 'stale': ident['stale'], 'coverage': cov, 'identity': ident}
+        if ident['stale']:
+            out['verdict'] += '; STALE: the decomp has moved on since it was built'
+            out['next'] = 'Rebuild it: ' + build
+        return out
+
+    def _symbols_lines(self, db, engine, f, head, limit, offset, ident):
+        rows = db.lines_of(f['addr'])
+        files = sorted({r[1] for r in rows})
+        out_rows = []
+        for off, path, number in rows[offset:offset + limit]:
+            row = {'address': '0x%08X' % (f['addr'] + off), 'offset': '0x%X' % off, 'line': number,
+                   'text': self._source_text(engine, path, number)}
+            if len(files) > 1:
+                row['file'] = path
+            out_rows.append(row)
+        if rows:
+            verdict = '%s has %d line rows in %s' % (head['name'], len(rows), files[0] if len(files) == 1
+                                                     else '%d files' % len(files))
+        else:
+            verdict = '%s has no line table: %s' % (head['name'], 'the compiler found no debug info for it'
+                                                    if not f['has_debug'] else 'it was not verified against the exe')
+        return {'verdict': verdict, 'function': head, 'file': files[0] if len(files) == 1 else None,
+                'files': files if len(files) > 1 else None, 'total': len(rows), 'offset': offset, 'limit': limit,
+                'rows': out_rows, 'identity': ident}
+
+    def _symbols_locals(self, db, f, head, address, ident):
+        at = target = None
+        if address is not None:
+            target = parse_address(address)
+            if target is None:
+                raise ValueError('not an address: %r' % address)
+            if not f['addr'] <= target < f['addr'] + max(f['size'], 1):
+                raise ValueError('address %s is not inside %s (%s..%s)' % (
+                    hx(target), head['name'], hx(f['addr']), hx(f['addr'] + f['size'])))
+            at = {'address': hx(target), 'offset': '0x%X' % (target - f['addr'])}
+        found = db.locals_of(f['addr'], target - f['addr'] if at else None)
+        params = sum(1 for item in found if item['param'])
+        if found:
+            verdict = '%s has %d parameters and %d other locals%s' % (
+                head['name'], params, len(found) - params, ' in scope at %s' % at['address'] if at else '')
+        else:
+            verdict = '%s has no named locals in the database' % head['name']
+        return {'verdict': verdict, 'function': dict(head, debugStart=f.get('debug_start'),
+                                                      frameBytes=f.get('frame_bytes')), 'at': at,
+                'locals': found, 'note': 'location ebp+N is a stack slot relative to the frame pointer: '
+                                         'positive = parameter, negative = local.', 'identity': ident}
+
+    def _symbols_where(self, db, engine, file, line, ident):
+        files = db.files_matching(file)
+        matches = db.where(file, line)
+        for m in matches:
+            m['address'] = '0x%08X' % m['address']
+            m['function'] = '0x%08X' % m['function']
+            m['offset'] = '0x%X' % m['offset']
+        text = self._source_text(engine, files[0], line) if len(files) == 1 else None
+        shown = files[0] if len(files) == 1 else file
+        if matches:
+            functions = {m['function'] for m in matches}
+            verdict = '%s:%d is code at %d address%s in %d function%s' % (
+                shown, line, len(matches), '' if len(matches) == 1 else 'es', len(functions),
+                '' if len(functions) == 1 else 's')
+        elif not files:
+            verdict = 'No file ending in %r is in the symbol database' % file
+        else:
+            verdict = ('No code is attributed to line %d of %s (comments, declarations and optimized-away lines '
+                       'have none; try a nearby line)' % (line, shown))
+        out = {'verdict': verdict, 'file': files[0] if len(files) == 1 else None, 'line': line, 'text': text,
+               'matches': matches[:200], 'matchCount': len(matches), 'identity': ident}
+        if len(files) > 1:
+            out['candidates'] = files[:25]
+            out['note'] = 'Several files end with %r; pass more of the path to pick one.' % file
+        return out
+
+    def _symbols_type(self, db, name, limit, offset, ident):
+        t = db.layout(name)
+        if t is None:
+            raise fnv_symdb.SymbolDbError('NOT_FOUND', 'No class, struct, union or enum named %r in the symbol '
+                                          'database' % name)
+        size = '0x%X' % t['size'] if t['size'] is not None else None
+        if t['kind'] == 'enum':
+            items = t['enumerators']
+            return {'verdict': '%s is an enum with %d enumerators' % (t['name'], len(items)), 'name': t['name'],
+                    'kind': 'enum', 'size': size, 'total': len(items), 'offset': offset, 'limit': limit,
+                    'enumerators': items[offset:offset + limit], 'variants': t['variants'], 'identity': ident}
+        extra = ' (also seen with size %s)' % ', '.join('0x%X' % c for c in t['conflicts']) if t['conflicts'] else ''
+        members, methods = t['members'], t['methods']
+        return {'verdict': '%s is a %s of size %s with %d members, %d bases, %d methods; %d definition%s%s' % (
+                    t['name'], t['kind'], size, len(members), len(t['bases']), len(methods), t['variants'],
+                    '' if t['variants'] == 1 else 's', extra),
+                'name': t['name'], 'kind': t['kind'], 'size': size, 'variants': t['variants'],
+                'conflicts': ['0x%X' % c for c in t['conflicts']], 'seen': t['seen'],
+                'hasVtable': bool(t['attrs'].get('vtable')), 'bases': t['bases'],
+                'total': len(members), 'offset': offset, 'limit': limit,
+                'members': [dict(m, offset='0x%X' % m['offset']) for m in members[offset:offset + limit]],
+                'methodsTotal': len(methods), 'methods': methods[:limit], 'identity': ident,
+                'note': 'Compiler-exact layout from the debug info of the units that define this type; the best '
+                        'definition (most members) is shown.'}
 
     def class_vtable(self, class_name):
         def action():
@@ -605,10 +805,35 @@ def register(server, project, observe, result_type):
 
     @server.tool(annotations=observe)
     async def fnv_class_layout(class_name: Annotated[str, Field(min_length=1, max_length=200)],
-                               include_virtuals: bool = False) -> result_type:
+                               include_virtuals: bool = False, compiler: bool = False) -> result_type:
         """Fields of an engine class (Actor, TESObjectREFR, BaseProcess, ...) with offsets, types and whether
-        the decomp build checks each offset; class size and base classes."""
-        return await invoke(service.class_layout, class_name, include_virtuals)
+        the decomp build checks each offset; class size and base classes. When the symbol database knows the
+        class, compilerLayout gives the compiler's own size, member count, number of different definitions and
+        other sizes seen; compiler=true adds the compiler's full member list (see fnv_symbols action=type)."""
+        return await invoke(service.class_layout, class_name, include_virtuals, compiler)
+
+    @server.tool(annotations=observe)
+    async def fnv_symbols(action: Literal['status', 'lines', 'locals', 'where', 'type'],
+                          function: Annotated[str | None, Field(max_length=300, description=(
+                              'lines/locals: function address (0x00573090) or name'))] = None,
+                          address: Annotated[str | None, Field(max_length=20, description=(
+                              'locals: an address inside the function: only the locals in scope there'))] = None,
+                          file: Annotated[str | None, Field(max_length=400, description=(
+                              'where: source file path or its ending, e.g. playercharacter.cpp'))] = None,
+                          line: Annotated[int | None, Field(ge=1, le=10000000)] = None,
+                          name: Annotated[str | None, Field(max_length=200, description=(
+                              'type: class, struct, union or enum name'))] = None,
+                          limit: Limit = 50, offset: Offset = 0) -> result_type:
+        """The compiler's symbol database for the decomp functions (built by engine_map.symdb from the decomp and
+        the game exe). Use it for the exact source line of a code address, the names of a function's parameters
+        and locals, or the real size and member offsets of a type. action=status: is the database there, how
+        complete, is it stale (when it is not built, `next` gives the build command). action=lines: function ->
+        its line table (address, offset, line, source text). action=locals: function (and optional address) ->
+        parameters and locals with stack location (ebp+8 = first parameter), type and size. action=where: file +
+        line -> the code addresses that line compiled to. action=type: name -> members with offsets, bases,
+        methods with vtable slots, number of different definitions and conflicting sizes (enums: enumerators).
+        The main answer is in `verdict`; evidence follows; `identity` says which build the answer is from."""
+        return await invoke(service.symbols, action, function, address, file, line, name, limit, offset)
 
     @server.tool(annotations=observe)
     async def fnv_class_vtable(class_name: Annotated[str, Field(min_length=1, max_length=200)]) -> result_type:

@@ -1,6 +1,6 @@
 # fnv_* tools: engine knowledge and crash doctor
 
-Fifteen read-only tools that use the game's own code, through the Fallout: New Vegas decompilation.
+Sixteen read-only tools that use the game's own code, through the Fallout: New Vegas decompilation.
 They work offline: no game, GECK or companion needs to run, and they change nothing. The tools that work
 on the running game (control, tests, live inspection, full control) are in [FNV-LIVE-TOOLS.md](FNV-LIVE-TOOLS.md).
 
@@ -9,9 +9,10 @@ on the running game (control, tests, live inspection, full control) are in [FNV-
 | `fnv_func_find` | Which engine functions match these words, this address, or this text in their code? |
 | `fnv_func_code` | The decompiled C++ of one function; calls to unnamed functions are annotated with proven names |
 | `fnv_func_callers` / `fnv_func_callees` | Who calls it, what it calls (direct calls read from the exe; several levels) |
-| `fnv_symbolize` | Address → function + offset, a setting/static object, or DLL + offset |
+| `fnv_symbolize` | Address → function + offset, a setting/static object, or DLL + offset (with the symbol database: also the source line) |
+| `fnv_symbols` | The compiler's symbol database: source line of a code address, named parameters and locals, exact type layouts |
 | `fnv_name_status` | Is this name proven, and by what evidence? |
-| `fnv_class_layout` / `fnv_class_vtable` / `fnv_class_tree` | Fields with offsets and types; each vtable slot's function; base and derived classes (RTTI) |
+| `fnv_class_layout` / `fnv_class_vtable` / `fnv_class_tree` | Fields with offsets and types (with the symbol database: the compiler's size and members too); each vtable slot's function; base and derived classes (RTTI) |
 | `fnv_command_info` | A console/script command: parameters, return type, handlers and what they call |
 | `fnv_script_explain` | The commands in a script line or script: handlers (execute, condition eval, parser), the named engine functions they reach, the settings they read and the start of their code |
 | `fnv_global_find` / `fnv_setting_info` | Settings and static objects: address, default value, which functions use them |
@@ -74,6 +75,48 @@ Environment variables `FNV_ENGINE_MAP`, `FNV_DECOMP` and `FNV_CRASH_DIRS` work t
    the decomp are machine-made (status `unnamed`), so read the logic, not the names.
 3. `fnv_func_callers("0x009B6620", depth=2)` → `InitHitData` and `InitFromObjects`, called from
    `ImpactProjectile::ProcessHits`.
+
+## Symbol database
+
+The decomp is built with debug information, so the compiler knows more than the headers say: the source
+line of every code address, the names of each function's parameters and locals and where they live on the
+stack, and the exact size and member offsets of every type. A separate file, `symdb.sqlite`, holds this.
+It is optional. Without it every tool works as before.
+
+Build it once (and again after the decomp changes), with your own copies of the decomp and the unpacked exe:
+
+```powershell
+python -m engine_map.symdb --decomp C:\path	onv_decomp --image C:\path	o\FalloutNV.exe --out state\symdb.sqlite
+```
+
+The tools look for it in this order: `fnv.symdb` in the project file, the `FNV_SYMDB` environment
+variable, then `symdb.sqlite` in the project's state folder. `fnv_symbols action=status` tells you whether
+it was found and shows the exact command if it was not.
+
+`fnv_symbols` has one `action` argument. Every answer starts with a `verdict` line, then the evidence,
+and `identity` (which build and decomp commit the database came from).
+
+| `action` | Give it | You get |
+| --- | --- | --- |
+| `status` | nothing | `available`, how many functions it covers (with lines, verified), the units that failed or are partial (first 20 names), and `stale` (true when the decomp has moved on since the build) |
+| `lines` | `function` (address or name), `limit`, `offset` | The function's line table: rows of `address`, `offset`, `line` and the source `text` |
+| `locals` | `function`, and optionally `address` inside it | Parameters and locals: `location` (`ebp+8` is the first parameter, `ebp-0x14` a local, `esi` a register), `type`, `size`. With `address`, only the ones in scope there |
+| `where` | `file` (a path or just its ending) and `line` | The code addresses that line compiled to, each with its function and offset. If several files match the ending, they are listed as `candidates` |
+| `type` | `name` of a class, struct, union or enum | Size, members (`offset`, `type`, `size`, bit fields), bases, methods with vtable slots, `variants` (how many different definitions the units contain) and `conflicts` (other sizes seen). Enums give their enumerators. Members are paged with `limit` and `offset` |
+
+Where the database helps other tools:
+
+- `fnv_symbolize`, and every tool that names an address, adds `source` (`src/fallout/ai/playercharacter.cpp:55760`),
+  `sourceLine` (that line of the decomp, trimmed) and `lineOffset` (where in the function that line starts)
+  when the address is in a function that has lines.
+- `fnv_crash_explain` carries `source` and `sourceLine` into each game frame.
+- `fnv_hang_doctor` adds `source` to each game frame. For the first 6 game frames of each sample it also
+  reads the named parameters and locals from the game at frame pointer + offset (up to 12 per frame;
+  numbers as numbers, pointers as hex, floats as floats; values larger than 8 bytes are skipped). A top
+  frame that has not run its prologue yet shows `frameNotReady: true` instead. Functions the compiler
+  did not give a frame pointer to can show wrong values, so treat them as hints.
+- `fnv_class_layout` adds `compilerLayout` (`size`, `members` count, `variants`, `conflicts`) when the
+  database knows the class. Pass `compiler: true` to get the compiler's full member list as well.
 
 ## Crash doctor
 

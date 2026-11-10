@@ -20,7 +20,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from . import fnv_procmem
+from . import fnv_engine, fnv_procmem
 from .fnv_facts import SCRIPT_BLOCKS
 from .fnv_link import hexs, word
 from .fnv_live import LiveError, _fid, _num
@@ -577,7 +577,7 @@ class DeepTools:
         hits, pointers = [], set()
         for r in recs:
             entry = {'frame': r[22], 'actor': r[3], 'health': _f(r[12]), 'fatigue': _f(r[13]), 'attacker': r[14],
-                     'returned': bool(r[8] & 0xFF) if r[1] == 2 else None, 'caller': engine.symbolize(r[5]).get('name'),
+                     'returned': bool(r[8] & 0xFF) if r[1] == 2 else None, 'caller': engine.symbolize(r[5], return_address=True).get('name'),
                      'callerAddress': '0x%08X' % r[5]}
             if self.HIT_CALLER <= r[5] < hit_end:
                 hit = decode_hit(r)
@@ -640,7 +640,7 @@ class DeepTools:
         ids = []
         for call in ctx.get('hookedCalls', []):
             call['function'] = engine.symbolize(int(call['target'], 16))
-            call['callerSite'] = engine.symbolize(int(call['caller'], 16))
+            call['callerSite'] = engine.symbolize(int(call['caller'], 16), return_address=True)
             ids += [call.get(k) for k in ('thisFormId', 'arg0FormId', 'arg1FormId') if call.get(k)]
         named = self.describe_forms(ids, names=False) if ids else {}
         for call in ctx.get('hookedCalls', []):
@@ -674,6 +674,61 @@ class DeepTools:
         return {'id': h['id'], 'label': h['label'], 'target': h['target'], 'calls': h['calls'], 'records': h['seq'],
                 'active': h['active'], 'chained': h.get('chained')}
 
+    # ------------------------------------------------------------------ named locals of hang frames
+    LOCALS_FRAMES = 6
+    LOCALS_PER_FRAME = 12
+
+    def _attach_locals(self, proc, symdb, frames):
+        """For the first game frames of one stack: read the named locals of their functions from the process
+        (frame pointer + offset). Sets frame['locals'], or frame['frameNotReady'] for a top frame that has not
+        finished its prologue. Never raises: a failed read leaves the frame without locals."""
+        seen = 0
+        for frame in frames:
+            if not fnv_engine.EXE_RANGE[0] <= frame['address'] < fnv_engine.EXE_RANGE[1]:
+                continue
+            seen += 1
+            if seen > self.LOCALS_FRAMES:
+                break
+            try:
+                is_return = frame.get('how') != 'eip'
+                fn = symdb.function_containing(frame['address'] - 1 if is_return else frame['address'])
+                if not fn or not fn.get('has_debug'):
+                    continue
+                offset = frame['address'] - fn['addr']
+                if frame.get('how') != 'eip':   # a return address: the call is the instruction before it
+                    offset = max(offset - 1, 0)
+                if frame.get('how') == 'eip' and fn.get('debug_start') is not None and offset < fn['debug_start']:
+                    frame['frameNotReady'] = True
+                    continue
+                ebp = frame.get('ebp')
+                found = [l for l in symdb.locals_of(fn['addr'], offset) if l['kind'] == 'bprel']
+                if not ebp or not found:
+                    continue
+                frame['locals'] = [self._read_local(proc, ebp, l) for l in found[:self.LOCALS_PER_FRAME]]
+            except Exception as e:   # reported on the frame, never fails the tool
+                frame['localsError'] = '%s: %s' % (type(e).__name__, e)
+
+    @staticmethod
+    def _read_local(proc, ebp, local):
+        address = (ebp + local['offset']) & 0xFFFFFFFF
+        out = {'name': local['name'], 'location': local['location'], 'type': local['type'], 'param': local['param']}
+        size, text = local.get('size'), local.get('type') or ''
+        if size not in (1, 2, 4, 8):
+            out['note'] = 'not read: size %s' % size if size is not None else 'not read: unknown size'
+            return out
+        data = proc.read(address, size)
+        if data is None:
+            out['error'] = 'unreadable at 0x%08X' % address
+            return out
+        if text.endswith(('*', '&')):
+            out['value'] = '0x%08X' % struct.unpack('<I', data)[0] if size == 4 else None
+        elif text in ('float', 'double') and size == (4 if text == 'float' else 8):
+            out['value'] = struct.unpack('<f' if size == 4 else '<d', data)[0]
+        else:
+            unsigned = 'unsigned' in text or text.startswith(('UInt', 'uint', 'bool', 'size_t'))
+            out['value'] = int.from_bytes(data, 'little', signed=not unsigned)
+        return out
+
     # ------------------------------------------------------------------ fnv_hang_doctor
     def hang_doctor(self, samples=5, interval_ms=250, all_threads=False):
         found = self.live.game.process()
@@ -682,6 +737,7 @@ class DeepTools:
         pid = found[0]
         ping = self.live.game.ping(timeout=2.0)
         engine = self.live.engine()
+        symdb = engine.symdb
         with fnv_procmem.GameProcess(pid) as proc:
             modules = proc.modules()
             threads = proc.threads()
@@ -695,14 +751,22 @@ class DeepTools:
                     regs = proc.thread_context(tid)
                     if regs:
                         frames, scanned = fnv_procmem.walk_stack(proc, regs, modules)
+                        if symdb:
+                            self._attach_locals(proc, symdb, frames)
                         stacks[tid].append((frames, scanned))
         modmap = [{'name': m['name'], 'base': m['base'], 'size': m['size'], 'path': m['path']} for m in modules]
 
-        def name(address):
-            sym = engine.symbolize(address, modmap)
+        def name(address, frame=None, return_address=False):
+            sym = engine.symbolize(address, modmap, return_address=return_address)
             if sym.get('kind') == 'function':
-                return {'address': '0x%08X' % address, 'function': sym.get('name'), 'status': sym.get('status'),
-                        'offset': sym.get('offset')}
+                out = {'address': '0x%08X' % address, 'function': sym.get('name'), 'status': sym.get('status'),
+                       'offset': sym.get('offset')}
+                if sym.get('source'):
+                    out['source'] = sym['source']
+                for key in ('locals', 'frameNotReady', 'localsError'):
+                    if frame and key in frame:
+                        out[key] = frame[key]
+                return out
             if sym.get('kind') == 'module':
                 return {'address': '0x%08X' % address, 'module': sym['module'], 'offset': sym['offset']}
             return {'address': '0x%08X' % address, 'kind': sym.get('kind')}
@@ -712,8 +776,8 @@ class DeepTools:
             tops = Counter()
             sampled = []
             for frames, scanned in runs:
-                named = [name(f['address']) for f in frames[:24]]
-                sampled.append({'frames': named, 'stackScan': [dict(name(s['address']), at=s['stackOffset']) for s in scanned[:12]]})
+                named = [name(f['address'], f, return_address=f.get('how') != 'eip') for f in frames[:24]]
+                sampled.append({'frames': named, 'stackScan': [dict(name(s['address'], return_address=True), at=s['stackOffset']) for s in scanned[:12]]})
                 game = next((n for n in named if n.get('function')), None)
                 tops[(game or named[0]).get('function') or (game or named[0]).get('module') or named[0]['address']] += 1
             stuck, hits = tops.most_common(1)[0] if tops else (None, 0)
@@ -735,7 +799,10 @@ class DeepTools:
         return {'pid': pid, 'state': state, 'verdict': verdict, 'mainThreadId': main, 'threads': threads_out,
                 'threadCount': len(threads), 'ping': {k: ping.get(k) for k in ('frame', 'msSinceFrame', 'busy', 'error')},
                 'note': 'Frames come from the EBP chain (MSVC frame pointers); stackScan lists other return addresses '
-                        'found on the stack top (heuristic). Names marked status=proven are evidence.'}
+                        'found on the stack top (heuristic). Names marked status=proven are evidence. '
+                        'With a symbol database, game frames carry source and the first 6 carry locals '
+                        'read at frame pointer + offset; '
+                        'a top frame whose prologue has not run has frameNotReady instead.'}
 
     # ------------------------------------------------------------------ fnv_patch_map
     def patch_map(self, include_bytes=False, limit=400):

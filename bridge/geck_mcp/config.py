@@ -18,6 +18,10 @@ class FnvSettings(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     engine_map: Path | None = None
     decomp_root: Path | None = None
+    # Symbol database built by engine_map.symdb (default: <state_dir>/symdb.sqlite). See docs/FNV-SYMDB.md.
+    symdb: Path | None = None
+    # Folder of saved engine research notes (Markdown) that fnv_guide searches.
+    research_dir: Path | None = None
     crash_dirs: list[Path] = Field(default_factory=list, max_length=20)
     mo2_root: Path | None = None
     mo2_profile: str | None = Field(default=None, pattern=r'^[^\\/:*?"<>|]{1,64}$')
@@ -127,7 +131,7 @@ class Project(BaseModel):
             def resolve(value):
                 value = Path(value).expanduser()
                 return str((value if value.is_absolute() else path.parent / value).resolve())
-            for key in ('engine_map', 'decomp_root', 'mo2_root', 'zig', 'tests_dir', 'clean_exe'):
+            for key in ('engine_map', 'decomp_root', 'symdb', 'research_dir', 'mo2_root', 'zig', 'tests_dir', 'clean_exe'):
                 if fnv.get(key):
                     fnv[key] = resolve(fnv[key])
             fnv['crash_dirs'] = [resolve(v) for v in fnv.get('crash_dirs', [])]

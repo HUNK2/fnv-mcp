@@ -103,8 +103,8 @@ def setup_check(project):
 
     from . import fnv_engine
     try:
-        path, decomp = fnv_engine.default_paths(project)
-        engine = fnv_engine.load(path, decomp)
+        path, decomp, symdb = fnv_engine.default_paths(project)
+        engine = fnv_engine.load(path, decomp, symdb)
         add('engine map', True, '%s (%s)' % (path, engine.identity().get('gameBuild')))
     except Exception as e:
         add('engine map', False, str(e), 'Generate it from your fnv_decomp checkout: python -m engine_map.generate '
