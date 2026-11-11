@@ -32,8 +32,10 @@
 #include <math.h>
 #include "../runtime/nvse_abi.h"
 
-#define COMPANION_VERSION 1
-#define WIRE_VERSION 1
+#define COMPANION_VERSION 2
+#define WIRE_VERSION 2
+#define EVENT_DEADMAN 0x3E9 /* event record type: the gate's dead-man switch opened a held gate */
+#define EVENT_INJECT 0x3EA  /* event record type: the input injector faulted and released its jobs */
 #define REQUEST_MAX (1u << 20)
 #define RESPONSE_MAX (4u << 20)
 #define READ_MAX 65536u
@@ -227,6 +229,8 @@ static const char *message_name(int type) {
                                   "post_post_load", "script_error", "delete_game", "rename_game", "rename_new_game",
                                   "new_game", "delete_game_name", "rename_game_name", "rename_new_game_name",
                                   "deferred_init"};
+    if (type == EVENT_DEADMAN) return "deadman";
+    if (type == EVENT_INJECT) return "inject";
     return type >= 0 && type < (int)(sizeof(names) / sizeof(names[0])) ? names[type] : "message";
 }
 
@@ -377,6 +381,7 @@ static void run_due(bool all) {
 #define ACT_RESULT 3u     /* run it, then replace eax with act_value (needs exit capture) */
 #define ACT_ARG 4u        /* replace stack argument act_aux (0..31), ecx (100) or edx (101) with act_value first */
 #define ACT_SCRIPT 5u     /* only run the script line */
+#define ACT_HOLD 6u       /* hookact <id> hold <pred|ff>: park inside the hook while the predicate passes (w2_stop.c) */
 typedef struct { uint32_t key, count; uint64_t total; uint32_t max, pad; } HookStat;
 typedef struct {
     uint32_t id, target, flags, nargs, stolen, active;
@@ -390,6 +395,7 @@ typedef struct {
     char label[40];
     volatile uint32_t act_mode, act_value, act_aux, act_limit;
     volatile LONG act_hits, script_pending;
+    volatile LONG stop_next; /* resume next <hook>: the next call that passes the filter parks (w2_stop.c) */
     unsigned char *skip_stub;
     char script[256];
 } Hook;
@@ -403,6 +409,8 @@ static uint32_t hook_code_used;
 static DWORD shadow_tls = TLS_OUT_OF_INDEXES;
 static LARGE_INTEGER qpc_frequency;
 
+/* Defined in w2_stop.c: parks the thread for a hold or a next stop; returns 0 to run the call, or the skip stub. */
+static uint32_t hook_stop(Hook *h, uint32_t *fr);
 uint32_t fnvmcp_on_enter(uint32_t *fr);
 uint32_t fnvmcp_on_exit(uint32_t *fr, const uint32_t *fpu);
 uint32_t fnvmcp_probe_enter(uint32_t *fr);
@@ -528,7 +536,14 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
     if (!h->active || (h->filter_sel && hook_select(fr, h->filter_sel) != h->filter_value)) goto done;
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
-    uint32_t act = h->act_mode, original_arg = 0;
+    if (h->act_mode == ACT_HOLD || h->stop_next) {
+        uint32_t stub = hook_stop(h, fr);
+        if (stub) {
+            SetLastError(error);
+            return stub;
+        }
+    }
+    uint32_t act = h->act_mode == ACT_HOLD ? ACT_NONE : h->act_mode, original_arg = 0;
     if (act) {
         LONG hit = InterlockedIncrement(&h->act_hits);
         if (h->act_limit && (uint32_t)hit > h->act_limit) act = ACT_NONE;
@@ -797,8 +812,10 @@ static void op_hookctl(int argc, char **argv) {
 /* hookact <id> <mode> <value> <aux> <limit> <script hex|->: a behaviour action for calls that pass the filter
  * (ACT_*). limit 0 = every call, else only the first <limit> calls. The script line runs on the main thread
  * once per triggering call (at most 8 per frame). */
+static void op_hookhold(int argc, char **argv); /* w2_stop.c: hookact <id> hold <pred|ff> [pop] */
 static void op_hookact(int argc, char **argv) {
     uint32_t id, mode, value, aux, limit;
+    if (argc >= 3 && !strcmp(argv[2], "hold")) return op_hookhold(argc, argv);
     if (argc != 7 || !parse_u32(argv[1], &id) || !parse_u32(argv[2], &mode) || mode > ACT_SCRIPT ||
         !parse_u32(argv[3], &value) || !parse_u32(argv[4], &aux) || !parse_u32(argv[5], &limit))
         return fail("bad_arguments");
@@ -1084,10 +1101,35 @@ static void int3_index(void) {
 typedef struct { uint32_t seq, slot, eip, thread, value, ret, frame_ret, frame; } DbgHit;
 static DbgHit dbg_hits[DBG_HITS];
 static volatile LONG dbg_seq;
-static uint32_t dbg_addr[4], dbg_len[4], dbg_rw[4], dbg_active;
+/* dbg_bp_slots: the slots the trap breakpoints (w2_bp.c) own; dbg_scope[k]: slot k also watches the other threads. */
+static uint32_t dbg_addr[4], dbg_len[4], dbg_rw[4], dbg_active, dbg_bp_slots, dbg_scope[4];
+static bool bp_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result);
+static bool bp_on_single_step(EXCEPTION_POINTERS *e, LONG *result);
+static void bp_reap(void);
+/* Records a watchpoint hit for each slot bit in `which`, then clears DR6. */
+static void dbg_note(EXCEPTION_POINTERS *e, uint32_t which) {
+    CONTEXT *c = e->ContextRecord;
+    for (uint32_t s = 0; s < 4; s++) {
+        if (!(which & (1u << s))) continue;
+        LONG n = InterlockedIncrement(&dbg_seq);
+        DbgHit *h = &dbg_hits[(uint32_t)(n - 1) % DBG_HITS];
+        h->seq = (uint32_t)n;
+        h->slot = s;
+        h->eip = (uint32_t)(uintptr_t)e->ExceptionRecord->ExceptionAddress;
+        h->thread = GetCurrentThreadId();
+        if (!read_u32(dbg_addr[s], &h->value)) h->value = 0;
+        if (!read_u32((uint32_t)c->Esp, &h->ret)) h->ret = 0;
+        if (!read_u32((uint32_t)c->Ebp + 4, &h->frame_ret)) h->frame_ret = 0;
+        h->frame = (uint32_t)frame;
+    }
+    c->Dr6 = 0;
+}
 static LONG CALLBACK on_trap(EXCEPTION_POINTERS *e) {
     DWORD code = e->ExceptionRecord->ExceptionCode;
     CONTEXT *c = e->ContextRecord;
+    LONG handled;
+    if (code == EXCEPTION_BREAKPOINT && bp_on_breakpoint(e, &handled)) return handled;
+    if (code == EXCEPTION_SINGLE_STEP && bp_on_single_step(e, &handled)) return handled;
     if (code == EXCEPTION_BREAKPOINT && int3_count) {
         int i = int3_find((uint32_t)(uintptr_t)e->ExceptionRecord->ExceptionAddress);
         if (i < 0) return EXCEPTION_CONTINUE_SEARCH;
@@ -1113,22 +1155,9 @@ static LONG CALLBACK on_trap(EXCEPTION_POINTERS *e) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     if (code == EXCEPTION_SINGLE_STEP && dbg_active) {
-        uint32_t dr6 = (uint32_t)c->Dr6, which = dr6 & dbg_active & 0xF;
+        uint32_t which = (uint32_t)c->Dr6 & dbg_active & 0xF;
         if (!which) return EXCEPTION_CONTINUE_SEARCH;
-        for (uint32_t s = 0; s < 4; s++) {
-            if (!(which & (1u << s))) continue;
-            LONG n = InterlockedIncrement(&dbg_seq);
-            DbgHit *h = &dbg_hits[(uint32_t)(n - 1) % DBG_HITS];
-            h->seq = (uint32_t)n;
-            h->slot = s;
-            h->eip = (uint32_t)(uintptr_t)e->ExceptionRecord->ExceptionAddress;
-            h->thread = GetCurrentThreadId();
-            if (!read_u32(dbg_addr[s], &h->value)) h->value = 0;
-            if (!read_u32((uint32_t)c->Esp, &h->ret)) h->ret = 0;
-            if (!read_u32((uint32_t)c->Ebp + 4, &h->frame_ret)) h->frame_ret = 0;
-            h->frame = (uint32_t)frame;
-        }
-        c->Dr6 = 0;
+        dbg_note(e, which);
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -1138,7 +1167,24 @@ static LONG CALLBACK on_trap(EXCEPTION_POINTERS *e) {
  * Debug registers are per thread and a thread cannot load its own, so a helper thread suspends the targets
  * (the main thread is parked waiting for the helper), sets DR0..DR3/DR7 and resumes them. A hit is recorded by
  * the trap handler: instruction after the access, thread, the value now at the address, [esp], [ebp+4]. */
-static DWORD dbg_scope_all;
+/* The debug registers a thread should have now (watchpoints and hardware breakpoints, by their scope). Used by
+ * dbg_worker for running threads, and for a thread parked inside an exception handler: Windows restores its debug
+ * registers from the handler's CONTEXT on resume, so a change made while it was parked must go into that CONTEXT. */
+static void dbg_fill(CONTEXT *c, DWORD tid) {
+    DWORD dr7 = c->Dr7;
+    for (uint32_t k = 0; k < 4; k++) {
+        dr7 &= ~((3u << (2 * k)) | (0xFu << (16 + 4 * k)));
+        if ((dbg_active & (1u << k)) && (dbg_scope[k] || tid == main_thread)) {
+            uint32_t len = dbg_len[k] == 1 ? 0 : dbg_len[k] == 2 ? 1 : 3;
+            dr7 |= (1u << (2 * k)) | ((dbg_rw[k] & 3u) << (16 + 4 * k)) | (len << (18 + 4 * k));
+        }
+    }
+    c->Dr0 = dbg_active & 1 ? dbg_addr[0] : 0;
+    c->Dr1 = dbg_active & 2 ? dbg_addr[1] : 0;
+    c->Dr2 = dbg_active & 4 ? dbg_addr[2] : 0;
+    c->Dr3 = dbg_active & 8 ? dbg_addr[3] : 0;
+    c->Dr7 = dr7;
+}
 static DWORD WINAPI dbg_worker(LPVOID arg) {
     (void)arg;
     DWORD applied = 0;
@@ -1149,7 +1195,6 @@ static DWORD WINAPI dbg_worker(LPVOID arg) {
     DWORD self = GetCurrentThreadId();
     for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te)) {
         if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
-        if (!dbg_scope_all && te.th32ThreadID != main_thread) continue;
         HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, te.th32ThreadID);
         if (!h) continue;
         if (SuspendThread(h) != (DWORD)-1) {
@@ -1157,19 +1202,7 @@ static DWORD WINAPI dbg_worker(LPVOID arg) {
             memset(&c, 0, sizeof(c));
             c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
             if (GetThreadContext(h, &c)) {
-                DWORD dr7 = c.Dr7;
-                for (uint32_t k = 0; k < 4; k++) {
-                    dr7 &= ~((3u << (2 * k)) | (0xFu << (16 + 4 * k)));
-                    if (dbg_active & (1u << k)) {
-                        uint32_t len = dbg_len[k] == 1 ? 0 : dbg_len[k] == 2 ? 1 : 3;
-                        dr7 |= (1u << (2 * k)) | ((dbg_rw[k] & 3u) << (16 + 4 * k)) | (len << (18 + 4 * k));
-                    }
-                }
-                c.Dr0 = dbg_active & 1 ? dbg_addr[0] : 0;
-                c.Dr1 = dbg_active & 2 ? dbg_addr[1] : 0;
-                c.Dr2 = dbg_active & 4 ? dbg_addr[2] : 0;
-                c.Dr3 = dbg_active & 8 ? dbg_addr[3] : 0;
-                c.Dr7 = dr7;
+                dbg_fill(&c, te.th32ThreadID);
                 if (SetThreadContext(h, &c)) applied++;
             }
             ResumeThread(h);
@@ -1190,6 +1223,7 @@ static DWORD dbg_apply(void) {
 }
 static void op_dbg(int argc, char **argv) {
     uint32_t v[5];
+    bp_reap();
     const char *what = argc > 1 ? argv[1] : "";
     if (!strcmp(what, "set")) {
         if (argc != 7 || !parse_u32(argv[2], &v[0]) || !parse_u32(argv[3], &v[1]) || !parse_u32(argv[4], &v[2]) ||
@@ -1197,25 +1231,25 @@ static void op_dbg(int argc, char **argv) {
             (v[1] & (v[2] - 1)) || (v[3] != 1 && v[3] != 3) || v[4] > 1 || v[1] < 0x10000)
             return fail("bad_arguments");
         uint32_t probe;
+        if (dbg_bp_slots & (1u << v[0])) return fail("no_debug_register");
         if (!read_u32(v[1] & ~3u, &probe)) return fail("unreadable");
         dbg_addr[v[0]] = v[1];
         dbg_len[v[0]] = v[2];
         dbg_rw[v[0]] = v[3];
         dbg_active |= 1u << v[0];
-        dbg_scope_all = v[4];
+        dbg_scope[v[0]] = v[4];
         DWORD n = dbg_apply();
         emit("{\"ok\":%s,\"slot\":%u,\"threads\":%lu,\"seq\":%ld}", n ? "true" : "false", v[0], (unsigned long)n, dbg_seq);
         return;
     }
     if (!strcmp(what, "clear")) {
         if (argc != 3) return fail("bad_arguments");
-        if (!strcmp(argv[2], "f")) dbg_active = 0;
-        else if (parse_u32(argv[2], &v[0]) && v[0] <= 3) dbg_active &= ~(1u << v[0]);
-        else return fail("bad_arguments");
-        DWORD saved = dbg_scope_all;
-        dbg_scope_all = 1; /* clear everywhere it may have been set */
-        DWORD n = dbg_apply();
-        dbg_scope_all = saved;
+        if (!strcmp(argv[2], "f")) dbg_active &= dbg_bp_slots;
+        else if (parse_u32(argv[2], &v[0]) && v[0] <= 3) {
+            if (dbg_bp_slots & (1u << v[0])) return fail("no_debug_register");
+            dbg_active &= ~(1u << v[0]);
+        } else return fail("bad_arguments");
+        DWORD n = dbg_apply(); /* every thread is visited, so a cleared slot comes off everywhere */
         emit("{\"ok\":true,\"active\":%u,\"threads\":%lu}", dbg_active, (unsigned long)n);
         return;
     }
@@ -1235,11 +1269,11 @@ static void op_dbg(int argc, char **argv) {
         return;
     }
     if (!strcmp(what, "info")) {
-        emit("{\"ok\":true,\"active\":%u,\"scopeAll\":%s,\"seq\":%ld,\"slots\":[", dbg_active,
-             dbg_scope_all ? "true" : "false", dbg_seq);
+        emit("{\"ok\":true,\"active\":%u,\"bpSlots\":%u,\"seq\":%ld,\"slots\":[", dbg_active, dbg_bp_slots, dbg_seq);
         for (uint32_t k = 0; k < 4; k++)
-            emit("%s{\"address\":\"0x%08x\",\"length\":%u,\"access\":%u,\"on\":%s}", k ? "," : "", dbg_addr[k],
-                 dbg_len[k], dbg_rw[k], dbg_active & (1u << k) ? "true" : "false");
+            emit("%s{\"address\":\"0x%08x\",\"length\":%u,\"access\":%u,\"on\":%s,\"scope\":%s}", k ? "," : "",
+                 dbg_addr[k], dbg_len[k], dbg_rw[k], dbg_active & (1u << k) ? "true" : "false",
+                 dbg_scope[k] ? "true" : "false");
         emit("]}");
         return;
     }
@@ -1589,6 +1623,7 @@ static void ctx_form(const char *name, uint32_t address) {
         read_u32(address + 0xC, &form_id) && read_bytes(address + 4, &type, 1))
         ctx(",\"%sFormId\":\"%08X\",\"%sFormType\":%u", name, form_id, name, type);
 }
+static LONG stop_fault(EXCEPTION_POINTERS *e); /* w2_stop.c: faulthold, the crash hold (8.3) */
 static LONG CALLBACK on_exception(EXCEPTION_POINTERS *e) {
     DWORD code = e->ExceptionRecord->ExceptionCode;
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_INT_DIVIDE_BY_ZERO &&
@@ -1659,7 +1694,7 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *e) {
         CloseHandle(file);
     }
     InterlockedExchange(&busy, 0);
-    return EXCEPTION_CONTINUE_SEARCH;
+    return stop_fault(e); /* CONTINUE_SEARCH unless faulthold parked the thread and the resume recovered it */
 }
 
 /* ------------------------------------------------------------------------------------ ops */
@@ -1751,19 +1786,24 @@ static void op_write(int argc, char **argv) {
     else { emit("{\"ok\":true,\"old\":"); emit_hex(old, (size_t)length); emit("}"); }
     free(old);
 }
+static void call_guarded(uint32_t target, bool is_float, uint32_t ecx, uint32_t edx, const uint32_t *words, uint32_t count);
 /* call <target> <ret i|f|v> <ecx> <edx> [word...]: the bridge maps the calling convention to ecx/edx
- * and the stack words (floats and doubles arrive as their bit patterns). */
+ * and the stack words (floats and doubles arrive as their bit patterns). The two-letter kinds ig, fg, vg make
+ * the call guarded (w1_guard.c): a fault comes back as a result instead of a crash. */
 static void op_call(int argc, char **argv) {
     uint32_t target, ecx, edx, words[32];
-    if (argc < 5 || argc > 37 || !parse_u32(argv[1], &target) || target < 0x10000 || strlen(argv[2]) != 1 ||
-        !strchr("ifv", argv[2][0]) || !parse_u32(argv[3], &ecx) || !parse_u32(argv[4], &edx))
+    bool guarded = strlen(argv[2]) == 2 && argv[2][1] == 'g';
+    if (argc < 5 || argc > 37 || !parse_u32(argv[1], &target) || (!guarded && target < 0x10000) ||
+        (strlen(argv[2]) != 1 && !guarded) || !strchr("ifv", argv[2][0]) || !parse_u32(argv[3], &ecx) ||
+        !parse_u32(argv[4], &edx))
         return fail("bad_arguments");
+    for (int i = 5; i < argc; i++)
+        if (!parse_u32(argv[i], &words[i - 5])) return fail("bad_arguments");
+    if (guarded) return call_guarded(target, argv[2][0] == 'f', ecx, edx, words, (uint32_t)(argc - 5));
     MEMORY_BASIC_INFORMATION info;
     if (!VirtualQuery((LPCVOID)(uintptr_t)target, &info, sizeof(info)) || info.State != MEM_COMMIT ||
         !(info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
         return fail("not_executable");
-    for (int i = 5; i < argc; i++)
-        if (!parse_u32(argv[i], &words[i - 5])) return fail("bad_arguments");
     CallResult result = {0, 0, NAN};
     LONG before = script_errors;
     fnvmcp_invoke(target, words, (uint32_t)(argc - 5), ecx, edx, argv[2][0] == 'f', &result);
@@ -1955,6 +1995,15 @@ static void op_events(int argc, char **argv) {
     }
     emit("]}");
 }
+#include "w1_pred.c"
+#include "w1_gate.c"
+#include "w1_samp.c"
+#include "w1_sink.c"
+#include "w1_guard.c"
+#include "w1_input.c"
+#include "w2_stop.c"
+#include "w2_bp.c"
+
 static void serve_op(char *op) {
     char *argv[40];
     int argc = 0;
@@ -1983,25 +2032,41 @@ static void serve_op(char *op) {
     else if (!strcmp(argv[0], "hookact")) op_hookact(argc, argv);
     else if (!strcmp(argv[0], "probe")) op_probe(argc, argv);
     else if (!strcmp(argv[0], "dbg")) op_dbg(argc, argv);
+    else if (!strcmp(argv[0], "pred")) op_pred(argc, argv);
+    else if (!strcmp(argv[0], "gatecfg")) op_gatecfg(argc, argv);
+    else if (!strcmp(argv[0], "hold")) op_hold(argc, argv);
+    else if (!strcmp(argv[0], "step")) op_step(argc, argv);
+    else if (!strcmp(argv[0], "until")) op_until(argc, argv);
+    else if (!strcmp(argv[0], "gate")) op_gate(argc, argv);
+    else if (!strcmp(argv[0], "samp")) op_samp(argc, argv);
+    else if (!strcmp(argv[0], "sink")) op_sink(argc, argv);
+    else if (!strcmp(argv[0], "inpcfg")) op_inpcfg(argc, argv);
+    else if (!strcmp(argv[0], "inp")) op_inp(argc, argv);
+    else if (!strcmp(argv[0], "stops")) op_stops(argc, argv);
+    else if (!strcmp(argv[0], "resume")) op_resume(argc, argv);
+    else if (!strcmp(argv[0], "faulthold")) op_faulthold(argc, argv);
+    else if (!strcmp(argv[0], "bp")) op_bp(argc, argv);
+    else if (!strcmp(argv[0], "trace")) op_trace(argc, argv);
     else fail("unknown_op");
 }
-/* Serves one request line on the main thread; ops run in order within the same frame. */
-static void serve(char *line) {
-    response_len = 0;
-    response_overflow = false;
-    char *ops = strchr(line, '\t');
-    if (ops) *ops++ = 0;
-    if (strlen(line) > 64) line[64] = 0;
-    emit("{\"id\":");
-    emit_text(line, strlen(line));
-    emit(",\"frame\":%ld,\"results\":[", frame);
-    bool first = true;
+/* A request runs on the main thread. step and until can stop it in the middle: the ops after them are
+ * served later, at the stop frame (serve_ops resumes there). The header's frame is written last. */
+static size_t frame_field; /* where the header's frame number sits in the response */
+/* Serves the ops of the current request from `ops` on; returns early when an op suspends the request. */
+static void serve_ops(char *ops, bool first) {
+    InterlockedExchange(&serving_request, 1);
     while (ops && *ops) {
         char *next = strchr(ops, '\t');
         if (next) *next++ = 0;
         if (!first) emit(",");
         first = false;
         serve_op(ops);
+        if (gate_suspending) {
+            gate_suspending = false;
+            suspend_next = next;
+            InterlockedExchange(&serving_request, 0);
+            return;
+        }
         ops = next;
     }
     emit("]}\n");
@@ -2009,9 +2074,35 @@ static void serve(char *line) {
         response_len = 0;
         response_overflow = false;
         emit("{\"id\":");
-        emit_text(line, strlen(line));
+        emit_text(request, strlen(request));
         emit(",\"frame\":%ld,\"error\":\"response_too_large\"}\n", frame);
+    } else {
+        char number[16];
+        snprintf(number, sizeof(number), "%-10ld", frame);
+        memcpy(response + frame_field, number, 10);
     }
+    if (gate_want_hold) { /* hold on: the gate closes at the end of the request */
+        gate_want_hold = false;
+        gate_close();
+    }
+    InterlockedExchange(&serving_request, 0);
+    InterlockedExchange(&pending, 0);
+    SetEvent(done_event);
+}
+/* Starts serving one request line; the pipe thread waits for done_event. */
+static void serve_request(char *line) {
+    char *ops = strchr(line, '\t');
+    if (ops) *ops++ = 0;
+    if (strlen(line) > 64) line[64] = 0;
+    response_len = 0;
+    response_overflow = false;
+    emit("{\"id\":");
+    emit_text(line, strlen(line));
+    emit(",\"frame\":");
+    frame_field = response_len;
+    emit("          ");
+    emit(",\"results\":[");
+    serve_ops(ops, true);
 }
 
 /* ------------------------------------------------------------------------------------ pipe */
@@ -2025,17 +2116,18 @@ static bool write_all(HANDLE pipe, const char *data, size_t length) {
     return true;
 }
 static void ping(HANDLE pipe, char *id) {
-    char text[512];
+    char text[768];
     for (char *c = id; *c; c++)
         if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '-')) *c = '_';
     ULONGLONG now = GetTickCount64(), last = last_frame_tick;
     snprintf(text, sizeof(text),
              "{\"id\":\"%.64s\",\"pong\":true,\"pid\":%lu,\"started\":\"%llu\",\"companion\":%d,\"wire\":%d,\"frame\":%ld,"
              "\"msSinceFrame\":%lld,\"loaded\":%s,\"deferredInit\":%s,\"lastMessage\":\"%s\",\"busy\":%s,"
-             "\"mainThreadId\":%lu,\"hooks\":%d}\n",
+             "\"mainThreadId\":%lu,\"hooks\":%d,\"held\":%s,\"stepLeft\":%ld,\"parked\":%u,\"lastFrameTick\":%llu}\n",
              id, (unsigned long)pid, started, COMPANION_VERSION, WIRE_VERSION, frame, last ? (long long)(now - last) : -1LL,
              loaded ? "true" : "false", deferred_init ? "true" : "false", message_name(last_message),
-             pending ? "true" : "false", (unsigned long)main_thread, hook_count);
+             pending ? "true" : "false", (unsigned long)main_thread, hook_count, gate_held ? "true" : "false",
+             (long)step_left, stop_parked(), (unsigned long long)last);
     write_all(pipe, text, strlen(text));
 }
 static bool client_gone(HANDLE pipe) {
@@ -2057,12 +2149,14 @@ static void serve_client(HANDLE pipe) {
         size_t line_length = (size_t)(end - buffer);
         if (line_length && buffer[line_length - 1] == '\r') buffer[line_length - 1] = 0;
         char *tab = strchr(buffer, '\t');
+        last_contact = GetTickCount64(); /* every request and ping counts for the dead-man switch */
         if (tab && !strcmp(tab + 1, "ping")) {
             *tab = 0;
             ping(pipe, buffer);
         } else {
             memcpy(request, buffer, line_length + 1);
             InterlockedExchange(&pending, 1);
+            SetEvent(request_event);
             for (;;) {
                 if (WaitForSingleObject(done_event, 250) == WAIT_OBJECT_0) break;
                 if (client_gone(pipe) && InterlockedCompareExchange(&pending, 0, 1) == 1) return;
@@ -2104,26 +2198,30 @@ static DWORD WINAPI pipe_thread(void *unused) {
 }
 
 /* ------------------------------------------------------------------------------------ xNVSE */
+/* Runs once per frame on the main thread. A step or until counts this frame; then a request waiting for the
+ * main thread is served; then, if the gate is held, the thread parks here until the gate opens. */
+static void main_loop(void) {
+    if (!main_thread) main_thread = GetCurrentThreadId();
+    InterlockedIncrement(&frame);
+    last_frame_tick = GetTickCount64();
+    if (deferred_init) route_console(); /* script errors reach the log even between requests */
+    samp_tick();
+    if (suspend_kind != SUSP_NONE) gate_frame_tick();
+    run_due(false);
+    run_hook_scripts();
+    if (scripts && scripts->CallFunction) run_periodic();
+    if (InterlockedCompareExchange(&pending, 2, 1) == 1) serve_request(request);
+    gate_park();
+}
+
 static void on_message(Message *m) {
     int type = (int)m->type;
+    sink_message(m->type, m); /* subscribed types are recorded here, including the per-form ones below */
     if (type == MSG_LOOP) {
-        if (!main_thread) main_thread = GetCurrentThreadId();
-        InterlockedIncrement(&frame);
-        last_frame_tick = GetTickCount64();
-        if (deferred_init) route_console(); /* script errors reach the log even between requests */
-        run_due(false);
-        run_hook_scripts();
-        if (scripts && scripts->CallFunction) run_periodic();
-        if (InterlockedCompareExchange(&pending, 2, 1) == 1) {
-            InterlockedExchange(&serving_request, 1);
-            serve(request);
-            InterlockedExchange(&serving_request, 0);
-            InterlockedExchange(&pending, 0);
-            SetEvent(done_event);
-        }
+        main_loop();
         return;
     }
-    /* Newer xNVSE messages (form load/unload, 3D set, cell state...) arrive per form: not recorded. */
+    /* Newer xNVSE messages (form load/unload, 3D set, cell state...) are only recorded by sinks. */
     if (type > MSG_DEFERRED) return;
     last_message = type;
     if (type == 10) {
@@ -2137,6 +2235,7 @@ static void on_message(Message *m) {
     if (type == MSG_POSTLOAD) loaded = m->data != NULL;
     if (type == MSG_EXIT || type == MSG_EXIT_CONSOLE) {
         InterlockedExchange(&exiting, 1);
+        gate_exit();
         run_due(true);
     }
     const char *text = (type == 3 || type == 4) && m->data ? (const char *)m->data
@@ -2162,6 +2261,7 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
     scripts = nvse->QueryInterface(6);
     console = nvse->QueryInterface(1);
     arrays = nvse->QueryInterface(5);
+    event_mgr = nvse->QueryInterface(8); /* kInterface_EventManager */
     Messaging *messages = nvse->QueryInterface(2);
     if (!messages || messages->version < 4) return false;
     char value[96];
@@ -2179,7 +2279,8 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
     }
     QueryPerformanceFrequency(&qpc_frequency);
     AddVectoredExceptionHandler(1, on_exception);
-    AddVectoredExceptionHandler(1, on_trap); /* first: int3 probes and watchpoints are handled, not logged */
+    AddVectoredExceptionHandler(1, on_trap); /* int3 probes and watchpoints are handled, not logged */
+    AddVectoredExceptionHandler(1, on_guard); /* added last, so it runs first: guarded calls never reach the logs */
     FILETIME creation, exit_time, kernel, user;
     if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit_time, &kernel, &user)) return false;
     pid = GetCurrentProcessId();
@@ -2187,7 +2288,7 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
     request = malloc(REQUEST_MAX + 1);
     response = malloc(RESPONSE_MAX);
     done_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (!request || !response || !done_event) return false;
+    if (!request || !response || !done_event || !gate_init()) return false;
     if (!messages->RegisterListener(nvse->GetPluginHandle(), "NVSE", on_message)) return false;
     HANDLE thread = CreateThread(NULL, 0, pipe_thread, NULL, 0, NULL);
     if (!thread) return false;

@@ -252,12 +252,329 @@ unless `bAppendErrorLogs=1`.
 
 The verdict reads, for example, "37 engine warnings since the mark, 31 of them MASTERFILE". `fnv_logs` can also
 return the two files (sources `error` and `havok`). The engine writes through a buffer, so the last lines before a
-crash can be missing. Stage W2 of the plan (an own hook with the caller and the running script) is not built.
+crash can be missing.
+
+**Live capture (`capture mode=start|stop|status`).** While the game runs it keeps both files open with no read sharing,
+so nothing can read them (seen live: `Permission denied`). `capture` hooks the engine's `Warning` 0x005B5E40 itself,
+chained behind xNVSE's jump: every call (any thread) records its eight stack words, the caller and the thread, and the
+bytes behind word 1 are copied at the call (usually the first `%s`, which often sits in a reused buffer). The bridge
+formats the printf text with the format string read from the game. `read` and `summary` use the capture while the files
+are locked; rows carry `caller` and `thread`. `fnv_session start` turns it on. Checked live: two real ANIMATION
+warnings (a SpecialIdle .kf) and a direct call with a freed string argument came out right. The Havok log can only be
+read after the game quits.
 
 **`fnv_guide`.** Guides are Markdown files in `geck_mcp/guides/` (`crash`, `script`), also served as the MCP
 resource `fnv://guide/{name}`. `engine` searches the Markdown files of `fnv.research_dir` (or the environment
 variable `FNV_RESEARCH_DIR`) by heading section, and the facts in `fnv_facts.py`. A test fails when a guide names
 an `fnv_*` or `geck_*` tool that does not exist.
+
+## Game time: fnv_time_control and fnv_wait_for (Plan 2, W1)
+
+Addresses come from `D-time.md` section 1. Each timer function is looked up in the engine map by address and must
+have the expected signature; otherwise the tool refuses with `ENGINE_MAP_MISMATCH` and calls nothing. Frame waits
+and predicates run inside the game in one request (`pred set`, `until`, `pred clear`), so the game does not run
+between the base frame and the wait.
+
+**`fnv_time_control`** (kind `act`; `status` is a read). Actions:
+
+| Action | What it does |
+| --- | --- |
+| `pause` / `resume` | Disables and enables the game clock (`BSTimer` Disable/Enable through the `call` op). The tool keeps its own flag and resumes only its own pause. A focus loss or another user's hold is left alone |
+| `hold` / `release` | Closes and opens the frame gate. While closed, nothing runs between frames; requests are still served. The gate reopens by itself after `timeout_seconds` (default 120) with no calls |
+| `step frames=N [fps=F]` | Advances exactly N frames and holds the game there. With `fps`, the fixed frame step is set first (`ClampAt`) |
+| `fixed fps=F` | Every frame takes 1000/F ms of game time. `fps=0` turns it off |
+| `speed x=F` | Writes both time multiplier floats (0.05 to 10), so the change does not ramp |
+| `status` | Gate state, clock counter, fixed step, multiplier, frame, and the real frame rate from two readings |
+
+Changing actions need `fnv.engine_control` set to `full`. Without a running game the tool answers `NOT_RUNNING`
+with the next step (`fnv_launch`).
+
+**`fnv_wait_for`** (kind `read`). Exactly one condition:
+
+| Argument | Meaning |
+| --- | --- |
+| `frames=N` | N frames pass, counted from the frame at the start of the wait |
+| `seconds=S`, `clock=game` or `real` | S game seconds (divided by the time multiplier) or S wall seconds. The rate is the fixed step, else measured, else 60 assumed (when the gate is held) |
+| `predicate=TEXT` | Compiled predicate (see below), waited on for up to `max_frames` |
+| `loaded=true` | The game has finished loading: loading flag and menu mode clear, frame delta above 0, two frames run, and the player has a parent cell. Checked in rounds until `timeout` |
+
+`timeout` is in real seconds. The wait runs frames whether the gate is held or open; when it was open before, it is
+opened again at the stop. The verdict says the frame reached, the frames waited and whether the gate was held.
+
+**Predicate text** (`fnv_pred.py`). Numbers (`12`, `0x1F`, `1.5`); absolute memory `[0x011F6394+0x0C]:f32`; pointer
+chains `[[0x011DEA0C]+0x07]:u8` (each `[...]` is one read); hook bases `this.[..]`, `argN.[..]`, `reg.eax.[..]`;
+`frame`, `main`; comparisons `== != < <= > >=`; `and or not`; `+ - & >> <<`; parentheses. Types: `u8 i8 u16 i16 u32
+i32 f32`. Limits: 64 operations, stack depth 16. Errors name the column (`BAD_PREDICATE`). Field paths through the
+symbol database are not supported yet.
+
+## Frame-exact control: fnv_input frames, fnv_do, fnv_session, fnv_health (Plan 2, W1)
+
+As of Plan 2 W2 the bridge registers 178 tools: 44 geck tools (unchanged) and 134 `fnv_*` tools. This wave adds `fnv_do`,
+`fnv_session` and `fnv_health`.
+
+**Input with frames.** `fnv_input` takes `frames=N` (1 to 10000) for a press that lasts exactly N frames. Controls 0
+to 12 go through the engine's own force call. Other controls go to their bound key, or to their mouse button
+(256 + button for a mouse-only binding). Keys are DirectInput scan codes (0 to 255), buttons are 0 to 7, and a mouse
+move is `[dx, dy]` per frame (signed; sent as two's complement). The injector is installed once per game process with
+`inpcfg`. Before that, the poll and force functions are checked against the engine map. A prologue with a relative
+jump or call is refused (`PROLOGUE_RELOCATION`), because `inpcfg` takes no relocation list. Each job ends by itself
+after its frames. The call waits for them unless it is told not to. Needs `fnv.engine_control` set to `full`.
+
+**fnv_do** (control). Runs steps given inline, with the same keys as a YAML scenario. Arguments: `steps` (1 to 200),
+`name`, `start` (`menu`, `continue`, `save:<name>` or `coc:<cell>`), `plugins`, `setup`, `teardown`, `deterministic`,
+`repeat` (1 to 20), `timeout_seconds` (20 to 900) and `relaunch_on_crash`. It returns the scenario report.
+
+Scenario additions:
+
+| Key | Example | What it does |
+| --- | --- | --- |
+| `step` | `step: {frames: 30, fps: 60}` | Advances exactly 30 frames and holds the game there. `fps` sets the fixed frame step first |
+| `wait` for `loaded` | `wait: {for: loaded, timeout: 60}` | The game has finished loading (the same check as `fnv_wait_for loaded`) |
+| `wait` for an event | `wait: {for: script_error, timeout: 10}` | A bare lowercase word is an event type from the event ring. Only events that arrive during the wait count |
+| `wait` for a predicate | `wait: {for: "frame >= 200", timeout: 30}` | Runs frames until the predicate is true (see Predicate text below) |
+| `input` with frames | `input: {control: 3, frames: 12}`, `{key: 30, frames: 5}`, `{button: 0, frames: 10}`, `{mouse: [-4, 0], frames: 20}` | A frame-exact press. `action` defaults to `tap` |
+| `as` | `- as: door` on a step, then `$door` in a later step | Keeps the step's result; `$name` is replaced in later steps |
+| `deterministic: true` | top-level key | The frame step is fixed at 60 fps and the random generator is seeded with 1 for the run. Both are reset after |
+| `repeat: N` | top-level key | Runs the scenario N times, each from its `start`. The comparison lists the steps whose result (passed and actual value) differs |
+| `on_crash` | `on_crash: report` | The default. `hold` is `NOT_AVAILABLE_YET` |
+| `photo`, `play`, `ui`, `break`, `flow` | any step with one of these keys | `NOT_AVAILABLE_YET`: planned for later waves, refused at load |
+
+**fnv_session** (control). Actions:
+
+| Action | What it does |
+| --- | --- |
+| `start` | Checks the setup (`SETUP_MISSING` names what is missing). Launches the game or loads `start`, as a scenario does. Turns the warning log on (a change takes effect at the next game start, and the result says so). Clears the warning log to a mark. Turns the crash context on. With `deterministic`, fixes the frame step and seeds the generator. Records the baseline frame rate and NiRefObject count. Refused when a session is open (`SESSION_OPEN`) |
+| `mark` | A named point (`label`). Health reports from here on, and the warning log is cleared to here |
+| `end` | Runs the health check, reverts this session's journal entries, releases the frame control, turns the crash context off, and quits the game when `quit_game` is true. Returns the health report |
+| `status` | Whether a session is open, since when, and the last mark |
+
+**fnv_health** (read). Needs an open session. Returns `ok` and `items`; each item has `kind`, `what` and `next` (the
+tool to call next):
+
+| Kind | Reported when |
+| --- | --- |
+| `script_errors` | Script errors since the mark, from the event ring |
+| `warnings` | Engine warnings since the mark, by category |
+| `crash` | A crash log since the mark (marked as during shutdown when the game was exiting) |
+| `crash_context` | Crash-context files newer than the mark |
+| `frame_time` | The frame time is more than 1.5 times the session start's |
+| `objects` | The NiRefObject count is more than 1000 above the session start's |
+
+Notes: the NiRefObject count (0x011F4400) and the OSInputGlobals pointer (0x011F35CC) are statics from the decomp
+units. The engine map does not list them yet, so the results say so. The companion's `inp` reply is assumed to carry
+`ok`, `job`, `frame`, `jobs` and `installed`. The C side of `inp` is finished in another wave, so the live game has not
+run these tools yet.
+
+---
+
+## Source-level debugger: fnv_debug (Plan 2, W2)
+
+**`fnv_debug`** (kind `act`; `status`, `stack` and `locals` are reads, and so are `break` with `op=list`). It sets
+breaks in the running game and reads what the game stopped on, with names and source lines from the engine map and
+the symbol database. Every stop is parked by the engine companion (`stops`, `resume`); the game runs on only when
+the debugger resumes it.
+
+**Breaks** (`action=break`):
+
+| Form | What it does |
+| --- | --- |
+| `op=set location=<name>` | A function by name (`Actor::ApplyDamage`) or by address (`0x00401000`). At the function's first byte it is a hook hold (`hookact hold`), so the thread parks before the body runs |
+| `op=set location=<file>:<line>` | The first address of that source line (symbol database, by path suffix). A trap: a hardware breakpoint for the first four, `int3` after that |
+| `op=set location=fault` | The companion's crash hold: a real fault parks the faulting thread (`faulthold on`) |
+| `when="<predicate>"` | Stops only when the predicate holds (`fnv_pred` text, such as `frame >= 100`) |
+| `do=log log=["<expr>"]` | Does not stop; records one expression at each hit (the companion's log ring) |
+| `op=list` / `op=clear break_id=N` | Lists breaks with their mechanism and hits; clears one, or all when `break_id` is left out |
+
+`hits=N` stops from the Nth hit that passes `when` (companion `bp after`; a function break then uses a trap
+breakpoint, not a hook hold). Several expressions in `log` are not built yet and are refused with `NOT_YET`.
+
+**Stops and reads** (all need a stopped game unless noted):
+
+| Action | What it returns |
+| --- | --- |
+| `status` | Running, or stopped with the function, `file:line`, the source lines around it (current one marked), why it stopped and the thread. Also the breaks while running |
+| `stack depth=N with_locals=true` | Frames from the EBP chain. Frame 0 is the stop; callers show the call site (`file:line` from the return address) |
+| `locals frame=N` | Parameters and locals in scope at that address, decoded by type size. Pointers show their address and the class named by RTTI when the vtable is known. A value that cannot be read gives a note |
+| `eval expression=...` | Reads a value: a local, `this->field` or `obj.field` through the class layout, `[0x011DEA0C]:u32`, a register as `$eax`. Casts and calls are refused (`CALL_UNSUPPORTED`) |
+| `set expression=... value=...` | Writes a local, a field or a register of the stop. Takes effect when the game resumes |
+| `threads` | Every thread of the game with its eip, whether it is the main thread, and whether it is parked at a stop |
+
+A hook stop has no frame of its own yet: its parameters come from the saved stack arguments, and its locals that
+live in the frame show `not set up` until the function's prologue has run.
+
+**Running on** (`action=...`):
+
+| Action | What it does |
+| --- | --- |
+| `continue` | Resumes every stop (`resume ff run`) |
+| `step mode=instruction` / `into` | One instruction (`resume step`) |
+| `step mode=over` | Runs a call at the current line as one step (a temporary `to` after the call) |
+| `step mode=out` | Runs to the return address of the current function |
+| `step mode=line` | Single-steps until the source line changes; a call is run over |
+| `until location=...` | Runs to a location once (`resume to`) |
+| `return value=N` | Returns N from the current function without running the rest (`resume ret`) |
+| `skip location=file:line` | Moves execution to another line of the same function (`resume eip`) |
+| `freeze` / `thaw` | Suspends every game thread (from outside the process), and resumes them. Nothing runs in the game until `thaw` |
+| `dump file=name` | Writes a minidump into `bridge/state/dumps/` (the threads are frozen while it is written) |
+
+Limits, for now: a hook stop cannot be stepped (`BAD_MODE`; set a break on a line inside the function instead). A
+break is not kept across a restart of the game, and breaks are not journaled, so `fnv_undo` does not remove them.
+Stepping after a hook-hold stop needs the companion's native breakpoint modes.
+
+## Script-level tools: fnv_flow, fnv_blame, fnv_script_debug, fnv_script_log (Plan 2, W2)
+
+These four sit on the engine companion's hooks, breakpoints, watch rings and trace op, and on the symbol database and
+the engine map. Every address is resolved through the engine map first; a missing or different address refuses with
+ENGINE_MAP_MISMATCH and the map to refresh. Actions that change the game need `fnv.engine_control` = full; reads do
+not.
+
+**fnv_flow** (`trace`, `call`). `trace function=<name or 0x..> when=<predicate> depth=0 max_steps` arms a breakpoint
+on the function's entry, then runs `resume trace` over the function's range with a log program that reads its scalar
+locals at their EBP offsets (at most 16). The result lists each executed source line in order with its hit count, the
+source text and the locals that changed (the change is attributed to the line before it). The function needs symbol
+database lines (NO_LINES otherwise) and a hook-free entry (ALREADY_HOOKED). `call` is not built: the companion ignores
+breakpoints while it serves an engine call, so the call cannot be traced from here. depth 1 (direct callees too) is
+not built.
+
+**fnv_blame** (`field`, `ref`, `report`, `form`). `field address=<0x...> | <ref> + 0x..` sets a hardware write watch
+(`dbg` set, 1 to 64 bytes, `write` or `readwrite`, scope `main` or `all`, up to 600 seconds). It shares the four
+hardware slots with fnv_debug. Each hit records the thread, the stack with source lines, and the script line when the
+script runner is on the stack. `ref ref=<ref> what=<presets>` hooks the B-debug section 3 presets (comma-separated, or
+all), filtered to the reference pointer, with the log flag so the ring keeps every call. `report` groups hits by
+culprit: the script line, else the writing function. `form` (the change flags of NotifyFormIDChanged) is not built.
+Deviation: the script context of a blame hit is the last statement the thread ran, read from the statement ring; it is
+approximate, not the statement that wrote.
+
+**fnv_script_debug** (`break`, `status`, `vars`, `set`, `eval`, `step`, `continue`, `freeze`, `thaw`). A break is a hold
+on the hook of `ScriptRunner::EvaluateLine` (0x005E1550): the predicate tests the script's form id through arg0 (set
+with `script`), and a companion hook filter tests one raw argument, the line (arg6) or the opcode (arg1). The
+predicate language cannot read a raw argument, so only one line or opcode filter is in force at a time, and `when`
+is a predicate over the script's variables that is ANDed with the script test. `status` shows the script, line, opcode,
+reference and if-depth; `vars` lists the stopped script's variables by name (names from the script's variable list);
+`set` writes a variable's value (it does not mark the reference changed, as the engine's own set does); `eval` runs a
+snippet on the stopped reference; `step line` runs to the next line of the same script run; `continue` resumes;
+`freeze` and `thaw` turn the process-scripts byte (0x0118C685) off and back on. A statement reached during save or load
+is passed on with `resume next` and counted in `skipped`, because it cannot be refused at hold time.
+
+The statement hook is shared with fnv_script_log. fnv_script_trace uses a different label on the same address, so a
+break refuses with HOOKED_ELSEWHERE while fnv_script_trace is on: stop it first. A break cleared to none re-hooks the
+statement so the ring keeps going.
+
+**fnv_script_log** (`commands`, `history`, `events`, `raise`, `errors`). `commands mode=start` installs the statement
+hook as a record-only hook (no hold); `commands mode=read script=<name> ref=<ref> opcode=<n> since=<seq>` lists the
+statements in the ring with the command name from the engine map (the ring holds the last 200 records; `dropped`
+counts the rest); `commands mode=stop` removes it unless a break still uses it. `history ref=<ref>` lists the
+world-changing commands (Disable, Enable, MoveTo, AddItem and the like) on a reference from the same ring.
+`events mode=start` hooks `Script_SetActionFlag` (0x005AC750) and `ScriptLocals::SetActionFlag` (0x005A8E20);
+`events mode=read` lists the block flags raised with their names (OnAdd, OnEquip, OnDrop, ..., OnTriggerLeave) and the
+raising function. `raise ref=<ref> flag=<name>` calls `Script_SetActionFlag` through the engine call path, so the flag
+is only marked on the reference; the block runs when the scripts next run. Deviation: the second argument of
+`Script_SetActionFlag` is taken as the reference's extra data list (ref + 0x44), which is not yet confirmed against the
+decompiled signature. `errors since=last|start` wraps fnv_script_errors.
+
+## Eyes: fnv_camera, fnv_look, fnv_photo, fnv_hud, fnv_visibility (Plan 2, W3)
+
+Checked in the game on 2026-11-11 (Prospector Saloon). Code: `geck_mcp/fnv_eyes.py`.
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `fnv_camera` | act | `get` the view; `set` a free camera (position, yaw, pitch, `look_at`, `fov`); `orbit` a ref (relative yaw, pitch, distance or `fit`); `pov first\|third`; `restore` |
+| `fnv_look` | read | References on screen, largest first: screen rectangle in pixels, distance, line of sight, flags; crosshair, prompt, corner message, subtitle, open menus |
+| `fnv_photo` | act | `ref` from set angles in one sheet (world paused, view restored); `cell`; `view` (labels); `sequence` with the frame gate; `compare` against a baseline |
+| `fnv_hud` | read | HUD mode, visible parts, crosshair and prompt, message on screen and queued, subtitle; `post` a corner message |
+| `fnv_visibility` | read | Why a ref does not draw: no 3D, deleted, disabled, culled, zero scale, empty bound, first person, other cell, outside the view, occluded |
+
+How:
+
+- The camera is the scene graph's NiCamera (`*(0x011DEB7C)` +0xAC; FOV at +0xBC). Its world rotation (+0x68) has
+  the view direction in column 0; +0x9C is the world-to-clip matrix the tools project with.
+- A free camera is the engine's fly camera: `tfc 1` (the world stops) or `tfc`, flag at OSGlobals
+  (`*(0x011DEA0C)`) +6; the pose is on the player at +0x7E0 (yaw, pitch in radians, position). Writing it moves
+  the view on the next frame, and `SaveScreenshot` captures it. `restore` puts back the saved fly state and FOV.
+- First/third person is player +0x64A; `pov` presses the POV control for four frames (one frame does not switch).
+- References come from the loaded cells' own lists (cell +0xAC; the interior, or the exterior grid from TES).
+  xNVSE `GetRefs` returns at most 200 per call and stops listing a reference after Disable and Enable.
+- A reference's 3D root is +0x64 → +0x14; its world bound sphere is behind the pointer at +0x20, flags at +0x30.
+- HUD: `*(0x011D96C0)`: queue +0x18C (text at +0 of each node), crosshair +0x1B8, flags +0x1BC, mode +0x1C4,
+  tiles 26 (message), 28 (subtitle), 29 (prompt), 32 (name). The message tile keeps its last text after the
+  message leaves the screen. `post` calls `QueueUIMessage` 0x007052F0.
+
+## Hands: fnv_play, fnv_ui_do, fnv_input v2 (Plan 2, W3)
+
+Code: `geck_mcp/fnv_hands.py`.
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `fnv_play` | act | `goto` a ref or position on foot; `look_at`; `activate` (or why not); `talk`; `loot`, `equip`, `use`, `drop`; `stop` |
+| `fnv_ui_do` | act | `click` a tile or `button` by its label (the menu's HandleClick); `wait` N hours; `fast_travel`; `message`; `close` |
+| `fnv_input` | act | Now also `key_name` (E, Space, F1, ...), `button` (mouse) and `mouse` [dx, dy] with `frames` |
+
+How:
+
+- `goto` plans a route with weighted A* on a 64-unit grid. Each step is checked with three knee-high path-pick
+  rays as wide as the player (the centre ray, and side rays from 40% along the step so they do not start inside
+  the player's own body). Doors are passable nodes, opened by `activate` on the way. Some floors are not
+  pickable from above (seen in Prospector Saloon); a step without a floor hit keeps its height. Walking is the
+  forward control through the injector, turned with `SetAngle Z`. When the player stops gaining ground, the spot
+  ahead is marked blocked and the route is planned again from where the player stands (up to four times).
+- `activate` reads the refusal states first (menu mode, controls-disabled byte player +0x680, disabled, locked,
+  combat, unnamed door). It then turns to the target, trying up to five points of its bound until the crosshair
+  picks it, and presses activate for one frame. What happened comes from the menus, the HUD message queue, the
+  door state and the player's position. Only reference functions are evaluated on the target: actor functions on
+  a container crash the game (seen live). `direct=true` schedules `Activate player` on the main loop, never
+  inside a request: an NPC's dialogue would hold the request until the conversation ends.
+- Menu clicks call the menu's vtable slot 3 `HandleClick(id, tile)` with the tile's id trait (0xFAA), as a
+  mouse-up does; `button` finds the tile by its text and walks up to the nearest tile with an id.
+- `wait` presses the wait key for four frames (one frame does not open the menu). When SleepWaitMenu opens,
+  waiting is allowed there; the hours then run through the engine's own one-hour wait (`fnv_time`).
+- `fast_travel` asks `CanFastTravel` 0x0093D660 first (its refusal message is the reason), then
+  `FastTravel(marker)` 0x0093CDF0.
+- `type` (text into menus) is not built: it needs buffered key events from the companion.
+- Doors: path-pick rays pass through door collision, so a closed door is not in the plan (seen live). When the walk
+  stops gaining ground with a closed, non-load door within 140 units ahead, `goto` opens it and plans again through
+  the door's centre. Checked live: the bathroom door of Prospector Saloon opened on the way. Not solved: a door that
+  swings open into a narrow corridor can wedge the player against its panel (the rays do not see the panel either).
+- Checked live (evening run): `talk` on Easy Pete opened DialogMenu ("Howdy. What can Easy Pete do for you?");
+  `fast_travel` from Goodsprings to Primm (an hour passed); TrudyRef is disabled at a fresh start and `talk` refuses
+  with `disabled`. `activate direct=true` on a load door does not move the player (use the crosshair press or
+  `fnv_move`).
+- `fnv_do` takes the eyes and hands as steps: `photo {action, ref, angles}`, `play {action: goto|talk|activate|look_at,
+  ref | position}` (passes when it arrived, a dialogue opened, the target is in the crosshair, or activate was pressed
+  with no refusal) and `ui {action, label, ...}`. `break` and `flow` stop the main thread and are not scenario steps.
+
+## Creation loop: fnv_asset, fnv_form, fnv_place, fnv_author (Plan 2, W4)
+
+Code: `geck_mcp/fnv_create.py`.
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `fnv_asset` | act | `reload` a model or texture from disk; `watch` a folder; `file_log` start/read/stop; `where`; `queue`; `models`; `archives` |
+| `fnv_form` | act | `create` a form or a clone; `reload` a rebuilt plugin's changed records into the live forms; `changes` |
+| `fnv_place` | act | `at`, `array` (row, grid, circle), `nudge`, `rotate`, `scale`, `snap`, `check`, `list`, `remove` |
+| `fnv_author` | control | `export` the session as a spec part; `check` a plugin; `scaffold`; `package` |
+
+How:
+
+- Model reload: disable every loaded reference that uses the model, call `ClearUnusedModels(true)` 0x00448620
+  on the ModelLoader (`*(0x011C3B3C)`; it drops every cached model nobody uses), then enable them again. The
+  file log shows the model read again. A texture reloads with the loose models that name it.
+- File log: two record hooks. `FileFinder::GetFile` 0x00AFDF20 covers lookups by name, including files that do
+  not exist anywhere (null result); the name is copied at the call. The archive open by entry 0x00AF6340 is what
+  queued loaders use for BSA files; it gets no name, so the hook copies the file entry, and the bridge maps the
+  name hash back to the path with the hashes stored in the archives.
+- `fnv_form create` uses xNVSE `TempCloneForm` for a clone (until the game quits), else `CreateFormForType` +
+  `AddFormToDataHandler`. `reload` applies the rebuilt record's name, models, value, weight, health, armour
+  rating and threshold with the engine's setters (`SetName`, `SetModelPathEX`, `SetBipedModelPathEX`,
+  `SetBaseItemValue`, `SetWeight`, `SetHealth`, `SetArmorAR`, `SetArmorDT`), then rebuilds the 3D of the refs that
+  use a changed model. New records and other types are listed as needing a restart. `CloneForm` (JIP) is not
+  present in this setup.
+- Placement uses `PlaceAtMe`, `SetPos`, `SetAngle`, `SetScale`; every placement and change is journaled, and
+  `remove` disables and marks for deletion. `snap` and `check` cast rays down and pass through the object's own
+  collision.
+- `export` writes `state/fnv/author/<name>.spec-part.json`: created forms as records (template + FULL), placed
+  references as cell objects with `@EditorID` bases where the record index knows them.
+- `package` copies only the plugin and the files it names that are loose in its own mod folder, never files of
+  the game's Data folder or of other mods.
 
 ## Scenario tests
 
@@ -393,6 +710,26 @@ that is not on the list came from elsewhere (a script package, a quest, combat, 
 runtime class (`TESFullName`, `TESValueForm`, `TESWeightForm`, `TESHealthForm`, `TESAttackDamageForm`,
 `TESScriptableForm`), plus `TESGlobal` and `TESQuest` data, and compares them with `fnv_record_show`'s
 decoding of the winning record.
+
+## Loose ends of W1 to W4 (2026-11-11 evening)
+
+Built and checked in the game in this run:
+
+| Piece | What changed | Checked live |
+|---|---|---|
+| `fnv_watch frames=N` (`every=k`) | The companion sampler: one program of up to 16 values run in the main-loop message every k frames, kept in a ring in the game, read once. Items are predicate text (`[[0x011DEA3C]+0x30]:f32`) or `player.x/y/z/yaw`, `frame` | 120 consecutive frames, none missed |
+| `fnv_events subscribe=[...]` | xNVSE event sinks (`onactivate`, `onhit`, `ondeath`, `onadd`, `onload`, ...): frame, reference and the event's argument words; words that point to forms come back as form ids. `sink_since`, `ref`, `unsubscribe` | OnActivate recorded when the player opened a door |
+| `fnv_debug hits=N` | The companion counts hits that pass `when` and stops from the Nth (`bp after`, sent before `bp set`: set first, the next frame's hit stopped at once, seen live) | TES::RunScripts stopped on hit 120 exactly |
+| A stop during a wait | A breakpoint that parked the main thread while `fnv_wait_for` or a step ran frames left the request open and the one pipe instance busy: the game hung (seen live). The companion now ends that request with `stopped`; the tools say `STOPPED` and name fnv_debug | 120th-hit break during a 5 s wait: the wait returned, the game resumed |
+| `fnv_flow trace` | The trace is read under the step stop that ends it (it read the breakpoint's seq: `no_trace`); hex trace values decoded; the result field is `endedBy` (a duplicate `reason` argument made every finished trace fail) | TES::RunScripts: 114 quests visited, 52 scripts run, locals per line |
+| `fnv_blame field` | Plugin code in a stack is named `module+offset` | GameHour is written every frame by `jip_nvse.dll+0x10FA4` |
+| Wire numbers | The companion parses numbers as hex; several calls sent decimal (`resume` seq, `bp set` id, `ret` pop, `trace read`, `dbg read`): wrong values from 10 up. All send hex now | (found while checking hits=120) |
+| `fnv_session start` | Failed on the locked warning log; it now turns the live warning capture on | session start, health ok |
+| `fnv_photo` | Refused with `MENU_OPEN` while a menu is open (all frames were the pause menu's backdrop) | |
+| `fnv_form reload` | Takes the rebuilt plugin's path: the running game locks its plugin files against writing | HelloRedFlash renamed in the running game from a rebuilt copy |
+
+Still not done: S6 end to end (a changed texture file and a misspelled mesh in a test plugin), `type` into menus,
+a door panel swinging into a corridor, `fnv_flow call` and depth 1, `fnv_blame form`, several `log` expressions.
 
 ## Agent tools: testing and debugging with no one at the keyboard
 

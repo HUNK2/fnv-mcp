@@ -107,7 +107,7 @@ class FieldWatchTools:
         address = int(address, 16) if isinstance(address, str) else int(address)
         if access not in ACCESS:
             raise ValueError('access is write or readwrite')
-        r = self.link.one('dbg', 'set', '0', word(address), str(int(length)), str(ACCESS[access]),
+        r = self.link.one('dbg', 'set', '0', word(address), word(int(length)), word(ACCESS[access]),
                           '1' if scope == 'all' else '0')
         if not r.get('ok'):
             raise ValueError('The companion could not set the watchpoint: %s' % (r.get('error') or r))
@@ -118,7 +118,7 @@ class FieldWatchTools:
             if seconds:
                 time.sleep(float(seconds))
             time.sleep(0.2)
-            hits = self.link.one('dbg', 'read', str(seq)).get('hits') or []
+            hits = self.link.one('dbg', 'read', word(seq)).get('hits') or []
         finally:
             self.link.one('dbg', 'clear', 'f')
         out = dict(self._summarise(address, hits[:max_hits]), trigger=ran, journalId=entry['id'], access=access,

@@ -5,22 +5,33 @@ fnv_hang_doctor (thread stacks) and fnv_patch_map (code bytes). Nothing here wri
 threads are suspended only for the moment their context is read.
 """
 import ctypes
+import msvcrt
 import os
 import struct
 from ctypes import wintypes
 
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 psapi = ctypes.WinDLL('psapi', use_last_error=True)
+dbghelp = ctypes.WinDLL('dbghelp', use_last_error=True)
 
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
 THREAD_SUSPEND_RESUME = 0x0002
 THREAD_GET_CONTEXT = 0x0008
+THREAD_SET_CONTEXT = 0x0010
 THREAD_QUERY_INFORMATION = 0x0040
 TH32CS_SNAPTHREAD = 0x4
 LIST_MODULES_32BIT = 0x01
 WOW64_CONTEXT_FULL = 0x10000 | 0x1 | 0x2  # control + integer
+WOW64_CONTEXT_DEBUGGER = 0x10000 | 0x1 | 0x2 | 0x4 | 0x10  # control, integer, segments, debug registers
 WOW64_CONTEXT_SIZE = 0x2CC
+WOW64_THREAD_FAILED = 0xFFFFFFFF
+# Byte offsets of the registers in a WOW64_CONTEXT (winnt.h): debug registers from 4, integer registers from 0x9C.
+CONTEXT_OFFSETS = {'dr0': 0x04, 'dr1': 0x08, 'dr2': 0x0C, 'dr3': 0x10, 'dr6': 0x14, 'dr7': 0x18,
+                   'edi': 0x9C, 'esi': 0xA0, 'ebx': 0xA4, 'edx': 0xA8, 'ecx': 0xAC, 'eax': 0xB0, 'ebp': 0xB4,
+                   'eip': 0xB8, 'eflags': 0xC0, 'esp': 0xC4}
+# MiniDumpWithDataSegs | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo: no full heap copy.
+MINIDUMP_DEFAULT = 0x4 | 0x40 | 0x1000
 
 kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -36,6 +47,11 @@ kernel32.Wow64SuspendThread.restype = wintypes.DWORD
 kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
 kernel32.ResumeThread.restype = wintypes.DWORD
 kernel32.Wow64GetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+kernel32.Wow64SetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+kernel32.Wow64SetThreadContext.restype = wintypes.BOOL
+dbghelp.MiniDumpWriteDump.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.HANDLE, wintypes.DWORD,
+                                      ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+dbghelp.MiniDumpWriteDump.restype = wintypes.BOOL
 psapi.EnumProcessModulesEx.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.HMODULE), wintypes.DWORD,
                                        ctypes.POINTER(wintypes.DWORD), wintypes.DWORD]
 psapi.GetModuleFileNameExW.argtypes = [wintypes.HANDLE, wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
@@ -63,6 +79,23 @@ class ProcMemError(Exception):
         super().__init__(message)
         self.code = code
         self.evidence = evidence
+
+
+_MODULES = {}
+
+
+def game_modules(pid, max_age=30.0):
+    """The game's 32-bit modules, cached per pid for max_age seconds (plugins do not load mid-game)."""
+    import time
+    now = time.monotonic()
+    hit = _MODULES.get(pid)
+    if hit and now - hit[0] < max_age:
+        return hit[1]
+    with GameProcess(pid) as proc:
+        mods = proc.modules()
+    _MODULES.clear()
+    _MODULES[pid] = (now, mods)
+    return mods
 
 
 class GameProcess:
@@ -182,6 +215,98 @@ class GameProcess:
                 kernel32.ResumeThread(thread)
         finally:
             kernel32.CloseHandle(thread)
+
+    # ------------------------------------------------------------------ bridge core (fnv_debug, W2)
+    def suspend_all(self, keep=()):
+        """Suspend every thread of the process except those in keep. Returns the ids that were suspended; a
+        thread that cannot be opened or suspended is left alone (it is not in the result)."""
+        done = []
+        for tid in self.threads():
+            if tid in keep:
+                continue
+            thread = kernel32.OpenThread(THREAD_SUSPEND_RESUME, False, tid)
+            if not thread:
+                continue
+            try:
+                if kernel32.Wow64SuspendThread(thread) != WOW64_THREAD_FAILED:
+                    done.append(tid)
+            finally:
+                kernel32.CloseHandle(thread)
+        return done
+
+    def resume_all(self, tids):
+        """Undo suspend_all for these ids (one resume each). Returns the ids that were resumed."""
+        done = []
+        for tid in tids:
+            thread = kernel32.OpenThread(THREAD_SUSPEND_RESUME, False, tid)
+            if not thread:
+                continue
+            try:
+                if kernel32.ResumeThread(thread) != WOW64_THREAD_FAILED:
+                    done.append(tid)
+            finally:
+                kernel32.CloseHandle(thread)
+        return done
+
+    def get_context(self, tid, flags=WOW64_CONTEXT_DEBUGGER):
+        """Raw WOW64 CONTEXT (WOW64_CONTEXT_SIZE bytes) of a thread. The thread is suspended only while the context
+        is read. Raises ProcMemError when the thread cannot be read."""
+        thread = kernel32.OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, False, tid)
+        if not thread:
+            raise ProcMemError('THREAD_UNREADABLE', 'Cannot open thread %d: error %d' % (tid, ctypes.get_last_error()))
+        try:
+            if kernel32.Wow64SuspendThread(thread) == WOW64_THREAD_FAILED:
+                raise ProcMemError('THREAD_UNREADABLE', 'Cannot suspend thread %d: error %d' % (tid, ctypes.get_last_error()))
+            try:
+                buffer = ctypes.create_string_buffer(WOW64_CONTEXT_SIZE)
+                struct.pack_into('<I', buffer, 0, flags)
+                if not kernel32.Wow64GetThreadContext(thread, buffer):
+                    raise ProcMemError('THREAD_UNREADABLE', 'Wow64GetThreadContext failed for thread %d: error %d'
+                                       % (tid, ctypes.get_last_error()))
+                return buffer.raw
+            finally:
+                kernel32.ResumeThread(thread)
+        finally:
+            kernel32.CloseHandle(thread)
+
+    def set_context(self, tid, raw):
+        """Write a raw WOW64 CONTEXT to a thread (the flags inside it say which parts apply). The thread is suspended
+        only while the context is written."""
+        if len(raw) != WOW64_CONTEXT_SIZE:
+            raise ProcMemError('CONTEXT_SIZE', 'A WOW64 CONTEXT is %d bytes, got %d' % (WOW64_CONTEXT_SIZE, len(raw)))
+        thread = kernel32.OpenThread(THREAD_SUSPEND_RESUME | THREAD_SET_CONTEXT | THREAD_GET_CONTEXT
+                                     | THREAD_QUERY_INFORMATION, False, tid)
+        if not thread:
+            raise ProcMemError('THREAD_UNREADABLE', 'Cannot open thread %d: error %d' % (tid, ctypes.get_last_error()))
+        try:
+            if kernel32.Wow64SuspendThread(thread) == WOW64_THREAD_FAILED:
+                raise ProcMemError('THREAD_UNREADABLE', 'Cannot suspend thread %d: error %d' % (tid, ctypes.get_last_error()))
+            try:
+                buffer = ctypes.create_string_buffer(bytes(raw), WOW64_CONTEXT_SIZE)
+                if not kernel32.Wow64SetThreadContext(thread, buffer):
+                    raise ProcMemError('CONTEXT_UNWRITABLE', 'Wow64SetThreadContext failed for thread %d: error %d'
+                                       % (tid, ctypes.get_last_error()))
+                return True
+            finally:
+                kernel32.ResumeThread(thread)
+        finally:
+            kernel32.CloseHandle(thread)
+
+    def minidump(self, path, dump_type=MINIDUMP_DEFAULT):
+        """Write a minidump of the process with MiniDumpWriteDump (dbghelp.dll). Returns the file size in bytes."""
+        with open(path, 'wb') as f:
+            handle = msvcrt.get_osfhandle(f.fileno())
+            if not dbghelp.MiniDumpWriteDump(self.handle, self.pid, handle, dump_type, None, None, None):
+                raise ProcMemError('DUMP_FAILED', 'MiniDumpWriteDump failed for pid %d: error %d'
+                                   % (self.pid, ctypes.get_last_error()))
+        return os.path.getsize(path)
+
+
+def parse_context(raw):
+    """Registers of a raw WOW64 CONTEXT: {'eip', 'esp', 'ebp', 'eax', ..., 'eflags', 'dr0'..'dr7'} as ints."""
+    if len(raw) < WOW64_CONTEXT_SIZE:
+        raise ProcMemError('CONTEXT_SIZE', 'A WOW64 CONTEXT is %d bytes, got %d' % (WOW64_CONTEXT_SIZE, len(raw)))
+    return {name: struct.unpack_from('<I', raw, offset)[0] for name, offset in CONTEXT_OFFSETS.items()}
 
 
 def module_at(modules, address):

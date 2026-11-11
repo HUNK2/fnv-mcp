@@ -4,11 +4,18 @@ The engine calls its warning function from about 845 places; the retail body is 
 [Logging] EnableGameErrorLog=1 is set in Data\\NVSE\\nvse_config.ini (Hooks_Logging.cpp, Hook_Logging_Init). It
 then writes one line per warning, the formatted text plus a newline, with no time or caller, to
 falloutnv_error.log (engine) and falloutnv_havok.log (Havok) in the game folder. The game rewrites both files at
-each start unless [Logging] bAppendErrorLogs=1. The game holds them open, so `clear` only remembers a mark."""
+each start unless [Logging] bAppendErrorLogs=1. The game holds them open, so `clear` only remembers a mark.
+
+Live capture (W2 stage): the game opens both files with no read sharing, so nothing can read them while it runs
+(seen live). `capture` puts a record hook on Warning 0x005B5E40 itself, chained behind xNVSE's jump when it is
+there: each call's eight stack words, caller and thread go to a ring, and the bridge formats the printf text with
+the format string read from the game (static strings). %s arguments are read when the capture is read: a string in a
+temporary buffer may have changed by then. read and summary use the capture while the files are locked."""
 import hashlib
 import json
 import re
 import shutil
+import struct
 import time
 from collections import Counter
 from pathlib import Path
@@ -23,6 +30,162 @@ PLUGIN_NAME = re.compile(r'[^\s\\/:*?"<>|,;=\'()]+\.(?:esp|esm)\b', re.I)
 HEX_ID = re.compile(r'\b(?:0x[0-9A-Fa-f]+|(?=[0-9A-Fa-f]*\d)[0-9A-Fa-f]{8})\b')
 NUMBER = re.compile(r'\b\d+(?:\.\d+)?\b')
 TAIL = 256
+WARNING_FN = 0x005B5E40        # int __cdecl Warning(const char *fmt, ...): an empty stub in retail, hooked by xNVSE
+CAPTURE_LABEL = 'warnings_live'
+CAPTURE_ARGS = 8
+SNAP_ARG, SNAP_LEN = 1, 96     # the bytes behind stack word 1 are copied at the call: usually the first %s
+SPEC = re.compile(r'%([-+ #0]*)(\*|\d+)?(?:\.(\*|\d+))?(hh|h|ll|l|I64|I32|L)?([diouxXcsSpfFeEgGn%])')
+
+
+def format_printf(fmt, words, read_str):
+    """C printf over 32-bit stack words: (text, words used). read_str(pointer) -> str or None. Missing arguments
+    print as <?>; a 64-bit integer or a double takes two words."""
+    out, pos, i = [], 0, 0
+
+    def take(n=1):
+        nonlocal i
+        if i + n > len(words):
+            i = len(words)
+            return None
+        got = words[i:i + n]
+        i += n
+        return got
+
+    for m in SPEC.finditer(fmt):
+        out.append(fmt[pos:m.start()])
+        pos = m.end()
+        flags, width, prec, length, conv = m.groups()
+        if conv == '%':
+            out.append('%')
+            continue
+        if width == '*':
+            w = take()
+            width = str(w[0]) if w else ''
+        if prec == '*':
+            pw = take()
+            prec = str(pw[0]) if pw else None
+        spec = '%' + (flags or '') + (width or '') + ('.' + prec if prec is not None else '')
+        if conv in 'fFeEgG':
+            got = take(2)
+            out.append((spec + conv) % struct.unpack('<d', struct.pack('<II', *got))[0] if got else '<?>')
+            continue
+        wide = length in ('ll', 'I64')
+        got = take(2 if wide else 1)
+        if got is None:
+            out.append('<?>')
+            continue
+        value = got[0] | (got[1] << 32) if wide else got[0]
+        bits = 64 if wide else 32
+        if conv in 'sS':
+            text = read_str(value) if value else '(null)'
+            out.append((spec + 's') % (text if text is not None else '<?0x%08X>' % value))
+        elif conv == 'c':
+            out.append(chr(value & 0xFF))
+        elif conv in 'di':
+            out.append((spec + 'd') % (value - (1 << bits) if value >= 1 << (bits - 1) else value))
+        elif conv == 'p':
+            out.append('%08X' % value)
+        elif conv == 'n':
+            continue
+        else:
+            out.append((spec + conv) % value)
+    out.append(fmt[pos:])
+    return ''.join(out), i
+
+
+class WarningCapture:
+    """The live hook on Warning (needs the engine companion)."""
+
+    def __init__(self, live):
+        self.live = live
+        self.since = 0
+        self._strings_cache = {}
+
+    def hook(self):
+        for h in self.live.link.one('hooks').get('hooks', []):
+            if h.get('label') == CAPTURE_LABEL and h.get('stolen'):
+                return h
+        return None
+
+    def start(self):
+        if self.hook():
+            return {'capturing': True, 'started': False, 'note': 'Already capturing.'}
+        from .fnv_deep import decode_prologue
+        from .fnv_link import hexs, word
+        raw = self.live.reads([(WARNING_FN, 24)])[0]
+        if raw is None:
+            raise ValueError('Cannot read Warning 0x%08X' % WARNING_FN)
+        stolen, relocs = decode_prologue(raw)
+        result = self.live.link.one('hook', word(WARNING_FN), word(stolen), ','.join('%x' % r for r in relocs) or '-',
+                                    word(2), '0', '0', '0', word(CAPTURE_ARGS), '0', '0', word(2 + SNAP_ARG),
+                                    word(SNAP_LEN), hexs(CAPTURE_LABEL))
+        if not result.get('ok'):
+            raise ValueError('The companion refused the warning hook: %s' % result.get('error'))
+        h = result['hook']
+        self.since = int(self.live.u32s([int(h['seqAddress'], 16)])[0] or 0)
+        return {'capturing': True, 'started': True, 'chainedBehindXnvse': raw[0] == 0xE9,
+                'how': 'record hook on Warning 0x%08X (every thread), %d stack words per call'
+                       % (WARNING_FN, CAPTURE_ARGS)}
+
+    def stop(self):
+        h = self.hook()
+        if h:
+            from .fnv_link import word
+            self.live.link.one('unhook', word(h['id']))
+        return {'capturing': False, 'stopped': bool(h)}
+
+    def _read_strings(self, pointers, fresh=False):
+        want = sorted({p for p in pointers if p and p >= 0x10000 and (fresh or p not in self._strings_cache)})
+        if want:
+            for p, raw in zip(want, self.live.reads([(p, 256) for p in want])):
+                self._strings_cache[p] = None if raw is None else raw.split(b'\0', 1)[0].decode('latin-1')
+        return self._strings_cache
+
+    def rows(self, since=None):
+        """(rows, lost) of the captured calls after since (the capture's start by default); None when off."""
+        h = self.hook()
+        if h is None:
+            return None
+        deep = getattr(self.live, 'deep', None)
+        if deep is None:
+            from .fnv_deep import DeepTools
+            deep = DeepTools(self.live)
+        _, records, lost = deep.records(h, since=self.since if since is None else since)
+        parsed = []
+        for r in records:
+            args = list(r[12:12 + CAPTURE_ARGS])
+            # A few callers pass a small number before the format (the leading-int quirk).
+            first = 1 if len(args) > 1 and args[0] < 0xFFFF else 0
+            snap = struct.pack('<24I', *r[24:48]).split(b'\0', 1)
+            # The copy is a whole string only when it ended inside the 96 bytes.
+            snapped = (args[SNAP_ARG], snap[0].decode('latin-1')) if len(snap) > 1 else None
+            parsed.append((r, args[first], args[first + 1:], snapped))
+        formats = self._read_strings([fmt for _, fmt, _, _ in parsed])
+        values = [v for _, fmt, vals, _ in parsed if '%s' in (formats.get(fmt) or '') or '%S' in (formats.get(fmt) or '')
+                  for v in vals]
+        self._read_strings(values, fresh=True)
+        rows = []
+        for r, fmt_ptr, vals, snapped in parsed:
+            fmt = formats.get(fmt_ptr)
+            if fmt is None:
+                text = '<format at 0x%08X unreadable>' % fmt_ptr
+            else:
+                def read_str(p, snapped=snapped):
+                    if snapped and p == snapped[0]:
+                        return snapped[1]          # copied at the call
+                    return self._strings_cache.get(p)
+                text, _ = format_printf(fmt, vals, read_str)
+            text = text.rstrip('\r\n')
+            rows.append({'seq': r[0], 'source': 'engine', 'category': category_of(text), 'text': text,
+                         'caller': '0x%08X' % r[5], 'thread': r[2], 'live': True})
+        try:
+            engine = self.live.engine()
+            names = {c: (engine.summary(int(c, 16)) or {}).get('name') for c in sorted({r['caller'] for r in rows})[:60]}
+            for row in rows:
+                row['callerName'] = names.get(row['caller'])
+        except Exception:  # noqa: BLE001 - names are extra
+            pass
+        return rows, lost
 
 
 def category_of(text):
@@ -100,16 +263,26 @@ def set_setting(text, value, section=SECTION, key=KEY):
     return text + '[%s]%s%s=%s%s' % (section, eol, key, value, eol)
 
 
+def for_live(live):
+    """Warnings with the live capture that belongs to this game connection."""
+    capture = getattr(live, 'warning_capture', None)
+    if capture is None:
+        capture = WarningCapture(live)
+        live.warning_capture = capture
+    return Warnings.from_game(live.game, capture)
+
+
 class Warnings:
-    def __init__(self, game_root, mo2_root, profile, state_dir):
+    def __init__(self, game_root, mo2_root, profile, state_dir, capture=None):
+        self.capture = capture
         self.game_root = Path(game_root)
         self.mo2_root = Path(mo2_root) if mo2_root else None
         self.profile = profile
         self.state = Path(state_dir)
 
     @classmethod
-    def from_game(cls, game):
-        return cls(game.game_root, game.mo2_root, game.profile, game.state)
+    def from_game(cls, game, capture=None):
+        return cls(game.game_root, game.mo2_root, game.profile, game.state, capture)
 
     # ------------------------------------------------------------ the config file
     def enabled_mods(self):
@@ -167,7 +340,11 @@ class Warnings:
         path = self.log_path(source)
         if not path.exists():
             return {'path': str(path), 'exists': False, 'lines': [], 'end': 0, 'data': b''}
-        data = path.read_bytes()
+        try:
+            data = path.read_bytes()
+        except PermissionError:
+            # The running game holds the file open with no read sharing (seen live).
+            return {'path': str(path), 'exists': True, 'locked': True, 'lines': [], 'end': 0, 'data': b''}
         data = data[:data.rfind(b'\n') + 1]
         lines = [l.rstrip(b'\r').decode('utf-8', errors='replace') for l in data.split(b'\n')[:-1]]
         return {'path': str(path), 'exists': True, 'lines': lines, 'end': len(data), 'data': data}
@@ -196,6 +373,21 @@ class Warnings:
         rows, notes, files = [], [], {}
         for source in sources or SOURCES:
             loaded = self.load(source)
+            if loaded.get('locked'):
+                live = None
+                if self.capture is not None and source == 'engine':
+                    live = self.capture.rows(since if isinstance(since, int) else None)
+                if live is not None:
+                    got, lost = live
+                    rows += got
+                    files[source] = {'path': loaded['path'], 'exists': True, 'locked': True, 'lines': len(got),
+                                     'from': 'live capture', 'lost': lost}
+                    continue
+                files[source] = {'path': loaded['path'], 'exists': True, 'locked': True, 'lines': 0, 'from': 0}
+                notes.append('the %s log is locked by the running game: %s' % (
+                    source, 'start fnv_warnings capture to see engine warnings live' if source == 'engine' else
+                    'Havok lines can be read after the game quits'))
+                continue
             first, note = self.start_of(source, loaded, since, marks)
             if note:
                 notes.append(note)
@@ -318,6 +510,13 @@ class Warnings:
         skipped = {}
         for source in SOURCES:
             loaded = self.load(source)
+            if loaded.get('locked'):
+                skipped[source] = 0
+                if source == 'engine' and self.capture is not None:
+                    h = self.capture.hook()
+                    if h:   # the mark of the live capture: read starts after the calls captured so far
+                        self.capture.since = int(self.capture.live.u32s([int(h['seqAddress'], 16)])[0] or 0)
+                continue
             marks[source] = {'path': loaded['path'], 'offset': loaded['end'], 'lines': len(loaded['lines']),
                              'tail': self.tail_hash(loaded['data'], loaded['end'])}
             skipped[source] = len(loaded['lines'])
@@ -327,10 +526,26 @@ class Warnings:
                        'The files stay as they are (the game holds them open); read now starts at the mark.',
                        skipped=skipped, next='Do the action, then call fnv_warnings read.')
 
+    def capture_run(self, mode):
+        if self.capture is None:
+            raise ValueError('capture needs the running game and its engine companion')
+        if mode == 'start':
+            out = self.capture.start()
+        elif mode == 'stop':
+            out = self.capture.stop()
+        elif mode == 'status':
+            h = self.capture.hook()
+            out = {'capturing': bool(h), 'calls': (h or {}).get('calls')}
+        else:
+            raise ValueError('mode is start, stop or status')
+        return verdict('Live warning capture %s' % ('on' if out.get('capturing') else 'off'),
+                       'read and summary use it while the game holds the log files locked.', **out)
+
     def run(self, action, **a):
         table = {
             'status': self.status, 'enable': self.enable, 'clear': self.clear,
             'read': lambda: self.read(a.get('since', 'mark'), a.get('category'), a.get('text'), a.get('plugin'),
                                       a.get('source'), a.get('limit', 100), a.get('offset', 0), a.get('brief', False)),
-            'summary': lambda: self.summary(a.get('since', 'mark'), a.get('top', 10))}
+            'summary': lambda: self.summary(a.get('since', 'mark'), a.get('top', 10)),
+            'capture': lambda: self.capture_run(a.get('mode') or 'start')}
         return dispatch(action, table)

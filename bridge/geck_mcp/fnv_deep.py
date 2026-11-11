@@ -20,7 +20,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from . import fnv_engine, fnv_procmem
+from . import fnv_engine, fnv_procmem, fnv_symdb
 from .fnv_facts import SCRIPT_BLOCKS
 from .fnv_link import hexs, word
 from .fnv_live import LiveError, _fid, _num
@@ -720,7 +720,7 @@ class DeepTools:
         if data is None:
             out['error'] = 'unreadable at 0x%08X' % address
             return out
-        if text.endswith(('*', '&')):
+        if fnv_symdb.is_pointer_text(text):
             out['value'] = '0x%08X' % struct.unpack('<I', data)[0] if size == 4 else None
         elif text in ('float', 'double') and size == (4 if text == 'float' else 8):
             out['value'] = struct.unpack('<f' if size == 4 else '<d', data)[0]

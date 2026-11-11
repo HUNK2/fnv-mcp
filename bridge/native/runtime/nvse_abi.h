@@ -46,6 +46,15 @@ typedef struct {
     void *(*CompileScript)(const char *);
     void *(*CompileExpression)(const char *);
 } ScriptAPI;
+/* Event manager (kInterface_EventManager = 8). Only the pointers this companion calls are typed; the others
+ * are placeholders so the offsets match PluginAPI.h (NVSEEventManagerInterface, commit 0ccd23a). */
+typedef void (*NativeEventHandler)(void *thisObj, void *parameters);
+typedef struct {
+    void *RegisterEvent, *DispatchEvent, *DispatchEventAlt;
+    bool (*SetNativeEventHandler)(const char *eventName, NativeEventHandler func);
+    bool (*RemoveNativeEventHandler)(const char *eventName, NativeEventHandler func);
+} EventManagerAPI;
+_Static_assert(offsetof(EventManagerAPI, SetNativeEventHandler)==12, "event manager ABI");
 enum { MSG_EXIT=1, MSG_MENU=2, MSG_PRELOAD=6, MSG_EXIT_CONSOLE=7,
        MSG_POSTLOAD=8, MSG_NEWGAME=14, MSG_DEFERRED=18, MSG_LOOP=20 };
 _Static_assert(sizeof(void *) == 4, "FNV companion must be 32-bit");

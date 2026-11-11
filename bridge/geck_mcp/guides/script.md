@@ -22,10 +22,17 @@ tool name below exists; they do not play the game.
 5. **Which lines run?** Call `fnv_script_trace` with the script and its source text. It records each statement that
    runs, whether it succeeded and which reference it ran on, and lists the lines that did not run. Read it again
    after the event you wait for: later calls return only new statements. Call it with action `stop` when done.
+   To stop the game on one statement, call `fnv_script_debug` with break, the script and the line; status then shows
+   the reference and the variables (vars), eval runs a snippet on it, and continue or step line go on. A statement
+   reached during save or load is passed on and counted. `fnv_script_log` with commands (mode start, then read) keeps
+   the statements of every script in a ring without stopping the game; events shows the block flags as they are
+   raised.
 6. **Does it run often enough, or too much?** `fnv_script_profile` shows calls and time per script. A script
    with zero calls never runs; one with a high cost per frame is a performance problem.
 7. **What are the values?** `fnv_vars` shows the script variables of a quest or reference by name. `fnv_run_script`
-   evaluates an expression in the game. `fnv_watch` samples values over time to see when one changes.
+   evaluates an expression in the game. `fnv_watch` samples values over time to see when one changes. To find who
+   changed a field or a reference, call `fnv_blame` (field with the address path, or ref) and then report: each hit
+   names the script line or the engine function that wrote it.
 8. **What does a command really do?** `fnv_script_explain` shows what the commands of a line do in the engine.
    `fnv_command_info` gives the parameters of one command.
 9. **Try a fix without a restart.** `fnv_script_hot_swap` replaces the running script with new source and keeps the
@@ -61,8 +68,3 @@ tool name below exists; they do not play the game.
 4. Write the case as a YAML scenario and run it with `fnv_test_run`: it must pass from a fresh start
    (use a test save from `fnv_test_save`). Run `fnv_test_run_all` to see that other tests still pass.
 5. `fnv_warnings` read shows no new SCRIPTS warning that names your plugin.
-
-## Planned (Plan 2, not available yet)
-
-`fnv_script_log` (history of script events), `fnv_script_debug` (breakpoints in scripts), `fnv_blame` (who changed a
-variable).

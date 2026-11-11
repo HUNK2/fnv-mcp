@@ -445,6 +445,14 @@ class SymbolDb:
         return out
 
 
+def is_pointer_text(text):
+    """True for a pointer or reference type spelling, also with trailing qualifiers ('T * const')."""
+    words = (text or '').split()
+    while words and words[-1] in ('const', 'volatile', 'unaligned'):
+        words.pop()
+    return bool(words) and words[-1].endswith(('*', '&'))
+
+
 def _signed(value):
     text = '%d' % abs(value) if abs(value) < 10 else '0x%X' % abs(value)
     return ('-' if value < 0 else '+') + text

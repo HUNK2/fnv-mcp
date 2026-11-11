@@ -22,6 +22,7 @@ A run launches the game when needed, applies `start`, runs the steps and returns
 When the game dies, the report carries the crash doctor's diagnosis and the game is relaunched.
 Files are a YAML subset (block mappings and lists, flow {} and [], quoted or plain scalars, comments) or JSON.
 """
+import copy
 import json
 import math
 import re
@@ -29,8 +30,18 @@ import time
 from pathlib import Path
 
 from . import fnv_crash, fnv_link
+from .fnv_inject import DETERMINISTIC_FPS, DETERMINISTIC_SEED, shared_time
 from .fnv_game import GameError, game_processes
 from .fnv_link import LinkError
+
+
+SCENARIO_KEYS = {'name', 'start', 'plugins', 'plugin', 'steps', 'setup', 'teardown', 'restart',
+                 'continue_on_failure', 'relaunch_on_crash', 'timeout', 'description', 'tags',
+                 'allow_menus', 'guard', 'trace_script', 'deterministic', 'repeat', 'on_crash'}
+# Step keys not available in a scenario: refused at load, not silently skipped. A breakpoint or a function trace stops
+# the main thread, which the scenario runner itself needs to drive the next step; use fnv_debug / fnv_flow directly.
+NOT_AVAILABLE_YET = {'break', 'flow'}
+PLAY_CHECKS = {'goto': 'arrived', 'talk': 'dialogue', 'look_at': 'onTarget'}
 
 
 class ScenarioError(Exception):
@@ -280,34 +291,80 @@ class ScenarioRunner:
         return agent
 
     # ------------------------------------------------------------ loading
-    def load(self, path=None, text=None):
-        if text is None:
-            p = Path(path)
-            if not p.is_file():
-                tests = getattr(self.live.project.fnv, 'tests_dir', None)
-                if tests and (Path(tests) / path).is_file():
-                    p = Path(tests) / path
-                else:
-                    raise ScenarioError('NOT_FOUND', 'No scenario file %s' % path)
-            text = p.read_text(encoding='utf-8')
-            source = str(p)
-        else:
+    def load(self, path=None, text=None, data=None):
+        if data is not None:
+            data = copy.deepcopy(data)
             source = '<inline>'
-        data = parse_yaml(text)
+        else:
+            if text is None:
+                p = Path(path)
+                if not p.is_file():
+                    tests = getattr(self.live.project.fnv, 'tests_dir', None)
+                    if tests and (Path(tests) / path).is_file():
+                        p = Path(tests) / path
+                    else:
+                        raise ScenarioError('NOT_FOUND', 'No scenario file %s' % path)
+                text = p.read_text(encoding='utf-8')
+                source = str(p)
+            else:
+                source = '<inline>'
+            data = parse_yaml(text)
         if not isinstance(data, dict) or not isinstance(data.get('steps'), list):
             raise ScenarioError('BAD_SCENARIO', 'A scenario is a mapping with a "steps" list')
-        unknown = set(data) - {'name', 'start', 'plugins', 'plugin', 'steps', 'setup', 'teardown', 'restart',
-                               'continue_on_failure', 'relaunch_on_crash', 'timeout', 'description', 'tags',
-                               'allow_menus', 'guard', 'trace_script'}
+        unknown = set(data) - SCENARIO_KEYS
         if unknown:
             raise ScenarioError('BAD_SCENARIO', 'Unknown scenario keys: %s' % ', '.join(sorted(unknown)))
+        if data.get('on_crash', 'report') == 'hold':
+            raise ScenarioError('NOT_AVAILABLE_YET', 'on_crash: hold is not available yet; use on_crash: report (the '
+                                'default) or relaunch_on_crash')
+        if data.get('on_crash', 'report') not in ('report', 'hold'):
+            raise ScenarioError('BAD_SCENARIO', 'on_crash is report')
+        repeat = data.get('repeat', 1)
+        if not isinstance(repeat, int) or isinstance(repeat, bool) or not 1 <= repeat <= 20:
+            raise ScenarioError('BAD_SCENARIO', 'repeat is a whole number from 1 to 20')
+        for phase in ('setup', 'steps', 'teardown'):
+            for number, step in enumerate(data.get(phase) or [], 1):
+                if isinstance(step, dict):
+                    later = sorted(k for k in step if k in NOT_AVAILABLE_YET)
+                    if later:
+                        raise ScenarioError('NOT_AVAILABLE_YET', '%s step %d uses %s, which is not available yet '
+                                            '(planned; see fnv_guide)' % (phase, number, ', '.join(later)))
         data.setdefault('name', Path(source).stem if source != '<inline>' else 'inline scenario')
         data['_source'] = source
         return data
 
     # ------------------------------------------------------------ run
-    def run(self, path=None, text=None, relaunch=True):
-        scenario = self.load(path, text)
+    def run(self, path=None, text=None, relaunch=True, data=None):
+        scenario = self.load(path, text, data)
+        repeat = int(scenario.get('repeat', 1))
+        if repeat <= 1:
+            return self._run_once(scenario, relaunch)
+        # Each run starts from the scenario's start (prepare reloads it), so the runs compare like with like.
+        runs = [self._run_once(scenario, relaunch) for _ in range(repeat)]
+        report = {'name': scenario['name'], 'source': scenario['_source'], 'repeat': repeat,
+                  'passed': all(r['passed'] for r in runs), 'runs': [r['summary'] for r in runs],
+                  'comparison': self._compare(runs), 'failures': [f for r in runs for f in r['failures']][:20],
+                  'summary': '%s: %d runs, %s' % (scenario['name'], repeat,
+                                                  'all passed' if all(r['passed'] for r in runs) else 'some failed')}
+        report['summary'] += '' if report['comparison']['identical'] else ', steps differ'
+        self.save_report(report)
+        return report
+
+    def _compare(self, runs):
+        """The steps whose result (passed, actual value) differs between runs. Identical runs are the goal."""
+        differences = []
+        for i in range(max(len(r['steps']) for r in runs)):
+            rows = [r['steps'][i] if i < len(r['steps']) else None for r in runs]
+            signature = [None if row is None else (row.get('passed'), json.dumps(row.get('actual'), sort_keys=True,
+                                                                                  default=str)) for row in rows]
+            if len(set(signature)) > 1:
+                first = next(row for row in rows if row is not None)
+                differences.append({'step': i + 1, 'action': first.get('action'),
+                                    'passedPerRun': [None if row is None else row.get('passed') for row in rows],
+                                    'actualPerRun': [None if row is None else row.get('actual') for row in rows]})
+        return {'runs': len(runs), 'identical': not differences, 'differences': differences[:20]}
+
+    def _run_once(self, scenario, relaunch):
         started = time.time()
         report = {'name': scenario['name'], 'source': scenario['_source'], 'passed': False, 'steps': [],
                   'setup': [], 'teardown': [], 'failures': [], 'crash': None, 'relaunched': None}
@@ -315,8 +372,11 @@ class ScenarioRunner:
         self.vars = {}
         self._marker = None
         traced = None
+        deterministic = bool(scenario.get('deterministic'))
         try:
             report['game'] = self.prepare(scenario)
+            if deterministic:
+                report['deterministic'] = self._deterministic_on()
             guard = scenario.get('guard') or {}
             if not scenario.get('allow_menus'):
                 # The game opens its pause menu when its window loses focus; keep the world running while the
@@ -374,6 +434,8 @@ class ScenarioRunner:
                     break
                 result['step'] = number
                 report['teardown'].append(result)
+        if deterministic:
+            self._settle()
         if not report['crash']:
             self.game.stop_task(unpause)
         if not report['passed'] and not report['crash'] and not (report.get('debug') or {}).get('screenshot'):
@@ -469,9 +531,9 @@ class ScenarioRunner:
     # ------------------------------------------------------------ steps
     def step(self, spec, marker):
         started = time.monotonic()
-        if not isinstance(spec, dict) or len([k for k in spec if k not in ('note', 'name')]) != 1:
+        if not isinstance(spec, dict) or len([k for k in spec if k not in ('note', 'name', 'as')]) != 1:
             return {'passed': False, 'reason': 'each step is a mapping with one action key', 'spec': spec}
-        action = next(k for k in spec if k not in ('note', 'name'))
+        action = next(k for k in spec if k not in ('note', 'name', 'as'))
         arg = self._subst(spec[action])
         try:
             result = self._dispatch(action, arg, marker)
@@ -488,6 +550,9 @@ class ScenarioRunner:
         result.update(action=action, ms=round((time.monotonic() - started) * 1000))
         if spec.get('name'):
             result['name'] = spec['name']
+        if spec.get('as'):
+            self.vars[str(spec['as'])] = result.get('actual')
+            result['as'] = str(spec['as'])
         return result
 
     def _dead(self, error):
@@ -563,8 +628,25 @@ class ScenarioRunner:
         if action == 'actor':
             out = live.actor_control(arg['ref'], arg['action'], arg.get('target'), arg.get('value'))
             return {'passed': out.get('accepted', True) is not False, 'output': out.get('output')}
+        if action == 'step':
+            # {frames: N, fps: F}: exact frames, held between them; fps (optional) sets the fixed frame step first
+            spec = arg if isinstance(arg, dict) else {'frames': arg}
+            control, _ = shared_time(live)
+            out = control.step(int(spec['frames']), spec.get('fps'))
+            advanced = out.get('advanced')
+            passed = advanced is None or advanced == int(spec['frames'])
+            return {'passed': passed, 'actual': {k: out.get(k) for k in ('frameBefore', 'frameAfter', 'advanced', 'held')},
+                    'reason': None if passed else 'stepped %s frames, asked for %s' % (advanced, spec['frames'])}
         if action == 'input':
-            out = live.input(arg['action'], arg.get('control'), arg.get('key'), arg.get('duration_ms', 0), arg.get('target'))
+            if any(k in arg for k in ('frames', 'button', 'mouse')):
+                # frame-exact input through the injector (fnv_inject); action defaults to tap
+                mouse = tuple(arg['mouse']) if 'mouse' in arg else None
+                out = live.input(arg.get('action', 'tap'), arg.get('control'), arg.get('key'), 0, arg.get('target'),
+                                 frames=int(arg['frames']) if 'frames' in arg else None,
+                                 button=arg.get('button'), mouse=mouse)
+            else:
+                out = live.input(arg['action'], arg.get('control'), arg.get('key'), arg.get('duration_ms', 0),
+                                 arg.get('target'))
             return {'passed': out.get('accepted', True) is not False, 'actual': out}
         if action == 'move':
             if isinstance(arg, str):
@@ -591,16 +673,50 @@ class ScenarioRunner:
             return {'passed': True, 'actual': out}
         if action == 'snapshot':
             return {'passed': True, 'actual': snapshot(live, arg.get('items'), arg.get('name'))}
+        if action in ('photo', 'play', 'ui'):
+            return self._w3_step(action, arg)
         agent_result = self._agent_step(action, arg)
         if agent_result is not None:
             return agent_result
         raise ScenarioError('UNKNOWN_ACTION', 'Unknown step %r (run, script, wait, expect, set, actor, input, move, '
-                            'mem_write, call, revert_all, quit, snapshot, spawn, save, load, menu, screenshot, watch, '
+                            'mem_write, call, revert_all, quit, snapshot, step, photo, play, ui, spawn, save, load, menu, screenshot, watch, '
                             'trace, time, rng)' % action)
+
+    def _w3_step(self, action, arg):
+        """The W3 eyes and hands as steps: photo {action, ref, angles, ...}; play {action, ref | position, ...};
+        ui {action, label, target, hours, ...}. A play step passes when the action did what it says: goto arrived,
+        talk opened a dialogue, look_at put the target in the crosshair, activate pressed with no refusal."""
+        if isinstance(arg, str):
+            arg = {'action': arg}
+        arg = dict(arg)
+        if action == 'photo':
+            eyes = getattr(self.live, 'eyes', None)
+            if eyes is None:
+                raise ScenarioError('NOT_WIRED', 'photo needs the eyes tools (fnv_live_tools)')
+            out = eyes.photo(arg.pop('action', 'view'), **arg)
+            return {'passed': True, 'actual': out}
+        hands = getattr(self.live, 'hands', None)
+        if hands is None:
+            raise ScenarioError('NOT_WIRED', '%s needs the hands tools (fnv_live_tools)' % action)
+        if action == 'ui':
+            out = hands.ui_do(arg.pop('action'), **arg)
+            return {'passed': True, 'actual': out}
+        kind = arg.pop('action')
+        out = hands.play(kind, **arg)
+        if kind == 'activate':
+            passed = bool(out.get('pressed')) and not out.get('refused')
+        elif kind in PLAY_CHECKS:
+            passed = bool(out.get(PLAY_CHECKS[kind]))
+        else:
+            passed = out.get('accepted', True) is not False
+        return {'passed': passed, 'actual': out, 'reason': None if passed else 'play %s did not succeed: %s' % (
+            kind, out.get('stopped') or out.get('refused') or out.get(PLAY_CHECKS.get(kind, 'accepted')))}
 
     def _wait(self, arg):
         if isinstance(arg, (int, float)):
             arg = {'seconds': arg}
+        if 'for' in arg:
+            return self._wait_for(arg)
         if 'seconds' in arg:
             time.sleep(min(float(arg['seconds']), 120))
             return {'passed': True}
@@ -622,6 +738,45 @@ class ScenarioRunner:
                 time.sleep(float(arg.get('poll', 0.2)))
             return {'passed': False, 'actual': last, 'reason': 'timed out after %ss waiting for %s' % (arg.get('timeout', 10), arg['until'])}
         raise ScenarioError('BAD_STEP', 'wait takes seconds, frames or until')
+
+    def _wait_for(self, arg):
+        """wait: {for: loaded} | {for: event_name} | {for: 'predicate text'}, with timeout seconds. A bare lowercase
+        word is an event type from the event ring (script_error, quest_stage, ...); anything else is a predicate."""
+        what = str(arg['for'])
+        timeout = float(arg.get('timeout', 60))
+        control, waiter = shared_time(self.live)
+        if what == 'loaded':
+            out = waiter.run(loaded=True, timeout_seconds=timeout)
+            return {'passed': True, 'actual': {'frame': out.get('frame')}}
+        if re.fullmatch(r'[a-z][a-z0-9_]*', what):
+            since = (self.live.link.events(0) or {}).get('seq', 0)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                events = (self.live.link.events(since) or {}).get('events', [])
+                hit = next((e for e in events if e.get('type') == what), None)
+                if hit:
+                    return {'passed': True, 'actual': hit}
+                since = max([since] + [e.get('seq', since) for e in events])
+                time.sleep(0.2)
+            return {'passed': False, 'reason': 'no %s event within %ss' % (what, timeout)}
+        out = waiter.run(predicate=self._expr(what), timeout_seconds=timeout)
+        return {'passed': bool(out.get('met')), 'actual': {'frame': out.get('frame'), 'frames': out.get('frames')}}
+
+    def _deterministic_on(self):
+        """A deterministic run: the frame step fixed at 60 fps and the random generator seeded."""
+        control, _ = shared_time(self.live)
+        control.fixed(DETERMINISTIC_FPS)
+        self.agent.rng(seed=DETERMINISTIC_SEED)
+        return {'fps': DETERMINISTIC_FPS, 'seed': DETERMINISTIC_SEED}
+
+    def _settle(self):
+        """Back to a running game: the fixed step off and the frame gate open (errors here are not test failures)."""
+        control, _ = shared_time(self.live)
+        for action in (lambda: control.fixed(0), control.release):
+            try:
+                action()
+            except Exception:
+                pass
 
     def _expect(self, arg, marker):
         live = self.live

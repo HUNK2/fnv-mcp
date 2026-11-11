@@ -1,0 +1,312 @@
+"""Call flow (Plan 2, W2): fnv_flow trace. Runs one function under single-step in the engine companion and maps the
+steps to decomp lines, with the values of its locals.
+
+Design: plan2/B-debug.md section 2; companion ops: docs/FNV-COMPANION-V2.md 8.2 (bp) and 8.4 (trace). The bridge arms a
+one-shot breakpoint at the function's first byte, waits for the game to call it, sends `resume <seq> trace`, then
+reads `trace read` pages until the companion says done. Locals are read with a log program: one load per local at
+its EBP offset (`reg.ebp.[off]:type`), so the trace entries carry the values in the order of `locals`.
+
+`call` (run the function ourselves under the trace) is not built: the companion ignores stops while it serves an
+engine call (8.2, serving_request), so a call made by this bridge cannot be traced. The helpers here are shared with
+fnv_blame and fnv_script_debug.
+"""
+import struct
+import time
+
+from . import fnv_symdb
+from .fnv_conv import ConvError, verdict
+from .fnv_debugger import Debugger
+from .fnv_deep import HookError, decode_prologue
+from .fnv_engine import EngineMapError
+from .fnv_link import hexs, word
+from .fnv_pred import compile_predicate
+
+MAX_TRACE = 200000
+DEFAULT_STEPS = 5000
+LOCAL_LIMIT = 16        # the companion's value stack is 16 deep
+ARM_WAIT = 20.0         # seconds to wait for the game to call the function
+RUN_WAIT = 60.0         # seconds to read the trace before it is reported as still running
+READ_PAGE = 2048
+HW_SLOTS = 4
+FLAG_ONCE = 4
+LOAD_CODES = {'u8': 'u8', 'i8': 'i8', 'u16': 'u16', 'i16': 'i16', 'u32': 'u32', 'i32': 'i32', 'f32': 'f32'}
+BITS = {'u8': 8, 'i8': 8, 'u16': 16, 'i16': 16, 'u32': 32, 'i32': 32}
+
+PRED_SLOT = 57   # predicate slot of the trace's when condition
+
+
+def hook_at(live, address, label, nargs, flags=0, filter_sel=0, filter_value=0):
+    """Install a companion hook at a function's entry under a label: the call the watch hooks and the debugger make.
+    Refuses when the target already carries a hook."""
+    for h in live.link.one('hooks').get('hooks', []):
+        # The companion keeps removed hooks in its list with stolen = 0: those no longer patch the function.
+        if h.get('stolen') and int(str(h.get('target')), 16) == address:
+            raise ConvError('ALREADY_HOOKED', 'The function at 0x%08X already carries a hook (%s). Next: remove it with '
+                            'fnv_hooks first.' % (address, h.get('label')), {'hook': h.get('label')})
+    raw = live.reads([(address, 24)])[0]
+    if raw is None:
+        raise ConvError('UNREADABLE', 'Cannot read the function at 0x%08X.' % address)
+    try:
+        stolen, relocs = decode_prologue(raw)
+    except HookError as e:
+        raise ConvError('HOOK_REFUSED', str(e))
+    result = live.link.one('hook', word(address), word(stolen), ','.join('%x' % r for r in relocs) or '-',
+                           word(flags), word(filter_sel), word(filter_value), '0', word(nargs), '0', '0', '0', '0',
+                           hexs(label))
+    if not result.get('ok'):
+        raise ConvError('HOOK_REFUSED', 'The companion refused the hook (%s).' % result.get('error'), result)
+    return result['hook']
+
+
+def engine_address(engine, name, expected):
+    """The address the engine map gives a name; refuses when it is missing or disagrees with a known address."""
+    try:
+        found = engine.resolve(name)
+    except (EngineMapError, KeyError, ValueError) as e:
+        raise ConvError('ENGINE_MAP_MISMATCH', '%s is not in the engine map (%s). Next: check the engine map before '
+                        'using this tool.' % (name, getattr(e, 'code', None) or e))
+    if found != expected:
+        raise ConvError('ENGINE_MAP_MISMATCH', '%s is at 0x%08X in the engine map, not the 0x%08X this tool expects. The '
+                        'tool and the map disagree: refresh the engine map before using it.' % (name, found, expected),
+                        {'mapped': found, 'expected': expected})
+    return found
+
+
+def local_code(local):
+    """Load type of a scalar local for the log program, or None (structs, arrays, doubles)."""
+    text = (local.get('type') or '').strip()
+    size = local.get('size')
+    if fnv_symdb.is_pointer_text(text):
+        return 'u32' if size in (None, 4) else None
+    if text == 'float' and size == 4:
+        return 'f32'
+    if size not in (1, 2, 4):
+        return None
+    unsigned = 'unsigned' in text or text.startswith(('uint', 'bool', 'size_t', 'u'))
+    code = {1: 'u8', 2: 'u16', 4: 'u32'}[size]
+    if not unsigned and size == 1 and 'char' in text:
+        return 'i8'
+    if not unsigned and size == 2 and 'short' in text:
+        return 'i16'
+    if not unsigned and size == 4 and text in ('int', 'long', 'signed int', 'long int'):
+        return 'i32'
+    return code
+
+
+def load_text(local, code):
+    """The predicate text that reads one local at its EBP offset (negative offsets as 0-N)."""
+    off = local['offset'] or 0
+    return 'reg.ebp.[0%+d]:%s' % (off, code)
+
+
+def scalar(raw, code):
+    """A companion value as the Python value of its load type (floats from their bit pattern)."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):        # trace and log entries carry the raw word as "0x%08x" (seen live)
+        raw = int(raw, 16) if raw.lower().startswith('0x') else (float(raw) if '.' in raw else int(raw))
+    if code == 'f32':
+        if isinstance(raw, float):
+            return raw
+        return struct.unpack('<f', struct.pack('<I', int(raw) & 0xFFFFFFFF))[0]
+    bits = BITS[code]
+    value = int(raw) & ((1 << bits) - 1)
+    if code.startswith('i') and value >> (bits - 1):
+        value -= 1 << bits
+    return value
+
+
+class FlowTools:
+    """fnv_flow: trace (and, later, call). Shares the debugger's breakpoint ids and stop reader."""
+
+    def __init__(self, live, debugger=None, sleep=time.sleep, clock=time.monotonic):
+        self.live = live
+        self.sleep = sleep
+        self.clock = clock
+        self.dbg = debugger or Debugger(live, sleep=sleep, clock=clock)
+
+    @property
+    def link(self):
+        return self.live.link
+
+    def run(self, action, **args):
+        if action == 'call':
+            raise ConvError('NOT_YET', 'call is not built: the engine companion ignores breakpoints while it serves an '
+                            'engine call, so the call cannot be traced from here. Next: use action trace and let the '
+                            'game call the function (fnv_do, or play to the call).')
+        if action != 'trace':
+            raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid actions: trace, call.' % action,
+                            {'actions': ['trace', 'call']})
+        return self.trace(args.get('function'), args.get('when'), args.get('depth') or 0, args.get('max_steps'))
+
+    # ================================================================ trace
+    def trace(self, function, when=None, depth=0, max_steps=None, arm_wait=ARM_WAIT):
+        if not function or not str(function).strip():
+            raise ConvError('BAD_ARGUMENTS', 'function is needed: a function name, an address, or file:line.')
+        if depth not in (0, None):
+            raise ConvError('NOT_YET', 'depth 1 (direct callees traced too) is not built yet. Next: use depth 0, the '
+                            'default: calls are stepped over.')
+        steps_limit = int(max_steps or DEFAULT_STEPS)
+        if not 1 <= steps_limit <= MAX_TRACE:
+            raise ConvError('BAD_ARGUMENTS', 'max_steps must be 1 to %d.' % MAX_TRACE)
+        self.live.ready()
+        if not self.live.game.process():
+            raise ConvError('NOT_RUNNING', 'Tracing needs the game running.')
+        db = self.dbg._symdb(required=True)
+        _, start, _ = self.dbg._resolve(function)
+        fn = db.function(start)
+        if fn is None:
+            raise ConvError('NOT_FOUND', 'No function at 0x%08X in the symbol database.' % start)
+        lines = db.lines_of(fn['addr'])
+        if not lines:
+            raise ConvError('NO_LINES', '%s has no source lines in the symbol database. Next: trace a function that '
+                            'has decomp source.' % fn['name'])
+        locals_, skipped = self._trace_locals(db, fn['addr'])
+        log_hex = ''.join(compile_predicate(load_text(local, local['code']))['hex'] for local in locals_)
+        pred = 'ff'
+        if when:   # breakpoints take a predicate slot (wire 2): store the program first
+            stored = self.link.one('pred', 'set', word(PRED_SLOT), compile_predicate(when)['hex'])
+            if not stored.get('ok'):
+                raise ConvError('PREDICATE_REFUSED', 'The companion refused the condition (%s).'
+                                % stored.get('error'), stored)
+            pred = word(PRED_SLOT)
+        end = fn['addr'] + max(fn['size'] or 1, 1)
+        bp_id = self.dbg._free_bp_id()
+        mechanism = 'hw' if self._hw_used() < HW_SLOTS else 'int3'
+        try:
+            armed = self.dbg._set_bp(bp_id, fn['addr'], mechanism, pred, FLAG_ONCE, None)
+        except ConvError:
+            if mechanism != 'hw':
+                raise
+            armed = self.dbg._set_bp(bp_id, fn['addr'], 'int3', pred, FLAG_ONCE, None)
+        stop = self._await_bp(bp_id, arm_wait)
+        if stop is None:
+            self.link.one('bp', 'clear', word(bp_id))
+            raise ConvError('NOT_CALLED', '%s was not called within %d s, so nothing was traced; the breakpoint is '
+                            'cleared. Next: make the game call it, then trace again.' % (fn['name'], arm_wait))
+        args = ['trace', word(steps_limit), word(fn['addr']), word(end)] + ([log_hex] if log_hex else [])
+        result = self.link.one('resume', word(stop['seq']), *args)
+        if not result.get('ok'):
+            raise ConvError('COMPANION_REFUSED', 'The companion refused the trace (%s).' % result.get('error'), result)
+        entries, reason, done = self._read_trace(stop['seq'])
+        if done:
+            self._release()
+        rows, summary = self._lines_of(db, fn, entries, locals_)
+        note = {'max': 'The trace stopped at max_steps; raise max_steps to see the rest.',
+                'fault': 'The thread faulted inside the function; the trace ends there.',
+                'returned': 'The function returned.',
+                'timeout': 'The trace is still running in the game; the thread is not released yet.'}.get(reason)
+        return verdict('Traced %s: %d steps over %d source lines.' % (fn['name'], len(entries), len(rows)),
+                       note or 'The trace is complete.', function=fn['name'], address='0x%08X' % fn['addr'],
+                       endedBy=reason, done=done, lines=rows, steps=summary, locals=[x['name'] for x in locals_],
+                       localsNotTraced=skipped, when=when or None)
+
+    def _hw_used(self):
+        return sum(1 for b in self.link.one('bp', 'list').get('bps', []) if b.get('kind') == 'hw')
+
+    def _trace_locals(self, db, start):
+        """Scalar parameters and locals with their load types (at most LOCAL_LIMIT), and the names left out."""
+        out, skipped = [], []
+        for local in db.locals_of(start):
+            if local['kind'] != 'bprel':
+                skipped.append(local['name'])
+                continue
+            code = local_code(local)
+            if code is None:
+                skipped.append(local['name'])
+                continue
+            if len(out) >= LOCAL_LIMIT:
+                skipped.append(local['name'])
+                continue
+            out.append(dict(local, code=code))
+        return out, skipped
+
+    def _await_bp(self, bp_id, wait):
+        deadline = self.clock() + wait
+        while True:
+            for s in self.dbg._stops():
+                if s.get('kind') == 'bp' and int(s.get('id')) == bp_id:
+                    return s
+            if self.clock() >= deadline:
+                return None
+            self.sleep(0.05)
+
+    def _read_trace(self, start_seq):
+        """The trace is filed under the step stop that ends it (the thread parks again when it leaves the
+        function or reaches max): wait for that stop, then read the entries with its seq (seen live: reading with the
+        breakpoint's seq gives no_trace)."""
+        deadline = self.clock() + RUN_WAIT
+        end = None
+        while end is None:
+            ended = [s for s in self.dbg._stops() if s.get('kind') == 'step' and int(s.get('seq', 0)) > start_seq]
+            if ended:
+                end = min(ended, key=lambda s: int(s['seq']))
+                break
+            if self.clock() >= deadline:
+                return [], 'timeout', False
+            self.sleep(0.05)
+        entries, since = [], 0
+        while True:
+            page = self.link.one('trace', 'read', word(end['seq']), word(since), word(READ_PAGE))
+            if 'entries' not in page:
+                raise ConvError('TRACE_FAILED', 'The companion did not return the trace (%s).'
+                                % (page.get('error') or 'no reason given'), page)
+            entries.extend(page['entries'])
+            since = page.get('next', since)
+            if page.get('done'):
+                return entries, page.get('reason'), True
+            if self.clock() >= deadline:
+                return entries, 'timeout', False
+            self.sleep(0.05)
+
+    def _release(self):
+        """Resume the thread the trace parked (it parks again as a step stop when the trace ends)."""
+        for s in self.dbg._stops():
+            if s.get('kind') == 'step':
+                self.link.one('resume', word(s['seq']), 'run')
+
+    def _lines_of(self, db, fn, entries, locals_):
+        """Entries to source lines: order of first run, visits (hits), steps, and the locals whose value changed on
+        the line that ran before the change (a step records the state before its instruction)."""
+        names = [x['name'] for x in locals_]
+        codes = [x['code'] for x in locals_]
+        rows, prev_key, prev_vals, skipped_prologue, unmapped = {}, None, None, 0, 0
+        for e in entries:
+            eip = int(str(e['eip']), 16) if isinstance(e['eip'], str) else int(e['eip'])
+            if eip - fn['addr'] < (fn.get('debug_start') or 0):
+                skipped_prologue += 1
+                continue
+            pos = db.line_at(eip)
+            if not pos or pos.get('line') is None:
+                unmapped += 1
+                continue
+            key = (pos['file'], pos['line'])
+            raw = e.get('values') or []
+            vals = [scalar(raw[i] if i < len(raw) else None, codes[i]) for i in range(len(codes))]
+            row = rows.get(key)
+            if row is None:
+                row = rows[key] = {'file': key[0], 'line': key[1], 'order': len(rows) + 1, 'hits': 0, 'steps': 0,
+                                   'changed': {}}
+            row['steps'] += 1
+            if key != prev_key:
+                row['hits'] += 1
+            if prev_vals is not None and vals != prev_vals and prev_key in rows:
+                changed = rows[prev_key]['changed']
+                for i, name in enumerate(names):
+                    if prev_vals[i] != vals[i]:
+                        item = changed.setdefault(name, {'from': prev_vals[i], 'to': vals[i]})
+                        item['to'] = vals[i]
+            prev_key, prev_vals = key, vals
+        out = []
+        for row in sorted(rows.values(), key=lambda r: r['order']):
+            row['text'] = self._text(row['file'], row['line'])
+            out.append(row)
+        summary = {'entries': len(entries), 'prologue': skipped_prologue, 'unmapped': unmapped}
+        return out, summary
+
+    def _text(self, file, line):
+        try:
+            lines = self.live.engine()._lines(file)
+        except Exception:      # no decomp checkout: the line numbers are still there
+            return None
+        return lines[line - 1].rstrip()[:200] if 0 < line <= len(lines) else None

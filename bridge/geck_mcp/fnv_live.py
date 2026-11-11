@@ -948,7 +948,16 @@ class LiveService:
             words = [this_ptr] + words
         self.changing('engine call %s' % (record.get('name') or function))
         ret = {'float': 'f', 'double': 'f', 'void': 'v'}.get(returns, 'i')
-        result = self.link.one('call', word(address), ret, word(ecx), word(edx), *[word(w) for w in words])
+        # Unproven functions run under the companion's guard (wire 2): a fault returns instead of crashing the game.
+        guarded = status not in ('proven', 'class_proven')
+        result = self.link.one('call', word(address), ret + ('g' if guarded else ''), word(ecx), word(edx),
+                               *[word(w) for w in words])
+        if result.get('fault'):
+            fault = result['fault']
+            raise LiveError('CALL_FAULTED', '%s faulted at %s (%s %s); the game kept running, but state the function '
+                            'had half changed may remain (stateSuspect). Next: check the arguments and the convention, '
+                            'or call fnv_health.' % (record.get('name') or function, fault.get('address'),
+                                                     fault.get('access'), fault.get('code')), result)
         if not result.get('ok'):
             raise LiveError('CALL_REJECTED', 'The companion refused the call: %s' % result.get('error'), result)
         eax = int(result['eax'], 16)
@@ -1110,10 +1119,14 @@ class LiveService:
         return {'action': action, 'command': command, 'accepted': result['accepted'], 'output': result['output'],
                 'undoable': bool(undo), 'journalId': entry['id']}
 
-    def input(self, action, control=None, key=None, duration_ms=0, target=None):
+    def input(self, action, control=None, key=None, duration_ms=0, target=None, frames=None, button=None, mouse=None):
         """Bounded player input: tap/hold a control or DirectInput key (released by the companion even if the
-        bridge goes away), aim at a ref, or activate a ref as the player."""
+        bridge goes away), aim at a ref, or activate a ref as the player. With frames (or button, or mouse as a
+        (dx, dy) pair) the input runs through the frame-exact injector instead: it holds for exactly that many frames
+        and the call returns when they have run (fnv_inject)."""
         self.in_game()
+        if frames is not None or button is not None or mouse is not None:
+            return self.inject(action, control, key, frames, button, mouse)
         if action == 'aim_at':
             t = self.resolve(target)
             heading = fnv_link.value_of(self.link.eval('player.GetHeadingAngle %s' % t['expr']))
@@ -1135,14 +1148,7 @@ class LiveService:
         if action not in ('tap', 'hold'):
             raise ValueError('action must be tap, hold, aim_at or activate')
         if control is not None:
-            code = fnv_facts.CONTROLS.get(str(control).lower(), control)
-            scan, mouse = self.values(['GetControl %d' % int(code), 'GetAltControl %d' % int(code)])
-            if scan is None or scan in (255, -1):
-                # Bound to a mouse button only (attack, aim): xNVSE key commands take 256 + button.
-                if mouse is None or mouse in (255, -1):
-                    raise LiveError('UNBOUND_CONTROL', 'Control %s has no key or mouse button bound' % control)
-                scan = 256 + int(mouse)
-            scan = int(scan)
+            scan = self._scan_of(control)
         elif key is not None:
             scan = int(key)
         else:
@@ -1159,6 +1165,49 @@ class LiveService:
         self.journal.add({'kind': 'input', 'action': action, 'scan': scan, 'durationMs': duration_ms, 'undo': None})
         return {'action': action, 'scanCode': scan, 'durationMs': duration_ms, 'accepted': result.get('accepted'),
                 'releaseScheduled': action == 'hold'}
+
+    def _scan_of(self, control):
+        """The DirectInput scan code (or 256 + mouse button) a control is bound to, from the game's bindings."""
+        code = fnv_facts.CONTROLS.get(str(control).lower(), control)
+        scan, mouse = self.values(['GetControl %d' % int(code), 'GetAltControl %d' % int(code)])
+        if scan is None or scan in (255, -1):
+            # Bound to a mouse button only (attack, aim): xNVSE key commands take 256 + button.
+            if mouse is None or mouse in (255, -1):
+                raise LiveError('UNBOUND_CONTROL', 'Control %s has no key or mouse button bound' % control)
+            scan = 256 + int(mouse)
+        return int(scan)
+
+    def inject(self, action, control, key, frames, button, mouse):
+        """Frame-exact input through the injector (fnv_inject): control codes 0..12 through the engine's own force
+        call, other controls by their bound key or button, keys and mouse buttons and deltas directly."""
+        from .fnv_inject import CONTROL_MAX, Injector, scan_to_job
+        if frames is None:
+            raise ValueError('Injected input needs frames=N (1 to 10000)')
+        if action not in ('tap', 'hold'):
+            raise ValueError('Injected input is tap or hold; frames=N is how long it lasts')
+        injector = Injector.of(self)
+        self.changing('input')
+        if mouse is not None:
+            dx, dy = mouse
+            out = injector.mouse(dx, dy, frames)
+        elif button is not None:
+            out = injector.button(button, frames)
+        elif control is not None:
+            code = fnv_facts.CONTROLS.get(str(control).lower(), control)
+            try:
+                code = int(code)
+            except (TypeError, ValueError):
+                raise ValueError('Unknown control %r; use a control name or a code from 0 to 12' % control)
+            if 0 <= code <= CONTROL_MAX:
+                out = injector.control(code, frames)
+            else:
+                out = scan_to_job(injector, self._scan_of(control), frames)
+        elif key is not None:
+            out = injector.key(int(key), frames)
+        else:
+            raise ValueError('Give control (name or code), key, button or mouse for injected input')
+        self.journal.add({'kind': 'input', 'action': action, 'frames': int(frames), 'injected': True, 'undo': None})
+        return {'action': action, 'injected': True, 'frames': int(frames), **out}
 
     # ================================================================= journal and undo
     def journal_list(self, limit=100, include_undone=True):

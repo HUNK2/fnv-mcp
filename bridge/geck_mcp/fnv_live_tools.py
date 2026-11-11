@@ -15,7 +15,8 @@ from .fnv_live import LiveService
 from .fnv_social import SocialTools
 from .fnv_agent import AgentTools
 from .fnv_scenario import ScenarioRunner, diff, load_snapshot, snapshot
-from .fnv_warnings import Warnings
+from .fnv_warnings import for_live as warnings_for_live
+from .fnv_sampling import FrameSampler, SinkTools
 
 FNV_LIVE_TOOLS = {
     # milestone 4: game control, tests, logs
@@ -43,7 +44,7 @@ FNV_LIVE_TOOLS = {
     'fnv_inventory': ('read', 'items of an actor or container with counts and equipped state'),
     'fnv_vars': ('read', 'script variables of a quest or reference, by name'),
     'fnv_script_errors': ('read', 'script errors (script, mod, message) since the last call'),
-    'fnv_events': ('read', 'xNVSE events seen by the companion: loads, saves, new game, script errors'),
+    'fnv_events': ('read', 'xNVSE events seen by the companion: loads, saves, new game, script errors; subscribe to game events (onactivate, onhit, ondeath...) recorded in the game'),
     'fnv_formid_live': ('read', "a plugin's load-order prefix in the running game"),
     'fnv_mem_read': ('read', 'memory at an address or Class field path, decoded with the decomp layouts'),
     # milestones 5-6: act
@@ -87,7 +88,7 @@ FNV_LIVE_TOOLS = {
     'fnv_form_live_diff': ('read', 'a form in memory now versus its winning plugin record: what changed at runtime'),
     # agent wave: unattended testing and debugging
     'fnv_trace': ('read', 'calls to any proven engine function: decoded arguments, results, callers (watch hook)'),
-    'fnv_watch': ('read', 'values sampled over time: expressions, memory fields, actor values, positions'),
+    'fnv_watch': ('read', 'values sampled over time: expressions, memory fields, actor values, positions; frames=N samples memory every frame inside the game'),
     'fnv_screenshot': ('read', "the game's frame as PNG (engine back buffer, else the window), shown to the agent"),
     'fnv_test_save': ('act', 'named test saves kept apart from other saves: save, load, list, delete'),
     'fnv_crash_history': ('read', 'crash logs grouped by signature across runs, new ones flagged'),
@@ -133,7 +134,32 @@ FNV_LIVE_TOOLS = {
     'fnv_field_watch': ('act', 'hardware watchpoints: which functions write or read one field of a live object, with the values; find the field an action changes'),
     # Plan 2 wave 0
     'fnv_warnings': ('control', "the engine's own warnings (missing assets, wrong form types, script problems) from xNVSE's error log: status, enable (changes xNVSE's config file), read, summary, clear"),
+    'fnv_time_control': ('act', 'the game clock and frames: pause and resume the clock (this tool only resumes its own pause), hold and release the frame gate, step N frames at a fixed rate, set a fixed frame step, set the time multiplier, status'),
+    'fnv_wait_for': ('read', 'block inside the game until N frames, N game or real seconds, a predicate, or the game is loaded and simulating; one request, with a timeout'),
+    'fnv_do': ('control', 'run test steps given inline (the scenario steps, no file) and return one report; steps can wait for frames, a predicate or an event, press inputs for exact frames, save values with as, and repeat the run to show differences'),
+    'fnv_session': ('control', 'a test session: start (check setup, launch or wait until loaded, turn on capture, open a journal scope), mark (a named point for fnv_health), end (revert the scope, one report, optional quit), status'),
+    'fnv_health': ('read', 'what is abnormal since the last session mark: script errors, engine warnings by category, crash files, frame time and object count against the session start; each item names the next tool'),
     'fnv_guide': ('read', 'which tool for which problem: guides with tested procedures, search of tools, saved engine research and facts'),
+    # Plan 2 wave 2: source-level debugger
+    'fnv_debug': ('act', 'source-level debugger: breaks (function, address, file:line, fault) with conditions and logs; status, stack, locals, eval, set, continue, step, until, return, skip, freeze/thaw, threads, dump'),
+    'fnv_flow': ('act', 'trace a function: one breakpoint, then a trace of the function range that maps each executed source line to its order, hit count and the locals that changed (call is not built yet)'),
+    'fnv_blame': ('act', 'who changed a field or a reference: a hardware write watch on an address path, or hooks on the engine functions that touch a reference; report groups the hits by culprit (script line or engine function)'),
+    'fnv_script_debug': ('act', 'script debugger: breaks on a script statement (script, line or opcode, with a when over its variables); status, vars, set, eval, step line, continue, freeze/thaw of the script runner'),
+    'fnv_script_log': ('act', 'script log: the statement ring (commands, history of a reference), block events from the flag setters (events), raise a block flag, and the script errors'),
+    # Plan 2 wave 3: eyes
+    'fnv_camera': ('act', "the camera: get the view, set a free camera at a position and direction or looking at a ref, orbit a ref (fit to its size), switch first/third person, restore the player's view"),
+    'fnv_look': ('read', 'the screen as data: references in view, largest first, with screen rectangles, distance, line of sight and flags, plus the crosshair, prompt, corner message, subtitle and open menus'),
+    'fnv_photo': ('act', 'pictures: a reference from set angles in one sheet (world paused, view restored), the cell from above and the corners, the view with labels, a frame-exact film strip, a compare against an earlier image'),
+    'fnv_hud': ('read', 'the HUD: mode, visible parts, crosshair ref and prompt, the corner message and the queue, subtitle; post shows a corner message'),
+    'fnv_visibility': ('read', 'why a reference does not draw: no 3D, disabled, deleted, culled, zero scale, first person, other cell, outside the view or behind something'),
+    # Plan 2 wave 3: hands
+    'fnv_play': ('act', 'play as a player: goto a ref or position on foot (route around walls, through doors), look_at, activate with the reason when refused, talk, item actions, stop'),
+    'fnv_ui_do': ('act', 'menus by meaning: click a tile or a button by its label (HandleClick, as a mouse click), wait N hours through the wait menu, fast travel to a marker (refusal reason), message box buttons, close'),
+    # Plan 2 wave 4: creation loop
+    'fnv_asset': ('act', 'assets in the running game: reload a model or texture from disk (no restart), watch a mod folder, the log of every file the engine opened or missed, where a path comes from, load queue, model cache, archives'),
+    'fnv_form': ('act', 'forms at run time: create (a new form or a clone), reload the changed records of a rebuilt plugin into the live forms, what this session changed'),
+    'fnv_place': ('act', 'level work in the game: place a form at a position or near a ref, rows, grids and circles, nudge, rotate, scale, snap to the surface, check floating or sinking, list and remove what this session placed'),
+    'fnv_author': ('control', "turn the session's live work into a plugin spec part, check a plugin (missing files, conflicts, engine warnings), scaffold a starting project, package a release folder and archive"),
     # milestone 10: setup
     'fnv_setup_check': ('read', 'is this machine ready for the fnv tools? each prerequisite with its state and the fix'),
 }
@@ -177,6 +203,35 @@ def register(server, project, annotations, result_type):
     experiments = ExperimentTools(live, control_tools, naming)
     from .fnv_watch import FieldWatchTools
     field_watch = FieldWatchTools(live, naming)
+    from .fnv_inject import shared_time
+    time_control, wait_for = shared_time(live)
+    from .fnv_session import HealthTools, SessionTools
+    session_tools = SessionTools(live)
+    health_tools = HealthTools(live)
+    from .fnv_debugger import Debugger, READ_ACTIONS
+    debugger = Debugger(live)
+    from .fnv_flow import FlowTools
+    from .fnv_blame import BlameTools
+    from .fnv_scriptdbg import EvalHook, ScriptDebugger, ScriptLog
+    flow_tools = FlowTools(live, debugger=debugger)
+    blame_tools = BlameTools(live, debugger=debugger)
+    statement_hook = EvalHook(live)
+    script_debug = ScriptDebugger(live, eval_hook=statement_hook, dbg=debugger)
+    script_log = ScriptLog(live, eval_hook=statement_hook, debugger=debugger)
+    from .fnv_eyes import EyesTools
+    eyes = EyesTools(live, agent=agent, engine_ai=engine_ai)
+    live.eyes = eyes
+    from .fnv_hands import HandsTools
+    hands = HandsTools(live, agent=agent, eyes=eyes)
+    live.hands = hands
+    from .fnv_create import AssetTools, AuthorTools, FormTools, PlaceTools
+    asset_tools = AssetTools(live, records=records)
+    form_tools = FormTools(live, data=data, assets=asset_tools)
+    place_tools = PlaceTools(live, hands=hands)
+    author_tools = AuthorTools(live, data=data, records=records, place=place_tools, forms=form_tools)
+    frame_sampler = FrameSampler(live)
+    sinks = SinkTools(live)
+    live.eyes, live.hands = eyes, hands      # the scenario runner's photo / play / ui steps
     read, act, control = annotations
 
     def service_call(name, fn, kind):
@@ -375,10 +430,28 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_script_errors', lambda: live.script_errors(0 if since == 'start' else 'last'))
 
     @server.tool(annotations=read)
-    async def fnv_events(since: Annotated[int, Field(ge=0)] = 0) -> result_type:
+    async def fnv_events(since: Annotated[int, Field(ge=0)] = 0,
+                         subscribe: list[Annotated[str, Field(max_length=40)]] | None = None,
+                         unsubscribe: list[Annotated[str, Field(max_length=40)]] | None = None,
+                         sink_since: Annotated[int, Field(ge=0)] | None = None,
+                         ref: Annotated[str, Field(max_length=10)] | None = None) -> result_type:
         """Events the engine companion recorded after sequence number `since`: game loads, saves, new game, exit
-        to menu, script errors (with message)."""
-        return await invoke('fnv_events', lambda: live.events(since))
+        to menu, script errors (with message). subscribe=[onactivate, onhit, ondeath, onadd, onload, ...] also
+        records those xNVSE events in the game (frame, the reference, the event's first argument words);
+        sink_since=N returns them after N (ref filters by form id); unsubscribe=[names] or ["all"]."""
+        def action():
+            out = {}
+            if unsubscribe:
+                out['unsubscribed'] = sinks.unsubscribe(None if 'all' in [u.lower() for u in unsubscribe] else unsubscribe)
+            if subscribe:
+                out['subscribed'] = sinks.subscribe(subscribe)
+            if sink_since is not None or subscribe:
+                out['sinks'] = sinks.read(sink_since or 0, ref)
+            if not out:
+                return live.events(since)
+            out['events'] = live.events(since)
+            return out
+        return await invoke('fnv_events', action)
 
     @server.tool(annotations=read)
     async def fnv_formid_live(plugin: Annotated[str, Field(min_length=5, max_length=100)]) -> result_type:
@@ -428,7 +501,7 @@ def register(server, project, annotations, result_type):
                               allow_unproven: bool = False) -> result_type:
         """Call an engine function by name or address. The calling convention comes from the decomp signature.
         args: [{type: int|bool|ptr|ref|form|float|double|string, value}]; `this` is a ref spec or 0xADDRESS.
-        Only proven functions unless allow_unproven=true. A wrong call can crash the game."""
+        Only proven functions unless allow_unproven=true; unproven calls run guarded (a fault returns CALL_FAULTED instead of crashing the game). A wrong proven call can still crash it."""
         return await invoke('fnv_engine_call', lambda: live.engine_call(function, this, args, returns, convention,
                                                                         allow_unproven), 'act')
 
@@ -462,12 +535,25 @@ def register(server, project, annotations, result_type):
                         control: Annotated[str, Field(max_length=20)] | None = None,
                         key: Annotated[int, Field(ge=0, le=300)] | None = None,
                         duration_ms: Annotated[int, Field(ge=0, le=10000)] = 0,
-                        target: Ref | None = None) -> result_type:
+                        target: Ref | None = None,
+                        frames: Annotated[int, Field(ge=1, le=10000)] | None = None,
+                        key_name: Annotated[str, Field(max_length=20)] | None = None,
+                        button: Annotated[int, Field(ge=0, le=7)] | None = None,
+                        mouse: Annotated[list[int], Field(min_length=2, max_length=2)] | None = None) -> result_type:
         """Bounded player input. tap/hold a control (forward, backward, left, right, attack, activate, aim, jump,
-        sneak, run, ready, vats, pipboy...) or a DirectInput key code; a hold is released by the companion after
+        sneak, run, ready, vats, pipboy...), a DirectInput key code or key_name (E, Space, Escape, F1, 1, Up...),
+        a mouse button (0 left, 1 right) or a mouse move [dx, dy] per frame (button and mouse need frames); a hold is
+        released by the companion after
         duration_ms even if the bridge goes away. aim_at turns the player toward a ref; activate makes the player
-        activate a ref (doors, containers, talking to an NPC)."""
-        return await invoke('fnv_input', lambda: live.input(action, control, key, duration_ms, target), 'act')
+        activate a ref (doors, containers, talking to an NPC). frames=N (with tap or hold) makes the input frame-exact:
+        it is held for exactly N frames through the input injector, and the call returns when they have run; use it
+        with fnv_time_control step to press a key on a known frame. Controls 0 to 12 go through the engine's own force
+        call; other controls by their bound key or mouse button."""
+        if key_name is not None:
+            from .fnv_hands import scan_code
+            key = scan_code(key_name)
+        return await invoke('fnv_input', lambda: live.input(action, control, key, duration_ms, target, frames=frames,
+                                                            button=button, mouse=mouse), 'act')
 
     @server.tool(annotations=act)
     async def fnv_script_set(target: Annotated[str, Field(min_length=1, max_length=200)],
@@ -733,12 +819,18 @@ def register(server, project, annotations, result_type):
                         seconds: Annotated[float, Field(gt=0, le=120)] = 5.0,
                         interval_ms: Annotated[int, Field(ge=0, le=10000)] = 100,
                         until: Annotated[str, Field(max_length=500)] | None = None,
-                        keep_unpaused: bool = True) -> result_type:
+                        keep_unpaused: bool = True,
+                        frames: Annotated[int, Field(ge=1, le=60000)] | None = None,
+                        every: Annotated[int, Field(ge=1, le=600)] = 1) -> result_type:
         """Sample values over time and return how each changed: items are expressions ("player.GetAV Health",
         "MyQuest.counter", "GetStage MyQuest") or mappings {eval, ref}, {actor_value, ref}, {variable, of},
         {position: ref}, {mem: ref or 0xADDR, path: Class.field} (decomp layouts). Stops early when `until` (an
         expression) is true. Each item gives first, last, min, max, number of changes and a timeline of changes
-        with time and frame; paused=true when the frame counter did not move."""
+        with time and frame; paused=true when the frame counter did not move. frames=N (with every=k): exact, frame by
+        frame, inside the game (the companion sampler): items are then memory reads in predicate text
+        ("[[0x011DEA3C]+0x30]:f32") or player.x, player.y, player.z, player.yaw, frame; at most 16."""
+        if frames:
+            return await invoke('fnv_watch', lambda: frame_sampler.sample(items, frames, every))
         return await invoke('fnv_watch', lambda: agent.watch(items, seconds, interval_ms, until, keep_unpaused))
 
     @server.tool(annotations=read)
@@ -1281,7 +1373,8 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_atlas', action_fn, 'read' if action in ('actions', 'runs', 'function', 'action') else 'control')
 
     @server.tool(annotations=control)
-    async def fnv_warnings(action: Literal['status', 'enable', 'read', 'summary', 'clear'] = 'status',
+    async def fnv_warnings(action: Literal['status', 'enable', 'read', 'summary', 'clear', 'capture'] = 'status',
+                           mode: Literal['start', 'stop', 'status'] | None = None,
                            since: int | Literal['mark', 'start'] = 'mark',
                            category: Annotated[str, Field(max_length=40)] | None = None,
                            text: Annotated[str, Field(max_length=200)] | None = None,
@@ -1297,10 +1390,107 @@ def register(server, project, annotations, result_type):
         (since=start: whole files; a number: from that line) with filters category (MASTERFILE, SCRIPTS, MODELS,
         TEXTURES, ANIMATION, AI, Audio, other), text, plugin, source; paged. summary: counts per category and
         plugin, and the most repeated messages with ids and numbers masked. clear: remember the end of the files
-        as the mark (the game keeps the files open, so they are not emptied)."""
-        return await invoke('fnv_warnings', lambda: Warnings.from_game(live.game).run(
-            action, since=since, category=category, text=text, plugin=plugin, source=source, limit=limit,
-            offset=offset, brief=brief, top=top), 'control' if action == 'enable' else 'read')
+        as the mark (the game keeps the files open, so they are not emptied). The running game keeps both files
+        locked (no reads): capture mode=start|stop|status hooks the engine's Warning function itself, and read and
+        summary then show the warnings live, with the calling function (fnv_session start turns it on)."""
+        return await invoke('fnv_warnings', lambda: warnings_for_live(live).run(
+            action, mode=mode, since=since, category=category, text=text, plugin=plugin, source=source, limit=limit,
+            offset=offset, brief=brief, top=top), 'control' if action in ('enable', 'capture') else 'read')
+
+    @server.tool(annotations=act)
+    async def fnv_time_control(action: Literal['pause', 'resume', 'hold', 'release', 'step', 'fixed', 'speed', 'status'],
+                               frames: Annotated[int, Field(ge=1, le=10000)] | None = None,
+                               fps: Annotated[int, Field(ge=0, le=1000)] | None = None,
+                               x: Annotated[float, Field(ge=0.05, le=10)] | None = None,
+                               timeout_seconds: Annotated[int, Field(ge=1, le=600)] | None = None) -> result_type:
+        """The game clock and the frame gate. pause: stop the game clock (the world keeps rendering, so the camera and
+        photo tools see a still scene); resume: start it again, only if this tool paused it. hold: close the frame
+        gate, so nothing runs between frames (requests are still served; the gate reopens by itself after
+        timeout_seconds with no calls, default 120). release: open the gate. step frames=N [fps=F]: advance exactly N
+        frames and stop, optionally at a fixed frame step of F fps. fixed fps=F (0 turns it off): every frame takes
+        1000/F ms of game time. speed x=F (0.05 to 10): the time multiplier. status: the gate, clock counter, fixed
+        step, multiplier, frame and real frame rate. Changing actions need fnv.engine_control full."""
+        return await invoke('fnv_time_control', lambda: time_control.run(
+            action, frames=frames, fps=fps, x=x, timeout_seconds=timeout_seconds),
+            'read' if action == 'status' else 'act')
+
+    @server.tool(annotations=read)
+    async def fnv_wait_for(frames: Annotated[int, Field(ge=1, le=10000)] | None = None,
+                           seconds: Annotated[float, Field(gt=0, le=600)] | None = None,
+                           clock: Literal['game', 'real'] = 'game',
+                           predicate: Annotated[str, Field(min_length=1, max_length=2000)] | None = None,
+                           loaded: bool = False,
+                           timeout: Annotated[int, Field(ge=1, le=600)] = 60,
+                           max_frames: Annotated[int, Field(ge=1, le=10000)] = 3600) -> result_type:
+        """Block inside the game until one condition holds, in one request: frames=N (N frames pass), seconds=S with
+        clock game (game seconds, scaled by the time multiplier) or real (wall seconds at the current frame rate),
+        predicate=TEXT (a compiled condition, for example "frame >= 500" or "[0x011DEA0C]:u8 == 1"), or loaded (the
+        game has finished loading and is simulating: loading flag and menu mode clear, the frame delta above 0, two
+        frames run, and the player has a parent cell). Exactly one condition. The wait runs frames even while the gate
+        is held or open; if the gate was open before, it is opened again at the stop. timeout is in real seconds;
+        max_frames caps a predicate wait."""
+        return await invoke('fnv_wait_for', lambda: wait_for.run(
+            frames=frames, seconds=seconds, clock=clock, predicate=predicate, loaded=loaded,
+            timeout_seconds=timeout, max_frames=max_frames), 'read')
+
+    @server.tool(annotations=control)
+    async def fnv_do(steps: Annotated[list[Any], Field(min_length=1, max_length=200)],
+                     name: Annotated[str, Field(max_length=80)] = 'inline',
+                     start: Start | None = None,
+                     plugins: Annotated[list[str], Field(max_length=20)] | None = None,
+                     setup: Annotated[list[Any], Field(max_length=200)] | None = None,
+                     teardown: Annotated[list[Any], Field(max_length=200)] | None = None,
+                     deterministic: bool = False,
+                     repeat: Annotated[int, Field(ge=1, le=20)] = 1,
+                     timeout_seconds: Annotated[int, Field(ge=20, le=900)] = 240,
+                     relaunch_on_crash: bool = True) -> result_type:
+        """Run test steps given inline, the same steps a YAML scenario file has (run, script, wait, expect, set, actor,
+        input, move, step, call, revert_all, the agent steps, and so on), and return one report. New in this form:
+        step: {frames: N, fps: F} advances exact frames; wait: {for: loaded | event name | predicate, timeout: s};
+        input: {control|key|button|mouse: .., frames: N} presses for exact frames; any step may carry as: name, and
+        later steps use $name. deterministic: true fixes the frame step at 60 fps and seeds the random generator.
+        repeat: N runs the scenario N times and reports the steps that differ. photo {action, ref, angles}, play
+        {action: goto|talk|activate|look_at|..., ref} and ui {action, label, ...} use the eyes and hands; break and flow
+        stop the main thread and are not scenario steps. start is menu | continue | save:<name> | coc:<cell>; the game is launched when needed."""
+        def action():
+            data = {'name': name, 'steps': steps, 'deterministic': deterministic, 'repeat': repeat,
+                    'timeout': timeout_seconds}
+            if start:
+                data['start'] = start
+            if plugins:
+                data['plugins'] = plugins
+            if setup:
+                data['setup'] = setup
+            if teardown:
+                data['teardown'] = teardown
+            return ScenarioRunner(live).run(data=data, relaunch=relaunch_on_crash)
+        return await invoke('fnv_do', action, 'control')
+
+    @server.tool(annotations=control)
+    async def fnv_session(action: Literal['start', 'mark', 'end', 'status'],
+                          start: Start = 'continue',
+                          label: Annotated[str, Field(max_length=60)] | None = None,
+                          deterministic: bool = False,
+                          quit_game: bool = False,
+                          timeout_seconds: Annotated[int, Field(ge=20, le=600)] = 240) -> result_type:
+        """One call to be ready and one to finish. start: check the setup, launch the game when it is not running
+        (at start: menu, continue, save:<name> or coc:<cell>), wait until it is loaded and simulating, turn on capture
+        (script errors, engine warnings, crash context), optionally a deterministic run, and open a journal scope.
+        mark: a named point (label) that fnv_health and the warning log report from. end: revert this session's
+        journal changes, return one report, and quit the game when quit_game is true. status: the session, cheaply.
+        Starting the game and changing the warning setting need the game closed or a restart to take effect."""
+        return await invoke('fnv_session', lambda: session_tools.run(action, start=start, label=label,
+                                                                     timeout_seconds=timeout_seconds,
+                                                                     deterministic=deterministic,
+                                                                     quit_game=quit_game), 'control')
+
+    @server.tool(annotations=read)
+    async def fnv_health() -> result_type:
+        """What is abnormal since the last session mark (fnv_session mark, or the session start): script errors,
+        engine warnings by category, new crash files, frame time against the session start, and the live object count
+        (NiRefObject) against the session start. Returns ok true, or a short list where each item names the tool to
+        call next. Needs an open session (fnv_session start)."""
+        return await invoke('fnv_health', lambda: health_tools.check(), 'read')
 
     @server.tool(annotations=read)
     async def fnv_guide(action: Literal['list', 'topic', 'find', 'engine'] = 'list',
@@ -1324,5 +1514,293 @@ def register(server, project, annotations, result_type):
         the engine map, the optional unpacked exe and full control; each with what to do when it is missing."""
         from .fnv_setup import setup_check
         return await invoke('fnv_setup_check', lambda: setup_check(project))
+
+    @server.tool(annotations=act)
+    async def fnv_debug(action: Literal['break', 'status', 'stack', 'locals', 'eval', 'set', 'continue', 'step', 'until',
+                                        'return', 'skip', 'freeze', 'thaw', 'threads', 'dump'],
+                        op: Literal['set', 'list', 'clear'] | None = None,
+                        location: Annotated[str, Field(max_length=200)] | None = None,
+                        break_id: Annotated[int, Field(ge=0, le=100000)] | None = None,
+                        when: Annotated[str, Field(max_length=500)] | None = None,
+                        hits: Annotated[int, Field(ge=1, le=100000)] | None = None,
+                        thread: Literal['main', 'any'] | None = None,
+                        do: Literal['stop', 'log'] | None = None,
+                        log: list[Annotated[str, Field(max_length=500)]] | None = None,
+                        depth: Annotated[int, Field(ge=1, le=200)] | None = None,
+                        with_locals: bool = False,
+                        frame: Annotated[int, Field(ge=0, le=200)] | None = None,
+                        expression: Annotated[str, Field(max_length=300)] | None = None,
+                        value: Annotated[str, Field(max_length=100)] | None = None,
+                        mode: Literal['instruction', 'into', 'over', 'out', 'line'] | None = None,
+                        file: Annotated[str, Field(max_length=200)] | None = None) -> result_type:
+        """Source-level debugger for the running game (plan: Plan 2 wave 2). break op=set location=<function | 0xADDR |
+        file:line | fault> sets a stop (when = a predicate such as "frame >= 100"; do=log with log=[expression] records
+        values instead; hits=N stops from the Nth hit that passes when). break op=list / op=clear break_id. status: stopped or running, the place, the source
+        lines and why. stack and locals (frame n) read the stop; eval and set work on a stop's frame. continue, step
+        (mode), until location, return value, skip location, freeze / thaw the threads, threads, dump file (a
+        minidump in the bridge state folder). Needs fnv.engine_control = full for actions that change the game."""
+        is_read = action in READ_ACTIONS or (action == 'break' and (op == 'list' or (op is None and not location)))
+        args = {'op': op, 'location': location, 'break_id': break_id, 'when': when, 'hits': hits, 'thread': thread,
+                'do': do, 'log': log, 'depth': depth, 'with_locals': with_locals, 'frame': frame,
+                'expression': expression, 'value': value, 'mode': mode, 'file': file}
+        return await invoke('fnv_debug', lambda: debugger.run(action, **args), 'read' if is_read else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_flow(action: Literal['trace', 'call'],
+                       function: Annotated[str, Field(min_length=1, max_length=200)],
+                       when: Annotated[str, Field(max_length=300)] | None = None,
+                       depth: Annotated[int, Field(ge=0, le=1)] = 0,
+                       max_steps: Annotated[int, Field(ge=1, le=200000)] | None = None) -> result_type:
+        """Trace one function run: arm a breakpoint on its entry (when = an optional predicate over its arguments and
+        locals), then record every statement the function executes in its range. The result lists the source lines
+        in order with hit counts and the locals that changed on each. depth 0 only; call (run the function ourselves
+        under the trace) is not built yet: the companion ignores breakpoints while it serves an engine call."""
+        return await invoke('fnv_flow', lambda: flow_tools.run(action, function=function, when=when, depth=depth,
+                                                                max_steps=max_steps), 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_blame(action: Literal['field', 'ref', 'report', 'form'],
+                        address: Annotated[str, Field(max_length=120)] | None = None,
+                        ref: Annotated[str, Field(max_length=200)] | None = None,
+                        what: Annotated[str, Field(max_length=200)] | None = None,
+                        length: Annotated[int, Field(ge=1, le=64)] = 4,
+                        access: Literal['write', 'readwrite'] = 'write',
+                        scope: Literal['main', 'all'] = 'main',
+                        seconds: Annotated[float, Field(gt=0, le=600)] | None = None) -> result_type:
+        """Who changed it: field arms a hardware write watch on an address (0x... or ref + 0x offset) and records each
+        writer with its thread, stack and running script line. ref hooks the engine functions that touch a reference
+        (what = presets, comma-separated, or all). report groups the hits so far by culprit: the script line, else the
+        engine function. form is not built yet."""
+        is_read = action == 'report'
+        args = {'address': address, 'ref': ref, 'what': what, 'length': length, 'access': access, 'scope': scope,
+                'seconds': seconds}
+        return await invoke('fnv_blame', lambda: blame_tools.run(action, **args), 'read' if is_read else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_script_debug(action: Literal['break', 'status', 'vars', 'set', 'eval', 'step', 'continue', 'freeze',
+                                               'thaw'],
+                               op: Literal['set', 'list', 'clear'] | None = None,
+                               script: Annotated[str, Field(max_length=200)] | None = None,
+                               line: Annotated[int, Field(ge=1, le=100000)] | None = None,
+                               opcode: Annotated[int, Field(ge=0, le=65535)] | None = None,
+                               when: Annotated[str, Field(max_length=300)] | None = None,
+                               break_id: Annotated[int, Field(ge=1, le=100000)] | None = None,
+                               name: Annotated[str, Field(max_length=100)] | None = None,
+                               value: Annotated[str, Field(max_length=100)] | None = None,
+                               expression: Annotated[str, Field(max_length=300)] | None = None,
+                               mode: Literal['line'] | None = None) -> result_type:
+        """Script debugger: break op=set script=<quest or script> line=<n> (or opcode, or when over the script's
+        variables) stops the script runner before that statement; status shows the script, line and reference; vars
+        lists the script variables and set changes one by number; eval runs a snippet on the stopped reference; step
+        line runs to the next line; continue resumes; freeze and thaw turn the process-scripts byte off and on.
+        Needs fnv.engine_control = full for the actions that change the game."""
+        is_read = action in ('status', 'vars') or (action == 'break' and op == 'list')
+        args = {'op': op, 'script': script, 'line': line, 'opcode': opcode, 'when': when, 'break_id': break_id,
+                'name': name, 'value': value, 'expression': expression, 'mode': mode}
+        return await invoke('fnv_script_debug', lambda: script_debug.run(action, **args),
+                            'read' if is_read else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_script_log(action: Literal['commands', 'history', 'events', 'raise', 'errors'],
+                             mode: Literal['start', 'read', 'stop'] | None = None,
+                             script: Annotated[str, Field(max_length=200)] | None = None,
+                             ref: Annotated[str, Field(max_length=200)] | None = None,
+                             opcode: Annotated[int, Field(ge=0, le=65535)] | None = None,
+                             flag: Annotated[str, Field(max_length=40)] | None = None,
+                             since: Annotated[int, Field(ge=0)] | Literal['last', 'start'] | None = None,
+                             limit: Annotated[int, Field(ge=1, le=2000)] | None = None) -> result_type:
+        """Script log: commands (mode start / read / stop) records each statement of every script in a ring, with
+        script, reference and command names, optionally filtered; history ref lists the world-changing commands run
+        on a reference; events (mode start / read / stop) records the block flags raised by the flag setters; raise ref
+        flag=<OnAdd, OnTriggerEnter, ...> raises a block flag on a reference; errors lists the script errors since the
+        last call."""
+        is_read = action == 'errors' or action == 'history' or (action in ('commands', 'events') and mode in (None,
+                                                                                                             'read'))
+        args = {'mode': mode, 'script': script, 'ref': ref, 'opcode': opcode, 'flag': flag, 'since': since,
+                'limit': limit}
+        return await invoke('fnv_script_log', lambda: script_log.run(action, **args),
+                            'read' if is_read else 'act')
+
+    Point = Annotated[list[float], Field(min_length=3, max_length=3, description='[x, y, z] in game units')]
+
+    @server.tool(annotations=act)
+    async def fnv_camera(action: Literal['get', 'set', 'orbit', 'pov', 'restore'] = 'get',
+                         position: Point | None = None,
+                         yaw: Annotated[float, Field(ge=-360, le=360)] | None = None,
+                         pitch: Annotated[float, Field(ge=-89.9, le=89.9)] | None = None,
+                         look_at: Ref | None = None, ref: Ref | None = None,
+                         distance: Annotated[float, Field(gt=0, le=20000)] | None = None,
+                         fit: bool = False, fov: Annotated[float, Field(ge=10, le=150)] | None = None,
+                         view: Literal['first', 'third'] | None = None, freeze: bool = True) -> result_type:
+        """The camera. get: position, yaw (0 = north, clockwise), pitch (positive looks down), FOV, first/third
+        person, fly mode. set: a free camera at position (default: where it is) with yaw/pitch or look_at a ref; fov
+        changes the world FOV; freeze (default true) stops the world while the camera is free. orbit ref: around a
+        reference looking at its centre; yaw is relative to the reference's heading (180 = in front of it, 0 =
+        behind), pitch is the look-down angle, distance or fit=true (from its size and the FOV). pov view=first|third.
+        restore: back to the player's own view. Cells load around the player, not the camera."""
+        is_read = action == 'get'
+        args = {'position': position, 'yaw': yaw, 'pitch': pitch, 'look_at': look_at, 'ref': ref,
+                'distance': distance, 'fit': fit, 'fov': fov, 'view': view, 'freeze': freeze}
+        return await invoke('fnv_camera', lambda: eyes.camera_tool(action, **args), 'read' if is_read else 'act')
+
+    @server.tool(annotations=read)
+    async def fnv_look(types: list[Literal['actors', 'doors', 'containers', 'activators', 'items', 'furniture', 'statics',
+                                           'lights']] | None = None,
+                       limit: Annotated[int, Field(ge=1, le=200)] = 20,
+                       radius: Annotated[float, Field(gt=0, le=40000)] = 6000.0,
+                       fields: list[Annotated[str, Field(max_length=40)]] | None = None,
+                       rays: Annotated[int, Field(ge=0, le=200)] = 40,
+                       include_hidden: bool = False) -> result_type:
+        """What is on screen, as data: references in view, largest on screen first, each with form id, name, type,
+        distance, the screen rectangle in pixels [x0, y0, x1, y1], screen share, line of sight from the camera (true,
+        false or unknown when the ray budget ran out) and flags; plus the crosshair reference, its prompt, the corner
+        message, the subtitle and the open menus. types filters; fields keeps only those keys per reference."""
+        return await invoke('fnv_look', lambda: eyes.look(types, limit, radius, fields, rays, include_hidden))
+
+    @server.tool(annotations=act)
+    async def fnv_photo(action: Literal['ref', 'cell', 'view', 'sheet', 'sequence', 'compare'] = 'view',
+                        ref: Ref | None = None,
+                        angles: list[Any] | None = None,
+                        size: Annotated[int, Field(ge=320, le=3840)] = 960,
+                        hide_hud: bool = True, label: bool = False,
+                        frames: Annotated[int, Field(ge=1, le=60)] | None = None,
+                        every: Annotated[int, Field(ge=1, le=600)] = 1,
+                        baseline: Annotated[str, Field(max_length=1000)] | None = None,
+                        distance: Annotated[float, Field(gt=0, le=20000)] | None = None,
+                        name: Annotated[str, Field(max_length=60)] | None = None) -> result_type:
+        """Pictures of the running game (PNG paths). ref: a reference from angles (front, three_quarter, side, back,
+        top, or [yaw, pitch] pairs) tiled into one sheet, the world paused and the player's view restored after.
+        cell: from above and from the four corners. view: the current view, hide_hud, label=true draws the fnv_look
+        rectangles. sheet: ref views or the view. sequence: frames images, every k frames, with the frame gate (a
+        film strip). compare: the view against a baseline image: changed percent and a difference image."""
+        return await invoke('fnv_photo', lambda: eyes.photo(action, ref=ref, angles=angles, size=size,
+                                                            hide_hud=hide_hud, label=label, frames=frames,
+                                                            every=every, baseline=baseline, name=name,
+                                                            distance=distance), 'act')
+
+    @server.tool(annotations=read)
+    async def fnv_hud(action: Literal['read', 'post'] = 'read',
+                      text: Annotated[str, Field(max_length=250)] | None = None,
+                      seconds: Annotated[float, Field(gt=0, le=30)] = 3.0) -> result_type:
+        """The HUD: mode (normal, dialogue, VATS, container...), which parts are visible, the crosshair reference
+        and its activation prompt, the corner message on screen and the queued ones, the subtitle line. post: show a
+        corner message (text, seconds) so a person watching sees what the agent does (needs full control)."""
+        return await invoke('fnv_hud', lambda: eyes.hud(action, text, seconds), 'read' if action == 'read' else 'act')
+
+    @server.tool(annotations=read)
+    async def fnv_visibility(ref: Ref) -> result_type:
+        """Why a reference does not draw: checks in order (no 3D, deleted, disabled, culled node, zero scale, empty
+        bound, first person, other cell, outside the view, behind something) and stops at the first cause, listing
+        the rest as also. Says what it could not check (fades, LOD, portals, shader alpha)."""
+        return await invoke('fnv_visibility', lambda: eyes.visibility(ref))
+
+    @server.tool(annotations=act)
+    async def fnv_play(action: Literal['goto', 'look_at', 'activate', 'talk', 'loot', 'equip', 'use', 'drop', 'stop'],
+                       ref: Ref | None = None, position: Point | None = None, direct: bool = False,
+                       max_seconds: Annotated[float, Field(gt=0, le=600)] = 90.0, run: bool = False) -> result_type:
+        """Play as a player would, through the player's own input. goto ref|position: walk there on foot (a route
+        around walls found with rays, doors on the way are opened by activation; stops on arrival, when blocked, when a
+        menu opens or after max_seconds) and report the route, doors used and why it stopped. look_at ref: turn the
+        view onto it and say whether the crosshair picks it. activate ref: look at it, check the crosshair, press
+        activate for one frame and report what happened (menu opened, dialogue, door state, HUD message) or why not
+        (menu open, controls disabled, locked, not in the crosshair...); direct=true activates without the crosshair.
+        talk ref: goto + activate + dialogue opened? loot ref (a container: take all), equip/use/drop ref (an item
+        form) run the engine's commands on the player. stop releases every held input."""
+        return await invoke('fnv_play', lambda: hands.play(action, ref=ref, position=position, direct=direct,
+                                                           max_seconds=max_seconds, run=run), 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_ui_do(action: Literal['click', 'button', 'wait', 'sleep', 'fast_travel', 'message', 'close', 'back',
+                                        'type'],
+                        target: Annotated[str, Field(max_length=200)] | None = None,
+                        label: Annotated[str, Field(max_length=120)] | None = None,
+                        menu: Annotated[str, Field(max_length=40)] | None = None,
+                        hours: Annotated[int, Field(ge=1, le=24)] | None = None,
+                        marker: Ref | None = None,
+                        button: Annotated[str, Field(max_length=120)] | None = None) -> result_type:
+        """Menus by meaning, on the menu at the top. click target=<tile path or name> (fnv_ui_tiles lists them) or
+        button label=<text on it> (Take All, Repair, Accept, Done...): the menu's own click handler with the tile's id,
+        as a mouse click does; returns the menus opened or closed and the HUD message. wait hours=N: press the wait
+        control (a refusal comes back as the reason), then pass the hours with the engine's own hour of waiting.
+        fast_travel marker=<map marker ref>: the engine's CanFastTravel (its refusal message) then FastTravel.
+        message button=<index or label>: a message box button. close/back: the top menu. type is not built yet."""
+        return await invoke('fnv_ui_do', lambda: hands.ui_do(action, target=target, label=label, menu=menu,
+                                                             hours=hours, marker=marker, button=button), 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_asset(action: Literal['reload', 'watch', 'file_log', 'queue', 'where', 'models', 'archives'],
+                        path: Annotated[str, Field(max_length=500)] | None = None,
+                        mode: Literal['start', 'read', 'stop'] | None = None,
+                        missing: bool = False,
+                        ext: Annotated[str, Field(max_length=10)] | None = None,
+                        folder: Annotated[str, Field(max_length=300)] | None = None,
+                        limit: Annotated[int, Field(ge=1, le=5000)] = 200,
+                        wait_idle: bool = False) -> result_type:
+        """Assets in the running game. reload path: a model (.nif) or texture (.dds) is read from disk again by the
+        loaded references that use it (no restart); .ini runs RefreshINI, a shader package RefreshShaders. watch path=<mod
+        folder>: reload what changed since the last watch call. file_log mode=start|read|stop: every file the engine
+        opened or failed to find (missing=true for the failures; ext, folder filter), with thread and caller; start
+        it before entering a cell. where path: which source wins (loose in a mod, Data, an archive). queue: the IO
+        queue (wait_idle). models: the model cache (DumpModelMap). archives: the archives and loose roots in order."""
+        is_read = action in ('where', 'queue', 'models', 'archives') or (action == 'file_log' and mode in (None, 'read'))
+        args = {'path': path, 'mode': mode, 'missing': missing, 'ext': ext, 'folder': folder, 'limit': limit,
+                'wait_idle': wait_idle}
+        return await invoke('fnv_asset', lambda: asset_tools.run(action, **args), 'read' if is_read else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_form(action: Literal['create', 'reload', 'changes', 'bytes', 'delete'],
+                       type: Annotated[str, Field(pattern=r'^[A-Za-z_]{4}$')] | None = None,
+                       clone: Ref | None = None,
+                       name: Annotated[str, Field(max_length=100)] | None = None,
+                       plugin: Annotated[str, Field(max_length=200)] | None = None,
+                       records: list[Annotated[str, Field(max_length=128)]] | None = None,
+                       since: float | None = None) -> result_type:
+        """Forms at run time. create type=<STAT, MISC, ARMO, ...> makes an empty form, or clone=<base form> a copy
+        (name sets its name); ready for fnv_form_edit and fnv_place. reload plugin=<name, or the rebuilt file's path: the
+        running game locks its own plugin files> after rebuilding it: the
+        changed fields of its records (name, models, value, weight, health, armour rating and threshold) go into the
+        live forms and the references using a changed model rebuild their 3D; new records and other types are listed
+        as needing a restart. changes: what this session created, edited and placed. bytes and delete are not built."""
+        is_read = action == 'changes'
+        args = {'type': type, 'clone': clone, 'name': name, 'plugin': plugin, 'records': records, 'since': since}
+        return await invoke('fnv_form', lambda: form_tools.run(action, **args), 'read' if is_read else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_place(action: Literal['at', 'array', 'nudge', 'rotate', 'scale', 'snap', 'check', 'list', 'remove'],
+                        base: Ref | None = None, ref: Ref | None = None,
+                        position: Point | None = None, near: Ref | None = None,
+                        offset: Point | None = None, rotation: Point | None = None,
+                        scale: Annotated[float, Field(gt=0, le=10)] | None = None,
+                        shape: Literal['row', 'grid', 'circle'] | None = None,
+                        count: Annotated[int, Field(ge=1, le=100)] | None = None,
+                        spacing: Annotated[float, Field(gt=0, le=5000)] | None = None,
+                        columns: Annotated[int, Field(ge=1, le=50)] | None = None,
+                        radius: Annotated[float, Field(gt=0, le=10000)] | None = None,
+                        snap: bool = False, local: bool = False) -> result_type:
+        """Place things in the running game; every placement is journaled for fnv_author export. at base: at position,
+        or near a ref (+ offset), or 150 units in front of the player; rotation in degrees, scale, snap=true drops it
+        on the surface below. array base: shape row, grid (columns) or circle (radius), count, spacing, from position
+        or the player. nudge ref offset=[dx,dy,dz] (local=true in its own axes), rotate ref rotation=[dx,dy,dz]
+        degrees added, scale ref scale. snap ref: onto the surface below. check ref: floating or sinking. list: what
+        this session placed. remove: one placed ref, or all of them."""
+        is_read = action in ('list', 'check')
+        args = {'base': base, 'ref': ref, 'position': position, 'near': near, 'offset': offset, 'rotation': rotation,
+                'scale': scale, 'shape': shape, 'count': count, 'spacing': spacing, 'columns': columns,
+                'radius': radius, 'snap': snap, 'local': local}
+        return await invoke('fnv_place', lambda: place_tools.run(action, **args), 'read' if is_read else 'act')
+
+    @server.tool(annotations=control)
+    async def fnv_author(action: Literal['export', 'check', 'scaffold', 'package'],
+                         plugin: Annotated[str, Field(max_length=200)] | None = None,
+                         kind: Literal['item', 'interior', 'quest', 'terminal', 'perk', 'companion'] | None = None,
+                         name: Annotated[str, Field(max_length=60)] | None = None,
+                         cell: Annotated[str, Field(max_length=128)] | None = None) -> result_type:
+        """Authoring. export: the session's created forms and placed references as a plugin spec part (records by
+        EditorID, objects of a cell) in the bridge state folder, to merge into the project spec. check plugin: missing
+        files, conflicts with other plugins and the engine warning summary in one report. scaffold kind name: a
+        starting project (spec, a smoke test, readme). package plugin: a release folder and zip with the plugin, its
+        loose files and a readme, plus the missing-file check."""
+        args = {'plugin': plugin, 'kind': kind, 'name': name, 'cell': cell}
+        return await invoke('fnv_author', lambda: author_tools.run(action, **args), 'control')
 
     return live

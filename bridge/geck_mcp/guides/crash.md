@@ -60,6 +60,13 @@ tool descriptions in this repository. The tests check that every tool name below
 4. Call `fnv_warnings` with action `clear` before the run and `read` after it. No new warning may name your plugin.
 5. Run the tests of the mod (`fnv_test_run_all`) to see that nothing else broke.
 
+## Stop at the crash instead of dying
+
+`fnv_debug` with action `break` and location `fault` turns on the crash hold. When the game faults, the faulting
+thread waits: `fnv_debug status` shows the source line, `stack` and `locals` read the live process, and `continue`
+lets the crash logger write its log as usual. `return` or `skip` try to recover, to test a guess. `dump` writes a
+minidump to look at later.
+
 ## Planned (Plan 2, not available yet)
 
-`fnv_debug` (break on fault, stack, locals), `fnv_object` and `fnv_bisect` (find the plugin that causes a crash).
+`fnv_object` and `fnv_bisect` (find the plugin that causes a crash).
