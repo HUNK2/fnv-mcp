@@ -398,6 +398,11 @@ typedef struct {
     volatile LONG stop_next; /* resume next <hook>: the next call that passes the filter parks (w2_stop.c) */
     unsigned char *skip_stub;
     char script[256];
+    /* W5 native modules (w5_mod.c): a module's handler runs at each call that passes the filter */
+    int (*volatile native)(uint32_t *fr, void *user);
+    void *native_user;
+    volatile LONG *native_busy;
+    unsigned char *native_skip;
 } Hook;
 /* A frame is a watch hook's (hook set) or a mass probe's (probe = index + 1, sample = its sample record). */
 typedef struct { uint32_t ret_slot, ret; Hook *hook; uint64_t t0; LONG seq; uint32_t ecx, a0, a1, override, probe; uint32_t *sample; } ShadowFrame;
@@ -411,6 +416,8 @@ static LARGE_INTEGER qpc_frequency;
 
 /* Defined in w2_stop.c: parks the thread for a hold or a next stop; returns 0 to run the call, or the skip stub. */
 static uint32_t hook_stop(Hook *h, uint32_t *fr);
+/* Defined in w5_mod.c: runs a module's native handler; 0 to run the call, or the native skip stub. */
+static uint32_t mod_hook_enter(Hook *h, uint32_t *fr);
 uint32_t fnvmcp_on_enter(uint32_t *fr);
 uint32_t fnvmcp_on_exit(uint32_t *fr, const uint32_t *fpu);
 uint32_t fnvmcp_probe_enter(uint32_t *fr);
@@ -538,6 +545,13 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
     QueryPerformanceCounter(&now);
     if (h->act_mode == ACT_HOLD || h->stop_next) {
         uint32_t stub = hook_stop(h, fr);
+        if (stub) {
+            SetLastError(error);
+            return stub;
+        }
+    }
+    if (h->native) {
+        uint32_t stub = mod_hook_enter(h, fr);
         if (stub) {
             SetLastError(error);
             return stub;
@@ -2003,6 +2017,8 @@ static void op_events(int argc, char **argv) {
 #include "w1_input.c"
 #include "w2_stop.c"
 #include "w2_bp.c"
+#include "w5_mod.c"
+#include "w5_code.c"
 
 static void serve_op(char *op) {
     char *argv[40];
@@ -2047,6 +2063,9 @@ static void serve_op(char *op) {
     else if (!strcmp(argv[0], "faulthold")) op_faulthold(argc, argv);
     else if (!strcmp(argv[0], "bp")) op_bp(argc, argv);
     else if (!strcmp(argv[0], "trace")) op_trace(argc, argv);
+    else if (!strcmp(argv[0], "mod")) op_mod(argc, argv);
+    else if (!strcmp(argv[0], "hooknative")) op_hooknative(argc, argv);
+    else if (!strcmp(argv[0], "code")) op_code(argc, argv);
     else fail("unknown_op");
 }
 /* A request runs on the main thread. step and until can stop it in the middle: the ops after them are
@@ -2206,6 +2225,7 @@ static void main_loop(void) {
     last_frame_tick = GetTickCount64();
     if (deferred_init) route_console(); /* script errors reach the log even between requests */
     samp_tick();
+    mod_frame_tick();
     if (suspend_kind != SUSP_NONE) gate_frame_tick();
     run_due(false);
     run_hook_scripts();
@@ -2257,6 +2277,7 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
     PluginInfo info;
     if (!NVSEPlugin_Query(nvse, &info)) return false;
     nvse_version = nvse->nvseVersion;
+    nvse_iface = nvse;
     runtime_version = nvse->runtimeVersion;
     scripts = nvse->QueryInterface(6);
     console = nvse->QueryInterface(1);

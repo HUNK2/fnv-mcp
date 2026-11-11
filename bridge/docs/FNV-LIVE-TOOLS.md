@@ -711,6 +711,47 @@ runtime class (`TESFullName`, `TESValueForm`, `TESWeightForm`, `TESHealthForm`, 
 `TESScriptableForm`), plus `TESGlobal` and `TESQuest` data, and compares them with `fnv_record_show`'s
 decoding of the winning record.
 
+## Engine code: fnv_native, fnv_code, fnv_plugin_build (Plan 2, W5)
+
+Code: `geck_mcp/fnv_native.py`, `geck_mcp/fnv_code.py`, `geck_mcp/fnv_plugin_build.py`; companion
+`native/engine/w5_mod.c`, `w5_code.c`; module API `native/sdk/fnvmcp_module.h`; standalone runtime
+`native/runtime/fnvmcp_rt.c`. Checked in the game on 2026-11-11.
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `fnv_native` | act | C modules inside the game: `headers` (module API + `fnv_engine.h`: `FNV_ADDR_<name>`, typed pointers `FNV_<name>` with their calling convention, padded structs), `build` (Zig), `load` (init runs on the main thread, requested hooks installed), `call` an export, `log`, `reload`, `unload`, `list` |
+| `fnv_code` | act | Change an engine function in its decomp source and run it: `checkout`, `edit`, `build` (the unit's own compiler and flags, then a link against the game's addresses), `compare` (old and new side by side), `swap`, `unswap`, `list`, `export` (local patch set) |
+| `fnv_plugin_build` | control | A module as a normal xNVSE plugin with no companion: `scaffold`, `build` (hook prologues planned from the running game or the local game image), `install` (own MO2 mod in the dev profile), `log` |
+
+How:
+
+- The module API (`FnvmcpApi`, 44 bytes, version 1): `log`, `read`, `write` (put back at unload), `hook(target,
+  handler, user, pop)`, `on_frame`, `console`, `nvse`, `alloc`/`free` (the game's MemoryManager). A hook handler gets
+  the registers, return address and stack arguments (`FnvHookFrame`); `FNV_SKIP` returns the frame's `eax` and pops
+  `pop` bytes. API calls find their module by the caller's return address.
+- Hooks: the module asks; the bridge plans the stolen prologue (as for every hook), installs a plain hook, and
+  `hooknative` attaches the handler. Unload removes the hooks (original bytes back), waits for running handlers, runs
+  `fnvmcp_module_exit`, puts writes back and frees the DLL.
+- Checked live: a module logged `activate 00107C77 by 00000014` from `TESObjectREFR::Activate` 0x00573170; reloaded
+  with a skip for that door, the activation was refused and the door stayed open; after unload the door closed and the
+  entry bytes were the original `55 8b ec`.
+- `fnv_code`: the unit's source is copied into `state/fnv/code/<address>/` (the decomp checkout is never edited) and
+  compiled with `tools/msvc.py` and the unit's recipe. The function's COMDAT is taken from the object; each
+  relocation is bound through the unit's `symbols`, the unit's functions, or a name bound to one address anywhere in
+  the recipe; read-only sections it needs are copied into the blob. Refused: exception handling (`.text$x`,
+  `.xdata$x`), new writable statics, copied sections with relocations. The blob goes into `code alloc` memory and the
+  entry gets a `jmp` (`code patch`, other threads suspended).
+- S3 checked live: `AIFormulas::CalculateSkillValue` 0x00643C20 with `float result = base + 10.0f;` built to 103
+  bytes (original 97, 7 relocations, all bound); `compare` (15, 5, 5) gave 28 and 38; after `swap` a call of the
+  original entry returned 38; after `unswap` 28 again; the game ran on.
+- `fnv_plugin_build`: `fnvmcp_rt.c` provides the same API as a plugin (hooks written at plugin load, before the game
+  runs; frame callbacks on xNVSE's main-loop message; log next to the DLL, which MO2 puts in `overwrite/NVSE/Plugins`).
+  Checked live: the activation logger as a plugin logged the door and an NPC activation with no companion hook.
+- Generated structs come from the symbol database's best definition of a class; for `TESForm` that definition is a
+  36-byte placeholder of `unk` fields (the real class is 0x18 bytes), so check a struct before trusting it.
+- Not built: `fnv_orig_<address>` (calling the old function from the new one), `compare` modes `shadow` and `ab`,
+  redirecting call sites for functions shorter than five bytes, a loader plugin for an exported patch set.
+
 ## Loose ends of W1 to W4 (2026-11-11 evening)
 
 Built and checked in the game in this run:

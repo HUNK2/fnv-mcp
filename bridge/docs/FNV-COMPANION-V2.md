@@ -195,3 +195,15 @@ breakpoint on its return address and run until it returns (callees are not trace
 leaves the range through a return (esp above the esp at the start), or after `max` steps (at most 200,000); the
 thread then parks again as kind `step`. `trace read <seq> <since> [max]` returns
 `{"entries":[{"n","eip","values":[..]}],"next":S,"done":bool,"reason":"returned|max|fault"}`.
+
+## W5: native modules and code placement
+
+| Op | Result |
+|---|---|
+| `mod load <path_hex>` | LoadLibrary on the main thread, then `fnvmcp_module_init(api)`. `{"ok":true,"module":{id,name,base,size,hooks:[{request,target,pop,handler,installed,hook}]},"exports":[{name,address}]}`; errors `load_failed` (with `winError`), `no_init_export`, `init_failed` |
+| `mod unload <id>` | Removes the module's hooks, waits up to 2 s for running handlers (`busy` otherwise), runs `fnvmcp_module_exit`, puts its writes back, FreeLibrary. `{"ok":true,"hooksRemoved","hooksStuck","writesRestored"}` |
+| `mod list` / `mod log <since> [max]` | Modules; log lines `{seq,module,frame,text}` (ring of 1,024) |
+| `hooknative <hook> <mod> <request>` | Attaches a module's hook request to a hook installed with `hook` (flags 0): the handler runs at each call; `FNV_SKIP` returns through a `ret <pop>` stub with the frame's eax |
+| `code alloc <size>` / `code free <addr>` | Executable memory for swapped functions |
+| `code patch <addr> <hex>` | Writes bytes with the other threads suspended; `{"ok":true,"length","old":"<hex>"}` |
+

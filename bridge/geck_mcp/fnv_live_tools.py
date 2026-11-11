@@ -17,6 +17,9 @@ from .fnv_agent import AgentTools
 from .fnv_scenario import ScenarioRunner, diff, load_snapshot, snapshot
 from .fnv_warnings import for_live as warnings_for_live
 from .fnv_sampling import FrameSampler, SinkTools
+from .fnv_native import NativeTools
+from .fnv_code import CodeTools
+from .fnv_plugin_build import PluginTools
 
 FNV_LIVE_TOOLS = {
     # milestone 4: game control, tests, logs
@@ -158,6 +161,9 @@ FNV_LIVE_TOOLS = {
     # Plan 2 wave 4: creation loop
     'fnv_asset': ('act', 'assets in the running game: reload a model or texture from disk (no restart), watch a mod folder, the log of every file the engine opened or missed, where a path comes from, load queue, model cache, archives'),
     'fnv_form': ('act', 'forms at run time: create (a new form or a clone), reload the changed records of a rebuilt plugin into the live forms, what this session changed'),
+    'fnv_native': ('act', 'C modules inside the game: generate engine headers, build with Zig, load (hooks installed), call exports, read their log, reload, unload'),
+    'fnv_code': ('act', "swap an engine function for one compiled from edited decomp source: checkout, edit, build (with the game's own compiler), compare side by side, swap, unswap, export"),
+    'fnv_plugin_build': ('control', 'ship a native module as its own xNVSE plugin (no companion needed): scaffold, build with hook prologues planned, install into the dev profile, read its log'),
     'fnv_place': ('act', 'level work in the game: place a form at a position or near a ref, rows, grids and circles, nudge, rotate, scale, snap to the surface, check floating or sinking, list and remove what this session placed'),
     'fnv_author': ('control', "turn the session's live work into a plugin spec part, check a plugin (missing files, conflicts, engine warnings), scaffold a starting project, package a release folder and archive"),
     # milestone 10: setup
@@ -229,6 +235,9 @@ def register(server, project, annotations, result_type):
     form_tools = FormTools(live, data=data, assets=asset_tools)
     place_tools = PlaceTools(live, hands=hands)
     author_tools = AuthorTools(live, data=data, records=records, place=place_tools, forms=form_tools)
+    native_tools = NativeTools(live)
+    code_tools = CodeTools(live)
+    plugin_tools = PluginTools(live)
     frame_sampler = FrameSampler(live)
     sinks = SinkTools(live)
     live.eyes, live.hands = eyes, hands      # the scenario runner's photo / play / ui steps
@@ -1764,6 +1773,63 @@ def register(server, project, annotations, result_type):
         is_read = action == 'changes'
         args = {'type': type, 'clone': clone, 'name': name, 'plugin': plugin, 'records': records, 'since': since}
         return await invoke('fnv_form', lambda: form_tools.run(action, **args), 'read' if is_read else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_native(action: Literal['headers', 'build', 'load', 'unload', 'reload', 'call', 'log', 'list'],
+                         name: Annotated[str, Field(max_length=300)] | None = None,
+                         source: Annotated[str, Field(max_length=200000)] | None = None,
+                         functions: list[Annotated[str, Field(max_length=200)]] | None = None,
+                         classes: list[Annotated[str, Field(max_length=200)]] | None = None,
+                         export: Annotated[str, Field(max_length=100)] | None = None,
+                         args: list[int | float] | None = None,
+                         since: Annotated[int, Field(ge=0)] | None = None) -> result_type:
+        """C code running inside the game (Plan 2 W5). headers functions=[names] classes=[names]: the module API
+        (fnvmcp_module.h) and fnv_engine.h with FNV_ADDR_<name>, typed pointers FNV_<name> and padded structs from
+        the symbol database. build source=<C text or .c path> name=N: zig cc to a DLL (compiler errors returned).
+        load name=N: loaded on the main thread, fnvmcp_module_init(api) runs, the hooks it asked for (api->hook) are
+        installed; handlers get the registers and stack arguments and may change them or skip the call (FNV_SKIP).
+        call name export args: an exported function on the main thread (guarded). log: what modules logged
+        (api->log). reload name [source]: unload, rebuild, load. unload: hooks removed, writes put back, DLL freed.
+        list: loaded modules and built DLLs."""
+        is_read = action in ('log', 'list')
+        return await invoke('fnv_native', lambda: native_tools.run(action, name=name, source=source,
+                                                                 functions=functions, classes=classes,
+                                                                 export=export, args=args, since=since),
+                            'read' if is_read else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_code(action: Literal['checkout', 'edit', 'build', 'swap', 'unswap', 'compare', 'list', 'export'],
+                       function: Annotated[str, Field(max_length=200)] | None = None,
+                       find: Annotated[str, Field(max_length=20000)] | None = None,
+                       replace: Annotated[str, Field(max_length=20000)] | None = None,
+                       args: list[dict[str, Any]] | None = None,
+                       this: Annotated[str, Field(max_length=200)] | None = None,
+                       returns: Literal['void', 'int', 'uint', 'bool', 'ptr', 'float', 'double', 'form'] | None = None
+                       ) -> result_type:
+        """Change an engine function from its decompiled source and run the change in the game (Plan 2 W5; local
+        use only). checkout function: a copy of its decomp unit in the bridge state (the decomp checkout is never
+        edited) and the function's lines. edit find replace: change the copy inside the function. build: the unit's
+        own compiler and flags (Visual C++ 2008), then the function is linked against the game's addresses (names it
+        cannot bind are listed). compare args [this returns]: the original and the new code called side by side.
+        swap: the entry jumps to the new code; unswap puts it back. list: active swaps with source diffs. export: a
+        local patch set. Refused: exception handling inside the function, new writable statics."""
+        is_read = action in ('list', 'checkout')
+        return await invoke('fnv_code', lambda: code_tools.run(action, function=function, find=find, replace=replace,
+                                                             args=args, this=this, returns=returns),
+                            'read' if is_read else 'act')
+
+    @server.tool(annotations=control)
+    async def fnv_plugin_build(action: Literal['scaffold', 'build', 'install', 'log'],
+                               name: Annotated[str, Field(min_length=1, max_length=60)],
+                               source: Annotated[str, Field(max_length=200000)] | None = None,
+                               hooks: list[Annotated[str, Field(max_length=200)]] | None = None) -> result_type:
+        """A native module (the fnv_native API) as a normal xNVSE plugin that needs no engine companion (Plan 2
+        W5). scaffold: a starting source. build [source] hooks=[functions the module hooks]: the runtime, the module
+        and the hook prologues (planned from the running game, or from the local game image) compiled with Zig.
+        install: as its own MO2 mod in the dev profile (game closed); fnv_restart loads it. log: its log file."""
+        return await invoke('fnv_plugin_build', lambda: plugin_tools.run(action, name=name, source=source,
+                                                                         hooks=hooks),
+                            'read' if action == 'log' else 'control')
 
     @server.tool(annotations=act)
     async def fnv_place(action: Literal['at', 'array', 'nudge', 'rotate', 'scale', 'snap', 'check', 'list', 'remove'],
