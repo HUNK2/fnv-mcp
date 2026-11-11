@@ -20,6 +20,7 @@ THREAD_SUSPEND_RESUME = 0x0002
 THREAD_GET_CONTEXT = 0x0008
 THREAD_SET_CONTEXT = 0x0010
 THREAD_QUERY_INFORMATION = 0x0040
+THREAD_QUERY_LIMITED_INFORMATION = 0x0800
 TH32CS_SNAPTHREAD = 0x4
 LIST_MODULES_32BIT = 0x01
 WOW64_CONTEXT_FULL = 0x10000 | 0x1 | 0x2  # control + integer
@@ -191,6 +192,22 @@ class GameProcess:
                 kernel32.CloseHandle(handle)
         return best[1] if best else None
 
+    def thread_cpu_ms(self, tid):
+        """Kernel + user CPU time a thread has used, in ms (GetThreadTimes), or None."""
+        thread = kernel32.OpenThread(THREAD_QUERY_LIMITED_INFORMATION, False, tid)
+        if not thread:
+            return None
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel32.GetThreadTimes(thread, *[ctypes.byref(t) for t in times]):
+                return None
+            total = 0
+            for t in times[2:]:
+                total += (t.dwHighDateTime << 32) | t.dwLowDateTime
+            return total / 10000.0
+        finally:
+            kernel32.CloseHandle(thread)
+
     def thread_context(self, tid):
         """{'eip','esp','ebp',...} of a thread, suspended only while the context is read; None if unavailable."""
         thread = kernel32.OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, False, tid)
@@ -209,7 +226,13 @@ class GameProcess:
                 regs = dict(zip(names, struct.unpack_from('<8I', raw, 0x9C)))
                 regs['esp'] = struct.unpack_from('<I', raw, 0xC4)[0]
                 # Read the stack while the thread is still suspended so the walk sees one consistent state.
-                regs['stack'] = self.read(regs['esp'], 0x4000) or self.read(regs['esp'], 0x1000)
+                # A shallow thread's ESP sits near the top of its stack region, where a long read fails: shorten it
+                # (seen live 2026-11-11: a polling thread read nothing at 0x100 bytes, 0x40 worked).
+                regs['stack'] = None
+                for size in (0x4000, 0x1000, 0x400, 0x100, 0x40):
+                    regs['stack'] = self.read(regs['esp'], size)
+                    if regs['stack']:
+                        break
                 return regs
             finally:
                 kernel32.ResumeThread(thread)

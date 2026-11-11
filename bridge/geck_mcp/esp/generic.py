@@ -46,7 +46,7 @@ from .records import SpecError, check_edid, record
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_DIR = ROOT / 'state' / 'templates'
 GENERIC_TYPES = {'NPC_', 'CREA', 'WEAP', 'ACTI', 'SOUN', 'QUST', 'PACK', 'MESG', 'FLST', 'MISC', 'GLOB', 'ALCH',
-                 'FACT', 'CONT', 'SPEL', 'MGEF', 'ENCH', 'EXPL', 'PROJ', 'SCPT', 'VTYP'}
+                 'FACT', 'CONT', 'SPEL', 'MGEF', 'ENCH', 'EXPL', 'PROJ', 'SCPT', 'VTYP', 'DIAL'}
 SCRIPT_TYPES = {'object': 0, 'quest': 1, 'effect': 0x100}
 VALUE_KEYS = ('text', 'texts', 'form', 'forms', 'hex', 'u8', 'u16', 'u32', 's32', 'float', 'pack', 'empty')
 COMPILED_TAGS = ('SCHR', 'SCDA', 'SCTX', 'SLSD', 'SCVR', 'SCRO', 'SCRV')

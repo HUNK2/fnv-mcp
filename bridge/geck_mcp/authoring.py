@@ -95,6 +95,25 @@ class Authoring:
             raise AuthoringError('NOT_BUILT', 'No build receipt yet; build first')
         return json.loads(self.receipt_path.read_text())
 
+    def mod_roots(self):
+        """Loose-file roots of the MO2 dev profile (fnv.mo2_root / mo2_profile): the enabled mods, highest priority
+        first, and the plugin's own mod folder (mods/<plugin name>, where fnv_install puts it). A mesh a mod ships
+        loose lives there, not in Data (seen 2026-11-11: a crate mesh in its mod folder failed the build's check)."""
+        fnv = getattr(self.project, 'fnv', None)
+        if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
+            return []
+        mods = Path(fnv.mo2_root) / 'mods'
+        roots = []
+        modlist = Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile / 'modlist.txt'
+        if modlist.exists():
+            for line in modlist.read_text(encoding='utf-8', errors='replace').splitlines():
+                if line.startswith('+') and (mods / line[1:].strip()).is_dir():
+                    roots.append(mods / line[1:].strip())
+        own = mods / Path(self.project.plugin).stem
+        if own.is_dir() and own not in roots:
+            roots.insert(0, own)
+        return roots
+
     # -- build ---------------------------------------------------------------------------
     def asset_manifest(self, data, assets):
         """Content identities for referenced loose assets; archive identities remain explicit."""
@@ -166,7 +185,7 @@ class Authoring:
         data, receipt = builder.build(spec, formids, index, base_dir=self.spec_path.parent,
                                       script_cache=cache,
                                       templates=self.templates)
-        assets = AssetIndex(self.data_dir) if check_assets and self.data_dir.is_dir() else None
+        assets = AssetIndex(self.data_dir, self.mod_roots()) if check_assets and self.data_dir.is_dir() else None
         receipt['validation'] = validate(data, index, assets, spec['masters'])
         receipt['assets'] = self.asset_manifest(data, assets)
         receipt['compileContext'] = context
@@ -198,7 +217,8 @@ class Authoring:
             raise AuthoringError('STALE_BUILD', 'build output does not match its receipt; rebuild first')
         if receipt.get('compileContext') and self.compile_context(self.load_spec()) != receipt['compileContext']:
             raise AuthoringError('STALE_BUILD', 'Spec/source/compiler/dependency inputs changed since build; nothing installed')
-        current_assets = self.asset_manifest(built, AssetIndex(self.data_dir) if self.data_dir.is_dir() else None)
+        current_assets = self.asset_manifest(built, AssetIndex(self.data_dir, self.mod_roots())
+                                             if self.data_dir.is_dir() else None)
         if 'assets' in receipt and current_assets != receipt['assets']:
             raise AuthoringError('STALE_ASSETS', 'Referenced assets changed since the checked build; nothing installed')
         spec_id = receipt['projectId']

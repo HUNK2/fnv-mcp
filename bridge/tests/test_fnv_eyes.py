@@ -156,6 +156,8 @@ class FakeLive:
     def resolve(self, ref):
         return {'ptr': int(ref, 16), 'formId': ref.upper().zfill(8), 'expr': ref}
 
+    resolve_ref = resolve
+
     def walk_list(self, head, limit=500):
         return []
 

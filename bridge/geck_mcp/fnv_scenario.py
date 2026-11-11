@@ -675,11 +675,13 @@ class ScenarioRunner:
             return {'passed': True, 'actual': snapshot(live, arg.get('items'), arg.get('name'))}
         if action in ('photo', 'play', 'ui'):
             return self._w3_step(action, arg)
+        if action == 'dialogue':
+            return self._dialogue_step(arg)
         agent_result = self._agent_step(action, arg)
         if agent_result is not None:
             return agent_result
         raise ScenarioError('UNKNOWN_ACTION', 'Unknown step %r (run, script, wait, expect, set, actor, input, move, '
-                            'mem_write, call, revert_all, quit, snapshot, step, photo, play, ui, spawn, save, load, menu, screenshot, watch, '
+                            'mem_write, call, revert_all, quit, snapshot, step, photo, play, ui, dialogue, spawn, save, load, menu, screenshot, watch, '
                             'trace, time, rng)' % action)
 
     def _w3_step(self, action, arg):
@@ -711,6 +713,30 @@ class ScenarioRunner:
             passed = out.get('accepted', True) is not False
         return {'passed': passed, 'actual': out, 'reason': None if passed else 'play %s did not succeed: %s' % (
             kind, out.get('stopped') or out.get('refused') or out.get(PLAY_CHECKS.get(kind, 'accepted')))}
+
+    def _dialogue_step(self, arg):
+        """dialogue: {choose: [option, ...], speaker: ref}. Picks options in the open conversation (or opens one
+        with the speaker first) the way a click on a response does; passes when every pick was accepted. An option
+        is its index, a prompt substring or an info form id."""
+        social = getattr(self.live, 'social', None)
+        if social is None:
+            raise ScenarioError('NOT_WIRED', 'dialogue needs the social tools (fnv_live_tools)')
+        if isinstance(arg, (str, int)):
+            arg = {'choose': [arg]}
+        choices = arg.get('choose') or []
+        if not isinstance(choices, list):
+            choices = [choices]
+        state = social.menu_state()
+        start = not state.get('open')
+        if start and not arg.get('speaker'):
+            return {'passed': False, 'reason': 'no conversation is open and no speaker is given'}
+        out = social.dialogue_choose(arg.get('speaker'), choices, start=start, timeout=float(arg.get('timeout', 30)),
+                                     close=bool(arg.get('close')))
+        failed = [s for s in out['steps'] if s.get('error') or not s.get('accepted')]
+        passed = not failed and len(out['steps']) == len(choices)
+        return {'passed': passed, 'actual': out,
+                'reason': None if passed else 'dialogue: %s' % ((failed[0].get('error') if failed else None)
+                                                                  or 'not every choice was made')}
 
     def _wait(self, arg):
         if isinstance(arg, (int, float)):

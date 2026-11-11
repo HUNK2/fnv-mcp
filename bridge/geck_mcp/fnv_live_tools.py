@@ -237,9 +237,9 @@ def register(server, project, annotations, result_type):
     from .fnv_blame import BlameTools
     from .fnv_scriptdbg import EvalHook, ScriptDebugger, ScriptLog
     flow_tools = FlowTools(live, debugger=debugger)
-    blame_tools = BlameTools(live, debugger=debugger)
     statement_hook = EvalHook(live)
-    script_debug = ScriptDebugger(live, eval_hook=statement_hook, dbg=debugger)
+    script_debug = ScriptDebugger(live, eval_hook=statement_hook, dbg=debugger, data=data)
+    blame_tools = BlameTools(live, debugger=debugger, line_of=script_debug._line_of, statement_hook=statement_hook)
     script_log = ScriptLog(live, eval_hook=statement_hook, debugger=debugger)
     from .fnv_eyes import EyesTools
     eyes = EyesTools(live, agent=agent, engine_ai=engine_ai)
@@ -276,6 +276,7 @@ def register(server, project, annotations, result_type):
     frame_sampler = FrameSampler(live)
     sinks = SinkTools(live)
     live.eyes, live.hands = eyes, hands      # the scenario runner's photo / play / ui steps
+    live.social = social                     # its dialogue step
     read, act, control = annotations
 
     def service_call(name, fn, kind):
@@ -1587,7 +1588,23 @@ def register(server, project, annotations, result_type):
         args = {'op': op, 'location': location, 'break_id': break_id, 'when': when, 'hits': hits, 'thread': thread,
                 'do': do, 'log': log, 'depth': depth, 'with_locals': with_locals, 'frame': frame,
                 'expression': expression, 'value': value, 'mode': mode, 'file': file}
-        return await invoke('fnv_debug', lambda: debugger.run(action, **args), 'read' if is_read else 'act')
+        def run():
+            try:
+                return debugger.run(action, **args)
+            except fnv_link.LinkError as e:
+                # A fault on a loader thread during a load leaves the main thread waiting for it, and the
+                # companion answers only on the main thread. Read the held fault from outside instead.
+                if action not in ('status', 'stack') or e.code not in ('COMPANION_UNREACHABLE', 'COMPANION_TIMEOUT'):
+                    raise
+                doctor = deep.hang_doctor(samples=1)
+                if not doctor.get('heldFaults'):
+                    raise
+                return {'verdict': doctor['verdict'], 'state': 'stopped (held fault, read from outside)',
+                        'reason': 'The companion cannot answer: its main thread waits for the held thread. These are '
+                                  'the registers of the fault from its context file and the stack above them; fnv_quit '
+                                  'force=true ends the game.', 'heldFaults': doctor['heldFaults'],
+                        'mainThread': next((t for t in doctor['threads'] if t['main']), None)}
+        return await invoke('fnv_debug', run, 'read' if is_read else 'act')
 
     @server.tool(annotations=act)
     async def fnv_flow(action: Literal['trace', 'call'],

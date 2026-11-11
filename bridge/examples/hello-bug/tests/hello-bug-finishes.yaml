@@ -1,0 +1,11 @@
+# Regression test of scenario S4: HelloBugQuest counts HelloBugLevel up to 100 and reaches stage 10. It failed while
+# HelloBugJanitorScript reset HelloBugLevel (the wrong global) every 4 seconds; it passes once the janitor resets only
+# its own timer. Runs in the current game (no start), so it also checks a hot-swapped fix.
+name: hello bug quest reaches stage 10
+plugins: [HelloBug.esp]
+steps:
+  - expect: {quest_running: HelloBugQuest}
+  - set: {global: HelloBugLevel, value: 0}
+  - wait: {until: "GetStage HelloBugQuest >= 10", timeout: 20}
+  - expect: {stage: HelloBugQuest, equals: 10}
+  - expect: {no_script_errors: true}

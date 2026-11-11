@@ -1,0 +1,11 @@
+scn HelloBugJanitorScript
+
+; Meant to keep its own timer in range. The bug: it resets the wrong global.
+
+begin GameMode
+	set HelloBugJanitorTimer to HelloBugJanitorTimer + 1
+	if HelloBugJanitorTimer > 40
+		set HelloBugLevel to 0
+		set HelloBugJanitorTimer to 0
+	endif
+end

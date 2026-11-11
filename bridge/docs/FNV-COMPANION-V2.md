@@ -176,6 +176,7 @@ original function (or skips it). Follow how the existing `hookact` actions (`ski
 - `resume step` sets the trap flag; the next single-step exception becomes a stop of kind `step` (`id` = the bp id
   it came from, or 255).
 - Existing int3 probes and `dbg` watchpoints keep working; breakpoints must not take their exceptions.
+- `dbg read <since>` hits are `[seq, slot, eip, thread, value, ret, frame_ret, frame, mark_hook, mark_seq]`. The last two (added 2026-11-11) are the id and sequence number of the newest hook record the main thread wrote before a main-thread hit (0 on other threads): with the `ScriptRunner::EvaluateLine` hook armed, the statement that made the write (`fnv_blame field`).
 
 ### 8.3 Crash hold
 

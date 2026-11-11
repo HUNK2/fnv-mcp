@@ -11,8 +11,12 @@ Design: plan2/B-debug.md section 3; the record layout is the one hook records us
 3 this, 5 caller, 12.. arguments, 22 frame). Preset names are resolved through the engine map; a preset the map does
 not know is listed as skipped, never guessed. `form` (NotifyFormIDChanged) is not built.
 
-The script context of a hit is approximate: the last statement the same thread ran, read from the EvaluateLine
-record ring when fnv_script_log or fnv_script_trace keeps one. It is not the statement that made the write.
+The script context of a hit: the companion stamps each main-thread watch hit with the newest hook record the main
+thread wrote (wire: hit words 8 and 9). When that record is a statement of ScriptRunner::EvaluateLine (the ring
+fnv_script_debug, fnv_script_log or fnv_script_trace keeps; field arms it when none is), it is the statement that
+was running when the write happened: exact, read while watching because the ring wraps in about a second. Without
+the stamp (older companion) or once the record is gone, the context is the last statement the thread ran
+(approximate).
 """
 import re
 import time
@@ -40,6 +44,7 @@ PRESET_NAMES = tuple(name for name, _ in PRESETS)
 PRESET_ARGS = 4
 LABEL = 'blame.'
 RING_SCAN = 200
+POLL = 0.2              # field reads its hits this often: the statement ring wraps in about a second
 MAX_HITS = 2000
 FIELD_RE = re.compile(r'^(.*?)\s*\+\s*(0x[0-9A-Fa-f]+|\d+)$')
 SCRIPT_LABELS = ('script_line_dbg', 'script_line')
@@ -59,9 +64,12 @@ def _int(value):
 class BlameTools:
     """fnv_blame. Keeps the hits it has read (bounded) so `report` can group them; the rings are read from the game."""
 
-    def __init__(self, live, debugger=None, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, live, debugger=None, sleep=time.sleep, clock=time.monotonic, line_of=None, statement_hook=None):
         self.live = live
         self.sleep = sleep
+        self.clock = clock
+        self.line_of = line_of                # (script form id, statement, script ptr) -> (source line, text)
+        self.statement_hook = statement_hook  # the EvaluateLine hook (fnv_script_debug's), armed for exact context
         self.dbg = debugger or Debugger(live, sleep=sleep, clock=clock)
         self.hits = []
         self.seen = {}
@@ -97,18 +105,32 @@ class BlameTools:
         self.live.ready()
         if not self.live.game.process():
             raise ConvError('NOT_RUNNING', 'Watching a field needs the game running.')
+        if self.statement_hook is not None:
+            try:
+                self.statement_hook.ensure()    # statement records, so a script's write names its line
+            except Exception:  # noqa: BLE001 - without it the script context is approximate
+                pass
         result = self.link.one('dbg', 'set', '0', word(address), word(int(length)), word(ACCESS[access]),
                                '1' if scope == 'all' else '0')
         if not result.get('ok'):
             raise ConvError('WATCH_REFUSED', 'The companion could not set the watchpoint (%s). Next: the debug registers '
                             'may be full (four in use).' % (result.get('error') or result), result)
         seq = result['seq']
+        rows = []
+        self._hooks_cache = None
         try:
-            self.sleep(float(seconds))
-            raw = self.link.one('dbg', 'read', word(seq)).get('hits') or []
+            end = self.clock() + float(seconds)
+            while True:
+                self.sleep(min(POLL, max(0.0, end - self.clock())))
+                raw = self.link.one('dbg', 'read', word(seq)).get('hits') or []
+                for h in raw:
+                    seq = max(seq, int(h[0]))
+                    if len(rows) < MAX_HITS:
+                        rows.append(self._field_hit(h, address))
+                if self.clock() >= end:
+                    break
         finally:
             self.link.one('dbg', 'clear', 'f')
-        rows = [self._field_hit(h, address) for h in raw[:MAX_HITS]]
         self._keep(rows)
         return verdict('%d writes to %s in %s s.' % (len(rows), _hx(address), seconds),
                        'Each hit names the writer; a script runner on the stack adds the last statement its thread ran.'
@@ -141,7 +163,37 @@ class BlameTools:
         row = {'source': 'field', 'address': _hx(address), 'writer': stack[0].get('function'),
                'line': stack[0].get('source'), 'thread': _thread_label(thread), 'value': value, 'stack': stack}
         if any((s.get('function') or '').startswith('ScriptRunner') for s in stack):
-            row['script'] = self._script_context(_int(thread) if str(thread).lower().startswith('0x') else int(thread))
+            exact = self._statement_at(int(h[8]), int(h[9])) if len(h) >= 10 and h[8] and h[9] else None
+            row['script'] = exact or self._script_context(_int(thread) if str(thread).lower().startswith('0x')
+                                                          else int(thread))
+        return row
+
+    def _statement_at(self, hook_id, record_seq):
+        """The statement record the main thread wrote last before the hit, if it is an EvaluateLine record still in
+        the ring: the statement that made the write."""
+        hooks = self._hooks_cache if getattr(self, '_hooks_cache', None) is not None else self.live.deep.hooks()
+        self._hooks_cache = hooks
+        for h in hooks:
+            if int(h['id']) != hook_id or h.get('label') not in SCRIPT_LABELS:
+                continue
+            r = self.live.deep.record(h, record_seq)
+            if r is None:
+                return None
+            return self._script_row(r, approximate=False)
+        return None
+
+    def _script_row(self, r, approximate):
+        script = self.live.form_ids([r[12]])[0] if r[12] else None  # EvaluateLine arg0
+        form = (script or {}).get('formId')
+        row = {'script': form or _hx(r[12]), 'statement': r[18], 'line': r[18],  # arg6: the statement number
+               'reference': _hx(r[14]) if r[14] else None, 'approximate': approximate}
+        if form and self.line_of is not None:
+            try:
+                line, text = self.line_of(int(form, 16), r[18], r[12])
+            except Exception:  # noqa: BLE001 - no source: the statement number stays
+                line, text = None, None
+            if line is not None:
+                row['line'], row['sourceLine'] = line, text
         return row
 
     # ================================================================ ref
@@ -227,7 +279,9 @@ class BlameTools:
     def _culprit(self, hit):
         if hit.get('script'):
             s = hit['script']
-            return 'script %s line %s' % (s.get('script') or '?', s.get('line') or '?')
+            text = ': %s' % s['sourceLine'] if s.get('sourceLine') else ''
+            return 'script %s line %s%s%s' % (s.get('script') or '?', s.get('line') or '?', text,
+                                              ' (approximate)' if s.get('approximate') else '')
         if hit.get('source') == 'field':
             return 'writer %s' % (hit.get('writer') or 'unknown')
         caller = hit.get('caller') or {}
@@ -270,9 +324,7 @@ class BlameTools:
             _, recs, _ = self.live.deep.records(h, max(0, seq - RING_SCAN), limit=RING_SCAN)
             for r in reversed(recs):
                 if r[2] == thread:
-                    script = self.live.form_ids([r[12]])[0] if r[12] else None  # EvaluateLine arg0
-                    return {'script': (script or {}).get('formId') or _hx(r[12]), 'line': r[18],  # arg6 is the line
-                            'reference': _hx(r[14]) if r[14] else None, 'approximate': True}
+                    return self._script_row(r, approximate=True)
         return None
 
 

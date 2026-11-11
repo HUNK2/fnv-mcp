@@ -1,0 +1,12 @@
+scn HelloBugQuestScript
+
+; Counts HelloBugLevel up each time the quest script runs (every 0.1 s); at 100 the quest reaches stage 10.
+
+begin GameMode
+	if GetStage HelloBugQuest < 10
+		set HelloBugLevel to HelloBugLevel + 1
+		if HelloBugLevel >= 100
+			SetStage HelloBugQuest 10
+		endif
+	endif
+end

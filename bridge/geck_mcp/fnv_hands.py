@@ -204,7 +204,7 @@ class HandsTools:
         if self.eyes is not None:
             centre, radius, r = self.eyes.ref_bound(ref)
         else:
-            r = self.live.resolve(ref)
+            r = self.live.resolve_ref(ref)
             x, y, z = self._pos(r['ptr'])
             centre, radius = (x, y, z + 60.0), 64.0
         floor = self._pos(r['ptr'])
@@ -500,7 +500,7 @@ class HandsTools:
             goal = tuple(float(v) for v in target)
             goal_ref = None
         else:
-            r = self.live.resolve(target)
+            r = self.live.resolve_ref(target)
             goal = self._pos(r['ptr'])
             goal_ref = r
         start = self._pos(player)
@@ -520,6 +520,7 @@ class HandsTools:
         used_doors, travelled, plans, routes, avoid, tried_doors = [], 0.0, [], [], [], set()
         via = None             # a door opened on the way: the next route goes through its centre
         stop_reason = None
+        menus_waited = 0
         for attempt in range(MAX_REPLANS + 1):
             here = self._pos(player)
             if math.dist(here[:2], goal[:2]) <= ARRIVE:
@@ -585,19 +586,26 @@ class HandsTools:
                             stop_reason = 'blocked'
                             break
                     if self._menus().get('inMenuMode'):
-                        stop_reason = 'menu_opened'
+                        # A message box that something closes (fnv_do closes them, as a player would click OK,
+                        # seen live: the DLC "items added" boxes mid-walk) only interrupts the walk: wait for it,
+                        # then walk on from where the player stands. A menu that stays open stops the walk.
+                        if menus_waited < 5 and self._menu_closes(3.0):
+                            menus_waited += 1
+                            stop_reason = 'menu_closed'
+                        else:
+                            stop_reason = 'menu_opened'
                         break
                 if stop_reason:
                     break
             if stop_reason in (None, 'timeout', 'menu_opened'):
                 break
-        if stop_reason == 'door_opened':
+        if stop_reason in ('door_opened', 'menu_closed'):
             stop_reason = None
         final = self._pos(player)
         left = math.dist(final[:2], goal[:2])
         arrived = left <= ARRIVE * 1.5
         return {'arrived': arrived, 'distanceLeft': round(left), 'travelled': round(travelled),
-                'seconds': round(self.clock() - started, 1), 'routes': routes, 'replans': max(0, len(plans) - 1),
+                'seconds': round(self.clock() - started, 1), 'routes': routes, 'replans': max(0, len(plans) - 1), 'menusWaited': menus_waited,
                 'doorsUsed': used_doors, 'stopped': stop_reason if not arrived else None, 'plans': plans,
                 'how': 'route: weighted A* on a %d-unit grid, each step checked with three knee-high path-pick rays as '
                        'wide as the player (doors are passable); walking: the forward control through the input '
@@ -630,6 +638,15 @@ class HandsTools:
             self._frames(30)
             return {'formId': form, 'opened': act.get('happened'), 'refused': act.get('refused')}
         return {'formId': door['formId'] if door else form, 'opened': 'already open'}
+
+    def _menu_closes(self, seconds):
+        """True when menu mode ends within `seconds` (a message box closed by the runner or by itself)."""
+        deadline = self.clock() + seconds
+        while self.clock() < deadline:
+            time.sleep(0.1)
+            if not self._menus().get('inMenuMode'):
+                return True
+        return False
 
     def talk(self, ref, max_seconds=60.0):
         out = {'goto': None}

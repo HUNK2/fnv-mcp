@@ -105,6 +105,7 @@ static char pipe_name[128] = "\\\\.\\pipe\\fnvmcp-engine";
 static char console_log[MAX_PATH];
 static bool console_routed;
 static DWORD pid, main_thread;
+static volatile uint32_t main_rec_hook, main_rec_seq;   /* newest hook record the main thread wrote (blame: watch hits) */
 static ULONGLONG started;
 static uint32_t nvse_version, runtime_version;
 
@@ -598,6 +599,7 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
         if (skip) { r[8] = h->act_value; r[1] = 3; }
         MemoryBarrier();
         r[0] = (uint32_t)seq;
+        if (r[2] == main_thread) { main_rec_hook = h->id; main_rec_seq = (uint32_t)seq; }
     }
     if (skip) {
         SetLastError(error);
@@ -1112,7 +1114,9 @@ static void int3_index(void) {
 }
 /* Hardware watchpoints (NAMING-PLAN N7 field watch): DR0..DR3 on the main thread or every thread. */
 #define DBG_HITS 4096u
-typedef struct { uint32_t seq, slot, eip, thread, value, ret, frame_ret, frame; } DbgHit;
+/* mark_hook / mark_seq: the newest hook record the main thread wrote before the hit (blame matches a write made by
+   a script to the statement record of ScriptRunner::EvaluateLine that was running). */
+typedef struct { uint32_t seq, slot, eip, thread, value, ret, frame_ret, frame, mark_hook, mark_seq; } DbgHit;
 static DbgHit dbg_hits[DBG_HITS];
 static volatile LONG dbg_seq;
 /* dbg_bp_slots: the slots the trap breakpoints (w2_bp.c) own; dbg_scope[k]: slot k also watches the other threads. */
@@ -1135,6 +1139,8 @@ static void dbg_note(EXCEPTION_POINTERS *e, uint32_t which) {
         if (!read_u32((uint32_t)c->Esp, &h->ret)) h->ret = 0;
         if (!read_u32((uint32_t)c->Ebp + 4, &h->frame_ret)) h->frame_ret = 0;
         h->frame = (uint32_t)frame;
+        h->mark_hook = h->thread == main_thread ? main_rec_hook : 0;
+        h->mark_seq = h->thread == main_thread ? main_rec_seq : 0;
     }
     c->Dr6 = 0;
 }
@@ -1278,8 +1284,8 @@ static void op_dbg(int argc, char **argv) {
         unsigned shown = 0;
         for (uint32_t q = first; q <= (uint32_t)last && shown < 300; q++, shown++) {
             const DbgHit *h = &dbg_hits[(q - 1) % DBG_HITS];
-            emit("%s[%u,%u,\"0x%08x\",%u,\"0x%08x\",\"0x%08x\",\"0x%08x\",%u]", shown ? "," : "", h->seq, h->slot,
-                 h->eip, h->thread, h->value, h->ret, h->frame_ret, h->frame);
+            emit("%s[%u,%u,\"0x%08x\",%u,\"0x%08x\",\"0x%08x\",\"0x%08x\",%u,%u,%u]", shown ? "," : "", h->seq,
+                 h->slot, h->eip, h->thread, h->value, h->ret, h->frame_ret, h->frame, h->mark_hook, h->mark_seq);
         }
         emit("]}");
         return;

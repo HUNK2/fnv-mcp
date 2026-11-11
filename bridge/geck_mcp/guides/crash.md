@@ -32,7 +32,9 @@ tool descriptions in this repository. The tests check that every tool name below
    With `relaunch_on_crash` (the default) the run reports the crash doctor's diagnosis and starts the game again.
    Use a named test save (`fnv_test_save`) so the start state is the same each time.
 9. **A hang is not a crash.** When the game does not answer and writes no crash log, call `fnv_hang_doctor`. It
-   samples the call stacks from outside the process and names the functions it is stuck in.
+   samples the call stacks from outside the process and names the functions it is stuck in. When the main thread
+   waits (in a load, on a lock), it also samples the threads that use the most CPU, and any thread the crash hold
+   parked at a fault, with the file paths found on that thread's stack.
 
 ## What the answers mean
 
@@ -66,6 +68,12 @@ tool descriptions in this repository. The tests check that every tool name below
 thread waits: `fnv_debug status` shows the source line, `stack` and `locals` read the live process, and `continue`
 lets the crash logger write its log as usual. `return` or `skip` try to recover, to test a guess. `dump` writes a
 minidump to look at later.
+
+A fault on a loader thread during a load (a corrupt mesh, seen 2026-11-11) leaves the main thread waiting for it, and
+the companion answers only on the main thread. `fnv_debug status` then reads the held fault from outside: the
+registers of the fault from its context file, the stack above them with function names and source lines, and the
+file paths on that stack (`meshes\...nif`). `fnv_asset where` on that path names the mod folder, `fnv_record_find`
+with the plugin lists its records. `fnv_quit` with force ends the game afterwards.
 
 ## Find the culprit plugin or object
 

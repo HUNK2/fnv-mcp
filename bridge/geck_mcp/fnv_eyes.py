@@ -290,7 +290,7 @@ class EyesTools:
 
     def ref_bound(self, ref):
         """(centre, radius, ptr) of a reference's 3D bound; falls back to its position plus a default size."""
-        r = self.live.resolve(ref)
+        r = self.live.resolve_ref(ref)
         root = self._root(r['ptr'])
         if root:
             bound = self.live.u32s([root + NODE_BOUND])[0]
@@ -615,7 +615,7 @@ class EyesTools:
     # ================================================================ fnv_visibility
     def visibility(self, ref):
         self.live.in_game()
-        r = self.live.resolve(ref)
+        r = self.live.resolve_ref(ref)
         info = self._bounds([r['ptr']]).get(r['ptr']) or {}
         causes, also = [], []
 

@@ -20,7 +20,7 @@ from . import codec, records
 from .codec import Group, Plugin
 from .formids import FormIdError, FormIdMap, MasterIndex, Resolver
 from .records import SpecError
-from . import generic
+from . import dialogue, generic
 
 SCHEMA = 1
 GENERATED_MARK = '[geck-bridge generated: %s]'
@@ -78,6 +78,12 @@ def check_spec(spec):
         kinds = set(records.BUILDERS) | generic.GENERIC_TYPES
         if not isinstance(rec, dict) or rec.get('type') not in kinds:
             raise SpecError('records.%s.type' % edid, 'must be one of %s' % ', '.join(sorted(kinds)))
+        if rec.get('override') and rec.get('type') != 'DIAL':
+            raise SpecError('records.%s.override' % edid, 'only master topics (DIAL) can be overridden so far')
+        if 'infos' in rec:
+            if rec.get('type') != 'DIAL':
+                raise SpecError('records.%s.infos' % edid, 'lines (infos) belong to a topic (DIAL)')
+            dialogue.check_lines(edid, rec, 'records.%s' % edid)
     for cell_id, cell in spec.get('cells', {}).items():
         if not isinstance(cell, dict):
             raise SpecError('cells.%s' % cell_id, 'expected an object')
@@ -104,10 +110,14 @@ def ref_key(cell_id, index, obj):
 
 
 def allocation_keys(spec):
-    """Every FormID key in deterministic spec order: records, cells, then references."""
-    keys = list(spec.get('records', {})) + list(spec.get('cells', {}))
+    """Every FormID key in deterministic spec order: records, cells, references, then dialogue lines. Overridden
+    master records keep the master's FormID and get none."""
+    records_ = spec.get('records', {})
+    keys = [k for k, r in records_.items() if not r.get('override')] + list(spec.get('cells', {}))
     for cell_id, cell in spec.get('cells', {}).items():
         keys += [ref_key(cell_id, i, obj) for i, obj in enumerate(cell.get('objects', []))]
+    for topic, rec in records_.items():
+        keys += [dialogue.info_key(topic, line) for line in rec.get('infos', [])]
     return keys
 
 
@@ -130,30 +140,40 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
     warnings = []
     local = formids.sync(allocation_keys(spec))
     full = {k: self_byte | v for k, v in local.items()}
-    own = {k: v for k, v in full.items() if not k.startswith('REFR:')}
+    own = {k: v for k, v in full.items() if not k.startswith(('REFR:', 'INFO:'))}
     for edid in own:
+        if spec.get('records', {}).get(edid, {}).get('override'):
+            continue
         clash = [h for h in index.lookup(edid) if index.masters[h[0]] in masters]
         if clash:
             raise SpecError('records.%s' % edid, 'EditorID already exists in %s as %s %08X; pick a new name '
                             '(overriding master records is not supported yet)'
                             % (index.masters[clash[0][0]], clash[0][1], clash[0][2]))
-    own_types = {k: v['type'] for k, v in spec.get('records', {}).items()}
+    own_types = {k: v['type'] for k, v in spec.get('records', {}).items() if not v.get('override')}
     own_types.update({k: 'CELL' for k in spec.get('cells', {})})
     resolver = Resolver(masters, own, index, own_types)
 
     # Base records, grouped by type in GECK's top-group order.
     by_type = {}
     uncompiled = []
+    lines_of = {}
     for edid, rec_spec in spec.get('records', {}).items():
         rtype = rec_spec['type']
-        if rtype == 'SCPT':
+        if rec_spec.get('override'):
+            rec = override_topic(edid, rec_spec, resolver, masters, templates)
+        elif rtype == 'SCPT':
             rec = generic.build_script(full[edid], edid, rec_spec, base_dir=base_dir, cache=script_cache)
             if not rec.compiled:
                 uncompiled.append(edid)
         elif rtype in records.BUILDERS and 'template' not in rec_spec and 'fields' not in rec_spec:
             rec = records.BUILDERS[rtype](full[edid], edid, rec_spec)
         else:
-            rec = generic.build_generic(full[edid], edid, rec_spec, resolver, masters=masters, templates=templates)
+            generic_spec = {k: v for k, v in rec_spec.items() if k != 'infos'}
+            rec = generic.build_generic(full[edid], edid, generic_spec, resolver, masters=masters, templates=templates)
+        if rtype == 'DIAL':
+            lines = build_lines(edid, rec_spec, rec, full, resolver, script_cache)
+            uncompiled += ['%s line %s' % (edid, line_key) for line_key, line in lines if not line.compiled]
+            lines_of[rec.form_id] = [line for _, line in lines]
         by_type.setdefault(rtype, []).append(rec)
 
     # Interior cells: CELL -> block -> sub-block -> [CELL, children(6) -> temporary(9) -> REFR*]
@@ -197,7 +217,15 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
 
     groups = []
     for rtype in TOP_ORDER:
-        if rtype in by_type:
+        if rtype == 'DIAL' and rtype in by_type:
+            # Each topic is followed by its topic-children group (type 7, labelled with the topic's FormID).
+            children = []
+            for topic in sorted(by_type[rtype], key=lambda r: r.form_id):
+                children.append(topic)
+                if lines_of.get(topic.form_id):
+                    children.append(Group(struct_label(topic.form_id), 7, children=lines_of[topic.form_id]))
+            groups.append(Group(b'DIAL', 0, children=children))
+        elif rtype in by_type:
             groups.append(Group(rtype.encode('ascii'), 0,
                                 children=sorted(by_type[rtype], key=lambda r: r.form_id)))
         elif rtype == 'CELL' and blocks:
@@ -233,6 +261,50 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
         'references': references, 'warnings': warnings, 'uncompiledScripts': uncompiled,
     }
     return data, receipt
+
+
+def override_topic(edid, rec_spec, resolver, masters, templates):
+    """A master topic copied from its template dump (same EditorID) with the master's FormID, so new lines can
+    be added to it (GREETING and the like)."""
+    unknown = set(rec_spec) - {'type', 'override', 'fields', 'infos'}
+    if unknown:
+        raise SpecError('records.%s' % edid, 'unknown field(s) for an override: %s' % ', '.join(sorted(unknown)))
+    try:
+        form = resolver.resolve('@' + edid, expect_types={'DIAL'})
+    except FormIdError as e:
+        raise SpecError('records.%s.override' % edid, str(e))
+    if form >> 24 >= len(masters):
+        raise SpecError('records.%s.override' % edid, '%s is not a master record' % edid)
+    rec = generic.build_generic(form, edid, {'type': 'DIAL', 'template': edid, 'fields': rec_spec.get('fields', [])},
+                                resolver, masters=masters, templates=templates)
+    return rec
+
+
+def build_lines(topic, rec_spec, topic_rec, full, resolver, script_cache):
+    """INFO records of a topic, in spec order; each line's quest is added to the topic's quests (QSTI)."""
+    def resolve(value, where):
+        try:
+            return resolver.resolve(value)
+        except FormIdError as e:
+            raise SpecError(where, str(e))
+
+    def fields(subs, ops, where):
+        generic.apply_fields(subs, ops, resolver, where)
+    quests = {s.data for s in topic_rec.subrecords if s.tag == 'QSTI'}
+    out = []
+    for i, line in enumerate(rec_spec.get('infos', [])):
+        where = 'records.%s.infos[%d]' % (topic, i)
+        form = full[dialogue.info_key(topic, line)]
+        rec = dialogue.build_line(form, topic, line, resolve, where, cache=script_cache, apply_fields=fields)
+        out.append((line['key'], rec))
+        qsti = rec.get('QSTI')
+        if qsti not in quests:
+            quests.add(qsti)
+            subs = topic_rec.subrecords
+            # A quest's INFC/INFX (info connections) follow its QSTI: add the new quest after the last of them.
+            at = max([n for n, s in enumerate(subs) if s.tag in ('EDID', 'QSTI', 'INFC', 'INFX')]) + 1
+            subs.insert(at, codec.Subrecord('QSTI', qsti))
+    return out
 
 
 def walk(group):

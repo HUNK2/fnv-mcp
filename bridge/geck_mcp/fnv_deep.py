@@ -286,6 +286,13 @@ class DeepTools:
             raise HookError('UNHOOK_FAILED', 'Hook %s: %s' % (hook_id, result.get('error')), result)
         return result
 
+    def record(self, h, seq):
+        """One ring record by its sequence number, or None once the ring has moved past it (a single small read)."""
+        base, size = int(h['records'], 16), RECORD_WORDS * 4
+        raw = self.live.reads([(base + ((seq - 1) % RING) * size, size)])[0]
+        words = struct.unpack_from('<%dI' % RECORD_WORDS, raw) if raw else None
+        return words if words and words[0] == seq else None
+
     def records(self, h, since=0, limit=4096):
         """Ring records with sequence numbers in (since, current]."""
         seq = self.live.u32s([int(h['seqAddress'], 16)])[0] or 0
@@ -742,7 +749,19 @@ class DeepTools:
             modules = proc.modules()
             threads = proc.threads()
             main = ping.get('mainThreadId') or proc.main_thread(threads)
-            wanted = threads if all_threads else [main]
+            # CPU time per thread over the sampling: a main thread that waits (on a loader, a lock) is stuck because
+            # of the thread that is working, so the busiest other threads are sampled too (seen live 2026-11-11: a
+            # corrupt mesh kept a loader thread spinning while the main thread waited in TES::LoadInterior).
+            cpu_before = {tid: proc.thread_cpu_ms(tid) for tid in threads}
+            busy_window = time.monotonic()
+            time.sleep(0.5)
+            cpu = {tid: (proc.thread_cpu_ms(tid) or 0.0) - (cpu_before.get(tid) or 0.0) for tid in threads
+                   if cpu_before.get(tid) is not None}
+            window_ms = (time.monotonic() - busy_window) * 1000.0
+            busy = [tid for tid, ms in sorted(cpu.items(), key=lambda kv: -kv[1])
+                    if tid != main and ms >= 0.25 * window_ms][:3]
+            wanted = threads if all_threads else [main] + busy
+            held = self._held_faults(proc, pid, threads, modules, symdb)
             stacks = defaultdict(list)
             for k in range(max(1, min(int(samples), 20))):
                 if k:
@@ -782,7 +801,10 @@ class DeepTools:
                 tops[(game or named[0]).get('function') or (game or named[0]).get('module') or named[0]['address']] += 1
             stuck, hits = tops.most_common(1)[0] if tops else (None, 0)
             threads_out.append({'threadId': tid, 'main': tid == main, 'topGameFunction': stuck,
-                                'sameInSamples': '%d/%d' % (hits, len(runs)), 'samples': sampled})
+                                'sameInSamples': '%d/%d' % (hits, len(runs)),
+                                'cpuPercent': round(100.0 * cpu.get(tid, 0.0) / window_ms) if window_ms else None,
+                                'samples': sampled})
+        threads_out.sort(key=lambda t: (not t['main'], -(t['cpuPercent'] or 0)))
         main_out = next((t for t in threads_out if t['main']), None)
         since = ping.get('msSinceFrame')
         if ping.get('error'):
@@ -796,13 +818,73 @@ class DeepTools:
             verdict = 'Main thread %s; in %s of %s samples it was in %s' % (
                 state, main_out['sameInSamples'].split('/')[0], main_out['sameInSamples'].split('/')[1],
                 main_out['topGameFunction'])
+        faults_out = []
+        for f in held:
+            named = [name(fr['address'], fr, return_address=fr.get('how') != 'eip') for fr in f['frames'][:16]]
+            scan = [dict(name(x['address'], return_address=True), at=x['stackOffset']) for x in f['scanned'][:16]]
+            game = [x for x in named + scan if x.get('function')]
+            faults_out.append({'threadId': f['threadId'], 'mainThread': f['mainThread'], 'code': f['code'],
+                               'address': f['address'], 'access': f.get('access'),
+                               'accessAddress': f.get('accessAddress'), 'request': f.get('request'),
+                               'consoleLine': f.get('consoleLine'), 'context': f['file'],
+                               'function': game[0] if game else None, 'frames': named, 'stackScan': scan,
+                               'pathsOnStack': f['paths']})
+        busy_out = [t for t in threads_out if not t['main'] and t['threadId'] in busy]
+        if verdict and faults_out:
+            f = faults_out[0]
+            verdict += '; thread %s is held at a fault in %s (the crash hold parked it)%s' % (
+                f['threadId'], (f['function'] or {}).get('function') or f['address'],
+                ', with %s on its stack' % f['pathsOnStack'][0] if f['pathsOnStack'] else '')
+        elif verdict and busy_out:
+            verdict += '; busiest other thread %s (%s%% of a core) was in %s' % (
+                busy_out[0]['threadId'], busy_out[0]['cpuPercent'], busy_out[0]['topGameFunction'])
         return {'pid': pid, 'state': state, 'verdict': verdict, 'mainThreadId': main, 'threads': threads_out,
+                'busyThreads': [t['threadId'] for t in busy_out], 'heldFaults': faults_out,
                 'threadCount': len(threads), 'ping': {k: ping.get(k) for k in ('frame', 'msSinceFrame', 'busy', 'error')},
                 'note': 'Frames come from the EBP chain (MSVC frame pointers); stackScan lists other return addresses '
                         'found on the stack top (heuristic). Names marked status=proven are evidence. '
                         'With a symbol database, game frames carry source and the first 6 carry locals '
                         'read at frame pointer + offset; '
                         'a top frame whose prologue has not run has frameNotReady instead.'}
+
+    def _held_faults(self, proc, pid, threads, modules, symdb):
+        """Faults of this process that the crash hold still holds: the companion's context file has the registers
+        at the fault, and the thread (alive, parked in the handler on the same stack) still has the faulting frames
+        above them. Read from outside, so this works while the main thread cannot serve: a loader thread that
+        faults during a load leaves the main thread waiting for it (seen live 2026-11-11, a corrupt mesh)."""
+        out = []
+        alive = set(threads)
+        first = {}
+        for path in context_files():
+            try:
+                ctx = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            if ctx.get('pid') != pid or ctx.get('threadId') not in alive or not ctx.get('registers'):
+                continue
+            # The first fault of a thread is the one that matters: a held thread can fault again later in another
+            # handler (seen live 2026-11-11: a crash logger faulted while handling the first one).
+            known = first.get(ctx['threadId'])
+            if known is None or (ctx.get('n') or 0) < (known[0].get('n') or 0):
+                first[ctx['threadId']] = (ctx, path)
+        for ctx, path in sorted(first.values(), key=lambda cp: cp[0].get('n') or 0):
+            regs = {k: int(v, 16) for k, v in ctx['registers'].items()}
+            regs['stack'] = None
+            for size in (0x4000, 0x1000, 0x400, 0x100):
+                regs['stack'] = proc.read(regs['esp'], size)
+                if regs['stack']:
+                    break
+            frames, scanned = fnv_procmem.walk_stack(proc, regs, modules)
+            if symdb:
+                self._attach_locals(proc, symdb, frames)
+            out.append({'threadId': ctx['threadId'], 'mainThread': ctx.get('mainThread'), 'code': ctx.get('code'),
+                        'address': ctx.get('address'), 'access': ctx.get('access'),
+                        'accessAddress': ctx.get('accessAddress'), 'request': ctx.get('request'),
+                        'consoleLine': ctx.get('consoleLine'), 'file': str(path), 'frames': frames,
+                        'scanned': scanned, 'paths': _paths_on_stack(proc, regs['stack'] or b'')})
+            if len(out) >= 3:
+                break
+        return out
 
     # ------------------------------------------------------------------ fnv_patch_map
     def patch_map(self, include_bytes=False, limit=400):
@@ -1006,6 +1088,33 @@ def statement_lines(source):
 # ------------------------------------------------------------------ crash context files
 def context_folder():
     return Path(os.environ.get('LOCALAPPDATA', '')) / 'fnvmcp'
+
+
+PATH_EXTENSIONS = (b'.nif', b'.dds', b'.kf', b'.esp', b'.esm', b'.wav', b'.ogg', b'.mp3', b'.lip', b'.spt',
+                   b'.egm', b'.egt', b'.tri', b'.psa', b'.xml', b'.bsa', b'.ini')
+
+
+def _paths_on_stack(proc, stack, limit=8):
+    """File paths that stack words point at (a mesh, a texture, a plugin): which file a crashing loader was
+    reading. Heuristic: printable text that ends in a known asset extension."""
+    found = []
+    for offset in range(0, min(len(stack), 0x2000) - 3, 4):
+        value = struct.unpack_from('<I', stack, offset)[0]
+        if value < 0x10000 or value >= 0x80000000:
+            continue
+        raw = proc.read(value, 260)
+        if not raw:
+            continue
+        text = raw.split(b'\0', 1)[0]
+        if len(text) < 6 or any(c < 0x20 or c > 0x7E for c in text):
+            continue
+        if text.lower().endswith(PATH_EXTENSIONS):
+            path = text.decode('ascii')
+            if path not in found:
+                found.append(path)
+            if len(found) >= limit:
+                break
+    return found
 
 
 def context_files():

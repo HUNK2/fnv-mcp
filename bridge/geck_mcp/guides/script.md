@@ -23,7 +23,10 @@ tool name below exists; they do not play the game.
    runs, whether it succeeded and which reference it ran on, and lists the lines that did not run. Read it again
    after the event you wait for: later calls return only new statements. Call it with action `stop` when done.
    To stop the game on one statement, call `fnv_script_debug` with break, the script and the line; status then shows
-   the reference and the variables (vars), eval runs a snippet on it, and continue or step line go on. A statement
+   the reference and the variables (vars), eval runs a snippet on it, and continue or step line go on. Lines are
+   source lines (the game itself counts statements, as in its runtime error messages: blank lines, comments and
+   declarations do not count); a stop shows both, with the line's text. Quest scripts do not run while a menu is
+   open (the pause menu opens when the game window loses focus): close it with `fnv_menu_control` first. A statement
    reached during save or load is passed on and counted. `fnv_script_log` with commands (mode start, then read) keeps
    the statements of every script in a ring without stopping the game; events shows the block flags as they are
    raised.
@@ -32,7 +35,8 @@ tool name below exists; they do not play the game.
 7. **What are the values?** `fnv_vars` shows the script variables of a quest or reference by name. `fnv_run_script`
    evaluates an expression in the game. `fnv_watch` samples values over time to see when one changes. To find who
    changed a field or a reference, call `fnv_blame` (field with the address path, or ref) and then report: each hit
-   names the script line or the engine function that wrote it.
+   names the script line or the engine function that wrote it. A global's value is at `<global> + 0x24`; a write by
+   a script names the exact statement and its source line.
 8. **What does a command really do?** `fnv_script_explain` shows what the commands of a line do in the engine.
    `fnv_command_info` gives the parameters of one command.
 9. **Try a fix without a restart.** `fnv_script_hot_swap` replaces the running script with new source and keeps the

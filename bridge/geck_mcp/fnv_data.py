@@ -476,6 +476,12 @@ class DataTools:
             changed = True
             results[edid] = {'compiled': True, 'cached': True, 'bytes': len(scda), 'variables': len(variables),
                              'references': len(references)}
+        for key, result in self._compile_result_scripts(spec, receipt, relative, context, only).items():
+            entry = result.pop('entry', None)
+            if entry:
+                cache[key] = entry
+                changed = True
+            results[key] = result
         if changed:
             path = esp_scripts.cache_path(self.project.state_dir, spec['project_id'])
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -483,6 +489,62 @@ class DataTools:
         return {'scripts': results, 'cache': str(esp_scripts.cache_path(self.project.state_dir, spec['project_id'])),
                 'next': 'Rebuild (geck_plugin_build) to include the compiled scripts, then fnv_install and restart.'
                 if changed else None}
+
+    def _compile_result_scripts(self, spec, receipt, relative, context, only=None):
+        """Dialogue result scripts (a line's "result"): compiled by the game inside a one-block wrapper
+        (scn, begin GameMode, the lines, end), then the block's statements are cut out, which is the layout of a
+        result script in FalloutNV.esm (statements only, no scn or begin). Result scripts have no variables."""
+        from .esp import dialogue
+        out = {}
+        for topic, rec in spec.get('records', {}).items():
+            for line in rec.get('infos', []) if rec.get('type') == 'DIAL' else []:
+                if not line.get('result'):
+                    continue
+                key = dialogue.info_key(topic, line)
+                if only and key not in only and topic not in only:
+                    continue
+                text = dialogue.normalized_result(line['result'])
+                wrapper = 'scn FnvmcpResultScript\nbegin GameMode\n%s\nend\n' % text.replace('\r\n', '\n')
+                compiled = self.compile_ingame(wrapper, include_bytecode=True)
+                if not compiled['compiled']:
+                    out[key] = {'compiled': False, 'errors': compiled['errors'], 'hint': compiled.get('hint')}
+                    continue
+                data = bytes.fromhex(compiled['bytecode'])
+                scda = data[4:]
+                begin = struct.unpack_from('<HHHI', scda, 4) if len(scda) >= 14 else None
+                # scn (4 bytes), begin: opcode 0x10, length 6, mode 0 (GameMode), block length; then the block
+                # (the statements and the end opcode 0x11), which is all that follows.
+                if data[:8] != b'\x1d\0\0\0\x1d\0\0\0' or not begin or begin[:3] != (0x10, 6, 0) \
+                        or len(scda) != 14 + begin[3] or scda[-4:] != b'\x11\0\0\0':
+                    out[key] = {'compiled': False, 'errors': ['unexpected wrapper bytecode %s' % data[:24].hex()]}
+                    continue
+                body = scda[14:14 + begin[3] - 4]
+                if compiled['variables']:
+                    out[key] = {'compiled': False, 'errors': ['a result script cannot declare variables']}
+                    continue
+                refs = compiled['references']
+                subs = [('SCHR', struct.pack('<4sIIIHH', b'\0' * 4, len(refs), len(body), 0, 0, 1)), ('SCDA', body),
+                        ('SCTX', text.encode('cp1252'))]
+                for ref in refs:
+                    if ref.get('kind') == 'variable':
+                        subs.append(('SCRV', struct.pack('<I', ref['index'])))
+                    else:
+                        subs.append(('SCRO', struct.pack('<I', relative(ref['formId']))))
+                entry = {'sourceSha256': dialogue.result_sha(text), 'formId': receipt['formIds'].get(key),
+                         'compiledSize': len(body), 'compiled': [(t, v.hex()) for t, v in subs], 'kind': 'result',
+                         'provenance': {'context': context, 'kind': 'fnv_ingame_compile',
+                                        'compiler': 'FalloutNV.exe 1.4.0.525 script compiler through xNVSE '
+                                                    'CompileScript (fnvmcp engine companion)',
+                                        'pid': (self.live.link.hello or {}).get('pid'), 'compiledAt': time.time(),
+                                        'adjustments': ['compiled inside a one-block wrapper; the block\'s '
+                                                        'statements kept (the result-script layout)',
+                                                        'runtime form ids mapped to master-relative ids']}}
+                if not entry['formId']:
+                    out[key] = {'compiled': True, 'cached': False, 'reason': 'the line is not in the last build'}
+                    continue
+                out[key] = {'compiled': True, 'cached': True, 'bytes': len(body), 'references': len(refs),
+                            'entry': entry}
+        return out
 
     # ------------------------------------------------------------------ fnv_script_lint
     def script_lint(self, source, plugin=None, check_forms=True):

@@ -134,11 +134,32 @@ class EvalHook:
                             % result.get('error'), result)
 
 
-class ScriptDebugger:
-    """fnv_script_debug: breaks on statements, the stopped script's state, variables, eval and stepping."""
+DECLARATIONS = ('short', 'int', 'long', 'float', 'ref', 'reference', 'string_var', 'array_var')
 
-    def __init__(self, live, eval_hook=None, dbg=None, sleep=time.sleep, clock=time.monotonic):
+
+def statement_lines(source):
+    """Source line (1-based) of each compiled statement, in order: the game's runner counts statements, not source
+    lines (seen live 2026-11-11: its "line 7" was the 7th statement, an endif on source line 10, as in its runtime
+    error messages). Blank lines, comments and variable declarations compile to nothing; every other line is one
+    statement (scn, begin and end included)."""
+    out = []
+    for n, line in enumerate(source.replace('\r', '').split('\n'), 1):
+        code = line.split(';', 1)[0].strip()
+        if not code or code.split()[0].lower() in DECLARATIONS:
+            continue
+        out.append(n)
+    return out
+
+
+class ScriptDebugger:
+    """fnv_script_debug: breaks on statements, the stopped script's state, variables, eval and stepping. Lines are
+    source lines when the script's text is known (kept by the game, or the SCTX of its plugin record), else the
+    game's statement numbers."""
+
+    def __init__(self, live, eval_hook=None, dbg=None, sleep=time.sleep, clock=time.monotonic, data=None):
         self.live = live
+        self.data = data
+        self._sources = {}
         self.eval = eval_hook or EvalHook(live)
         self.dbg = dbg or Debugger(live, sleep=sleep, clock=clock)
         self.breaks = {}
@@ -182,8 +203,11 @@ class ScriptDebugger:
                             'line, for example script="QuestScript" line=12.')
         filt = ('line', int(line)) if line is not None else ('opcode', int(opcode)) if opcode is not None else None
         fid, script_name = self._script(script) if script else (None, None)
+        statement, note = (int(line) if line is not None else None), None
+        if line is not None and fid is not None:
+            statement, note = self._statement_of(fid, int(line))
         record = {'number': self.next_number, 'script': fid, 'scriptName': script_name, 'line': line, 'opcode': opcode,
-                  'when': when or None, 'filter': filt}
+                  'when': when or None, 'filter': filt, 'statement': statement, 'lineNote': note}
         self.breaks[record['number']] = record
         try:
             self._arm()
@@ -193,8 +217,8 @@ class ScriptDebugger:
             raise
         self.next_number += 1
         return verdict('Break %d set on %s.' % (record['number'], _where(record)),
-                       'The game stops when that statement runs; status shows the line, continue runs to the next one.',
-                       **{'break': _public(record)})
+                       record['lineNote'] or 'The game stops when that statement runs; status shows the line, continue '
+                       'runs to the next one.', **{'break': _public(record)})
 
     def _clear(self, break_id):
         targets = sorted(self.breaks) if break_id is None else [int(break_id)]
@@ -220,7 +244,7 @@ class ScriptDebugger:
             if b['script'] is not None:
                 conds.append('arg0.[%d]:u32 == %d' % (FORM_ID, b['script']))
             if b.get('line') is not None:
-                conds.append('arg6:u32 == %d' % int(b['line']))
+                conds.append('arg6:u32 == %d' % int(b['statement'] if b.get('statement') is not None else b['line']))
             if b.get('opcode') is not None:
                 conds.append('arg1:u16 == %d' % int(b['opcode']))
             if b['when']:
@@ -229,6 +253,64 @@ class ScriptDebugger:
         pred = compile_predicate(' or '.join(parts))['hex']
         self.eval.filter(SELECTORS['none'], 0)   # every condition is in the predicate now
         self.eval.hold(pred)
+
+    def _source(self, form_id, ptr=None):
+        """The script's source: the text the game kept, else its plugin record's SCTX. None when neither is known."""
+        if form_id in self._sources:
+            return self._sources[form_id]
+        text = None
+        try:
+            ptr = ptr or self.live.deep.script_form('%08X' % form_id)[0]
+            text = self.live.deep.script_source(ptr) if ptr else None
+        except Exception:  # noqa: BLE001 - the game keeps the text only sometimes
+            text = None
+        if not text and self.data is not None:
+            try:
+                text = self.data.script_text('%08X' % form_id)
+            except Exception:  # noqa: BLE001 - no record index, or not a plugin script
+                text = None
+        self._sources[form_id] = text or None
+        return self._sources[form_id]
+
+    def _lead(self, ptr):
+        """1 when the script's code starts with two scriptname statements: a compile in the running game (a hot swap)
+        keeps the one xNVSE writes in front, so each statement number is one higher than in the source."""
+        if not ptr:
+            return 0
+        try:
+            from .fnv_data import SCRIPT_DATA
+            data = self.live.u32s([ptr + SCRIPT_DATA])[0]
+            head = self.live.reads([(data, 8)])[0] if data else None
+        except Exception:  # noqa: BLE001 - unreadable: assume the plugin's own layout
+            return 0
+        return 1 if head == bytes.fromhex('1d0000001d000000') else 0
+
+    def _statement_of(self, form_id, line, ptr=None):
+        """Source line -> the game's statement number, with a note when the line itself has no statement."""
+        source = self._source(form_id, ptr)
+        if not source:
+            return line, ('The script\'s source is not known: line %d is taken as the game\'s statement number.' % line)
+        lines = statement_lines(source)
+        later = [n for n in lines if n >= line]
+        if not later:
+            raise ConvError('NO_STATEMENT', 'Line %d is after the last statement (line %d).' % (line, lines[-1] if lines else 0))
+        statement = lines.index(later[0]) + 1 + self._lead(ptr or self.live.deep.script_form('%08X' % form_id)[0])
+        if later[0] != line:
+            return statement, ('Line %d has no statement (blank, comment or declaration): the break is on line %d, the '
+                               'next statement.' % (line, later[0]))
+        return statement, None
+
+    def _line_of(self, form_id, statement, ptr=None):
+        """The game's statement number -> (source line, its text), or (None, None)."""
+        source = self._source(form_id, ptr) if form_id is not None else None
+        if not source:
+            return None, None
+        lines = statement_lines(source)
+        statement -= self._lead(ptr)
+        if not 0 < statement <= len(lines):
+            return None, None
+        n = lines[statement - 1]
+        return n, source.replace('\r', '').split('\n')[n - 1].strip()
 
     def _script(self, spec):
         _ptr, info, _ = self.live.deep.script_form(spec)
@@ -306,17 +388,14 @@ class ScriptDebugger:
     def _view(self, stop):
         st = self._state(stop)
         info = self.live.form_ids([st['script']])[0] or {}
-        text = None
-        try:
-            source = self.live.deep.script_source(st['script'])
-            text = source.splitlines()[st['line'] - 1] if source and 0 < st['line'] <= len(source.splitlines()) else None
-        except Exception:      # noqa: BLE001 - the source is kept by the game only sometimes
-            text = None
+        form = int(info['formId'], 16) if info.get('formId') else None
+        line, text = self._line_of(form, st['line'], st['script'])
         depth = self.live.u32s([st['runner'] + RUNNER_IF_DEPTH])[0] if st['runner'] else None
         view = {'seq': stop['seq'], 'script': info.get('formId'), 'scriptPointer': _hx(st['script']),
-                'line': st['line'], 'opcode': st['opcode'], 'reference': _hx(st['reference']) if st['reference'] else None,
+                'line': line if line is not None else st['line'], 'statement': st['line'], 'opcode': st['opcode'],
+                'reference': _hx(st['reference']) if st['reference'] else None,
                 'ifDepth': depth, 'sourceLine': text, 'skipped': st['skip'], 'skippedRefused': self.skipped}
-        return verdict('Stopped in script %s at line %s.' % (info.get('formId') or _hx(st['script']), st['line']),
+        return verdict('Stopped in script %s at line %s.' % (info.get('formId') or _hx(st['script']), view['line']),
                        'The statement is about to run. vars lists the script variables; step runs one statement.',
                        stop=view)
 
@@ -424,8 +503,9 @@ class ScriptDebugger:
                                    'The game runs on; status shows where it is.', state='running')
                 st = self._state(new)
                 if st['runner'] == here['runner'] and st['line'] != here['line']:
-                    return verdict('Stepped to line %s.' % st['line'], 'The next statement of the same run.',
-                                   stop=self._view(new)['stop'])
+                    view = self._view(new)['stop']
+                    return verdict('Stepped to line %s.' % view['line'], 'The next statement of the same run.',
+                                   stop=view)
                 cur = new
         finally:
             self._arm()
@@ -659,5 +739,5 @@ def _where(b):
 
 
 def _public(b):
-    keep = ('number', 'script', 'scriptName', 'line', 'opcode', 'when')
+    keep = ('number', 'script', 'scriptName', 'line', 'statement', 'opcode', 'when')
     return {k: b.get(k) for k in keep}

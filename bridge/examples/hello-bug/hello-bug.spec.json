@@ -1,0 +1,30 @@
+{
+ "schema": 1,
+ "project_id": "hellobug",
+ "plugin": "HelloBug.esp",
+ "author": "fnv-mcp scenario S4",
+ "description": "Hello Bug: a quest that never finishes because another script resets its counter. The test plugin of scenario S4 (debug a misbehaving script).",
+ "masters": ["FalloutNV.esm"],
+ "records": {
+  "HelloBugLevel": {"type": "GLOB", "fields": [{"tag": "FNAM", "hex": "73"}, {"tag": "FLTV", "float": 0.0}]},
+  "HelloBugJanitorTimer": {"type": "GLOB", "fields": [{"tag": "FNAM", "hex": "73"}, {"tag": "FLTV", "float": 0.0}]},
+  "HelloBugQuestScript": {"type": "SCPT", "source": "scripts/HelloBugQuestScript.gek", "script_type": "quest"},
+  "HelloBugJanitorScript": {"type": "SCPT", "source": "scripts/HelloBugJanitorScript.gek", "script_type": "quest"},
+  "HelloBugQuest": {
+   "type": "QUST",
+   "fields": [
+    {"tag": "SCRI", "form": "@HelloBugQuestScript"},
+    {"tag": "FULL", "text": "Hello Bug"},
+    {"tag": "DATA", "pack": "<BBBBf", "values": [1, 50, 0, 0, 0.1]},
+    {"tag": "INDX", "pack": "<h", "values": [10], "append": true}
+   ]
+  },
+  "HelloBugJanitor": {
+   "type": "QUST",
+   "fields": [
+    {"tag": "SCRI", "form": "@HelloBugJanitorScript"},
+    {"tag": "DATA", "pack": "<BBBBf", "values": [1, 50, 0, 0, 0.1]}
+   ]
+  }
+ }
+}

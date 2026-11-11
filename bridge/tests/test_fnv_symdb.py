@@ -358,6 +358,9 @@ class FakeProcess:
     def thread_context(self, tid):
         return {'eip': 0, 'esp': 0, 'ebp': 0}
 
+    def thread_cpu_ms(self, tid):
+        return 0.0
+
     def read(self, address, length):
         for start, data in self.memory.items():
             if start <= address and address + length <= start + len(data):

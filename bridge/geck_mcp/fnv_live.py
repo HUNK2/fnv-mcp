@@ -275,6 +275,22 @@ class LiveService:
                             {'expression': expr, 'result': result})
         return {'ptr': int(element['ptr'], 16), 'formId': element.get('formId'), 'expr': expr, 'spec': ref}
 
+    # TESForm type ids of placed references (REFR 58, ACHR 59, ACRE 60, read live 2026-11-11; then the placed
+    # projectile kinds, which are references too).
+    REFERENCE_TYPES = range(58, 66)
+
+    def resolve_ref(self, ref):
+        """resolve(), refusing a base form: reference functions (GetPos, GetAngle...) on a base form crash the game
+        (seen live 2026-11-11: fnv_photo on a STAT's EditorID faulted in Cmd_GetPos_Eval)."""
+        r = self.resolve(ref)
+        raw = self.reads([(r['ptr'] + 4, 1)])[0]
+        form_type = raw[0] if raw else None
+        if form_type not in self.REFERENCE_TYPES:
+            raise LiveError('NOT_A_REFERENCE', '%s is a base form (form type %s), not a placed reference. Next: pass '
+                            'the reference: fnv_place returns it, fnv_refs_near base=%s lists them.'
+                            % (ref, form_type, r.get('formId')), {'formId': r.get('formId'), 'formType': form_type})
+        return r
+
     PREFERRED = ('QUST', 'REFR', 'ACHR', 'ACRE', 'NPC_', 'CREA', 'GLOB', 'WEAP', 'ARMO', 'ALCH', 'MISC', 'KEYM',
                  'AMMO', 'BOOK', 'CONT', 'DOOR', 'ACTI', 'STAT', 'CELL', 'PACK', 'SPEL', 'PERK', 'FACT')
 
@@ -717,6 +733,10 @@ class LiveService:
                 'float', 'ref', 'reference', 'array_var', 'string_var', 'player', 'playerref', 'while', 'loop', 'foreach',
                 'function', 'call', 'scn', 'scriptname', 'gamemode', 'menumode'}
 
+    # Record types whose EditorIDs the running game keeps, so its compiler takes the name; a form id in their
+    # place fails ("set <form id> to" is not a variable). Seen live 2026-11-11: globals compile by name.
+    RUNTIME_NAMED = {'GLOB'}
+
     def substitute_editor_ids(self, text):
         """Replace EditorIDs found in the offline indexes (not commands, keywords or quoted text) with their runtime
         form ids, which the in-game compiler accepts. Returns (new text, {EditorID: form id})."""
@@ -751,7 +771,7 @@ class LiveService:
                     return token
                 if token not in subs:
                     found = self.editor_id(token)
-                    if not found:
+                    if not found or found.get('type') in self.RUNTIME_NAMED:
                         return token
                     subs[token] = found['formId']
                 return subs[token]

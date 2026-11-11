@@ -56,6 +56,16 @@ def validate(data, index=None, assets=None, masters_expected=None):
                 if (group.group_type == 2 and number != block) or (group.group_type == 3 and number != sub):
                     errors.append('cell %s (%08X) is in %s but belongs in block %d sub-block %d'
                                   % (cell.editor_id, cell.form_id, where, block, sub))
+        elif group.group_type == 7:
+            label = struct.unpack('<I', group.label)[0]
+            siblings = parent.children if parent else []
+            index_in = siblings.index(group)
+            prev = siblings[index_in - 1] if index_in else None
+            if not isinstance(prev, codec.Record) or prev.type != 'DIAL' or prev.form_id != label:
+                errors.append('%s does not follow its topic DIAL %08X' % (where, label))
+            bad = [c for c in group.children if not isinstance(c, codec.Record) or c.type != 'INFO']
+            if bad:
+                errors.append('%s holds something other than INFO records' % where)
         elif group.group_type in (6, 8, 9):
             label = struct.unpack('<I', group.label)[0]
             if group.group_type == 6:
