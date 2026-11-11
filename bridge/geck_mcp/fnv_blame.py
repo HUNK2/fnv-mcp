@@ -9,7 +9,9 @@
 
 Design: plan2/B-debug.md section 3; the record layout is the one hook records use today (fnv_deep.py: words 2 thread,
 3 this, 5 caller, 12.. arguments, 22 frame). Preset names are resolved through the engine map; a preset the map does
-not know is listed as skipped, never guessed. `form` (NotifyFormIDChanged) is not built.
+not know is listed as skipped, never guessed. `form` hooks BGSSaveLoadGame::NotifyFormIDChanged 0x0084A690 (every
+tracked change of a form passes it: form, change flags, force) filtered to one form, for N seconds; each flag is named
+by the engine's own GetChangeFlagName 0x0083FEF0.
 
 The script context of a hit: the companion stamps each main-thread watch hit with the newest hook record the main
 thread wrote (wire: hit words 8 and 9). When that record is a statement of ScriptRunner::EvaluateLine (the ring
@@ -48,6 +50,7 @@ POLL = 0.2              # field reads its hits this often: the statement ring wr
 MAX_HITS = 2000
 FIELD_RE = re.compile(r'^(.*?)\s*\+\s*(0x[0-9A-Fa-f]+|\d+)$')
 SCRIPT_LABELS = ('script_line_dbg', 'script_line')
+NOTIFY_FORM_CHANGED, CHANGE_FLAG_NAME = 0x0084A690, 0x0083FEF0
 
 
 def _hx(value):
@@ -88,8 +91,7 @@ class BlameTools:
         if action == 'report':
             return self.report()
         if action == 'form':
-            raise ConvError('NOT_YET', 'form (the change flags of NotifyFormIDChanged) is not built. Next: use field on '
-                            'the form field, or ref for references.')
+            return self.form(args.get('ref'), seconds=args.get('seconds') or 5.0)
         raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid actions: field, ref, report, form.' % action,
                         {'actions': ['field', 'ref', 'report', 'form']})
 
@@ -253,6 +255,68 @@ class BlameTools:
                 return h
         return hook_at(self.live, address, label, PRESET_ARGS, flags=HF_RECORD, filter_sel=SELECTORS['ecx'],
                        filter_value=ptr)
+
+    # ================================================================ form
+    def form(self, form, seconds=5.0):
+        """Which change flags the game sets on a form meanwhile, and who set them."""
+        if not form:
+            raise ConvError('BAD_ARGUMENTS', 'form needs ref (a form or reference: player, a form id, Plugin.esp:ID).')
+        self.live.ready()
+        ptr = self._ptr(form)
+        form_type = (self.live.reads([(ptr + 4, 1)])[0] or b'\0')[0]
+        label = LABEL + 'form'
+        for h in self.live.deep.hooks():
+            if h.get('label') == label:
+                self.link.one('unhook', word(h['id']))
+        hook = hook_at(self.live, NOTIFY_FORM_CHANGED, label, 3, flags=HF_RECORD, filter_sel=SELECTORS['arg0'],
+                       filter_value=ptr)
+        try:
+            self.sleep(float(seconds))
+            h = next((x for x in self.live.deep.hooks() if x.get('label') == label), None)
+            _, recs, lost = self.live.deep.records(h, 0, limit=RING_SCAN) if h else (0, [], 0)
+        finally:
+            self.link.one('unhook', word(hook['id']))
+        names, rows = {}, []
+        for r in recs:
+            flags = r[13]
+            bits = [1 << i for i in range(32) if flags & (1 << i)]
+            for b in bits:
+                if b not in names:
+                    names[b] = self._flag_name(b, form_type)
+            caller = self.dbg._symbol(r[5], return_address=True) if r[5] else {}
+            row = {'frame': r[22], 'flags': '0x%08X' % flags, 'names': [names[b] for b in bits],
+                   'force': bool(r[14] & 0xFF), 'thread': _thread_label(r[2]), 'caller': caller.get('function'),
+                   'line': caller.get('source')}
+            rows.append(row)
+            self._keep([{'source': 'form', 'what': ','.join(row['names']), 'function': caller.get('function'),
+                         'reference': _hx(ptr), 'thread': row['thread'], 'caller': caller, 'frame': r[22]}])
+        flags_seen = sorted({n for row in rows for n in row['names']})
+        summary = {}
+        for row in rows:
+            key = (', '.join(row['names']), row['caller'])
+            item = summary.setdefault(key, {'flags': key[0], 'caller': key[1], 'line': row['line'], 'count': 0,
+                                            'firstFrame': row['frame']})
+            item['count'] += 1
+            item['lastFrame'] = row['frame']
+        return verdict('%d changes to %s in %s s: %s' % (len(rows), form, seconds, ', '.join(flags_seen) or 'none'),
+                       'Record hook on BGSSaveLoadGame::NotifyFormIDChanged 0x0084A690 filtered to the form (removed '
+                       'after); flag names from GetChangeFlagName 0x0083FEF0; the caller is the engine function that '
+                       'marked the change. Changes made by memory writes (the MCP\'s own) do not pass here.',
+                       form=_hx(ptr), formType=form_type, summary=list(summary.values()), changes=rows[:50],
+                       total=len(rows), lost=lost)
+
+    def _flag_name(self, bit, form_type):
+        try:
+            out = self.live.engine_call('0x%08X' % CHANGE_FLAG_NAME, None, [{'type': 'int', 'value': bit},
+                                                                              {'type': 'int', 'value': form_type},
+                                                                              {'type': 'int', 'value': 1}],
+                                        'ptr', 'cdecl', True)
+            address = int(out.get('result') or '0', 16)
+            raw = self.live.reads([(address, 64)])[0] if address else None
+            text = raw.split(b'\0', 1)[0].decode('latin-1') if raw else ''
+            return text or '0x%X' % bit
+        except Exception:  # noqa: BLE001 - the bit is still an answer
+            return '0x%X' % bit
 
     # ================================================================ report
     def report(self):

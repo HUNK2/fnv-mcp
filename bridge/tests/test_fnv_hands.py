@@ -194,11 +194,11 @@ class ClickTests(unittest.TestCase):
             h.click(label='Accept')
         self.assertEqual(cm.exception.code, 'NO_MENU')
 
-    def test_type_is_not_built(self):
+    def test_type_needs_text(self):
         h = HandsTools(FakeLive(), agent=FakeAgent(), sleep=lambda s: None)
         with self.assertRaises(LiveError) as cm:
             h.ui_do('type')
-        self.assertEqual(cm.exception.code, 'NOT_BUILT')
+        self.assertEqual(cm.exception.code, 'BAD_ARGUMENTS')
 
 
 if __name__ == '__main__':

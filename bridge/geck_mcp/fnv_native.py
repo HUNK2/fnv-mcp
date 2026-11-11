@@ -307,6 +307,50 @@ class NativeTools:
         out['rebuilt'] = bool(built)
         return out
 
+    def _export_in_memory(self, base, name):
+        """Address of an export of a loaded DLL, read from its PE export directory in the game's memory."""
+        try:
+            pe = struct.unpack('<I', self.live.reads([(base + 0x3C, 4)])[0])[0]
+            rva, size = struct.unpack('<II', self.live.reads([(base + pe + 0x78, 8)])[0])
+            raw = self.live.reads([(base + rva, 40)])[0]
+            count, names = struct.unpack_from('<II', raw, 24)[1], struct.unpack_from('<I', raw, 32)[0]
+            funcs, ords = struct.unpack_from('<I', raw, 28)[0], struct.unpack_from('<I', raw, 36)[0]
+            name_rvas = struct.unpack('<%dI' % count, self.live.reads([(base + names, 4 * count)])[0])
+            texts = self.live.reads([(base + r, 64) for r in name_rvas])
+            for i, t in enumerate(texts):
+                if t and t.split(b'\0', 1)[0].decode('ascii', 'replace') == name:
+                    ordinal = struct.unpack('<H', self.live.reads([(base + ords + 2 * i, 2)])[0])[0]
+                    func = struct.unpack('<I', self.live.reads([(base + funcs + 4 * ordinal, 4)])[0])[0]
+                    return base + func
+        except (struct.error, TypeError, IndexError):
+            return None
+        return None
+
+    def flow_slot(self):
+        """Address of the flow-call module's slot (fnv_flow call), building and loading the module when needed."""
+        key = 'fnvmcp_flowcall'
+        if key not in self.loaded:
+            listed = self.live.link.one('mod', 'list').get('modules', [])
+            for m in listed:      # loaded by an earlier bridge: find the slot in its export table in memory
+                if c_name(m['name'].rsplit('-', 1)[0]) == key:
+                    address = self._export_in_memory(int(str(m['base']), 16), 'fnvmcp_flow_slot')
+                    if address:
+                        self.loaded[key] = {'id': m['id'], 'dll': m['name'], 'hooks': [],
+                                            'exports': {'fnvmcp_flow_slot': '0x%08X' % address}}
+                        break
+            if key not in self.loaded:
+                source = Path(__file__).resolve().parent.parent / 'native' / 'modules' / 'fnvmcp_flowcall.c'
+                try:
+                    self._newest(key)
+                except ConvError:
+                    self.build(str(source), key)
+                self.load(key)
+        exports = self.loaded.get(key, {}).get('exports', {})
+        if 'fnvmcp_flow_slot' not in exports:
+            raise ConvError('NO_EXPORT', 'The flow-call module has no fnvmcp_flow_slot export; unload it '
+                            '(fnv_native unload name=fnvmcp_flowcall) and try again.')
+        return int(exports['fnvmcp_flow_slot'], 16)
+
     # ------------------------------------------------------------------ call / log / list
     def call(self, name, export, args=None):
         self.live.ready()

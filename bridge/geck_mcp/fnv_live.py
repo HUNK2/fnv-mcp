@@ -992,6 +992,16 @@ class LiveService:
                 'result': value, 'eax': result['eax'], 'st0': result.get('st0'), 'scriptErrors': result.get('scriptErrors'),
                 'journalId': entry['id']}
 
+    def scratch(self, data):
+        """Copy bytes into a new game heap block (FormHeap_Allocate 0x00401000) and return its address. The block is
+        not freed: use it for small call arguments (a vector, a handle)."""
+        call = self.link.one('call', '401000', 'i', '0', '0', word(max(16, len(data))))
+        address = int(call['eax'], 16) if call.get('ok') else 0
+        if not address:
+            raise LiveError('ALLOC_FAILED', 'FormHeap_Allocate returned null')
+        self.link.write(address, bytes(data))
+        return address
+
     def _game_string(self, text):
         """Copy a string into game memory with FormHeap_Allocate (0x00401000, proven) and return its address."""
         data = text.encode('cp1252') + b'\0'

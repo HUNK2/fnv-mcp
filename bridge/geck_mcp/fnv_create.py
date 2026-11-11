@@ -33,12 +33,17 @@ ADD_FORM = 0x004603B0
 IO_MANAGER = 0x01202D98
 HF_EXIT, HF_RECORD = 1, 2
 FILE_GET_BY_ENTRY = 0x00AF6340
+TEXTURE_CREATE = 0x00A5FD70
+RECORD_BUFFER, FORM_HEAP_FREE, FORM_DELETED_FLAGS = 0x011C54CC, 0x00401030, 0x20 | 0x4000
+MENU_CODE_OF, REMOVE_MENU_ENTRIES, MENU_SYSTEM, RELOAD_MENU = 0x00A01860, 0x00A1CA20, 0x0071E290, 0x00720AA0
 SNAP_NAME = 96          # bytes copied at the call: the name (lookup) or the file entry (archive)
 # (function, hook label, snapshot selector of the name argument, source name): selector 2 = stack argument 0,
 # 5 = stack argument 3 (GetFileByFileEntry(archiveType, entry, bufferSize, name), cdecl).
 # The archive open passes no name (seen live): stack argument 1 is the BSA file entry, whose first 8 bytes are the
 # name hash; the bridge maps it back to the path with the hashes stored in the archives (bsa_hashes).
-FILE_HOOKS = ((FILE_GET, 'file_log', 2, 'lookup'), (FILE_GET_BY_ENTRY, 'file_log_bsa', 3, 'archive'))
+FILE_HOOKS = ((FILE_GET, 'file_log', 2, 'lookup'), (FILE_GET_BY_ENTRY, 'file_log_bsa', 3, 'archive'),
+              (TEXTURE_CREATE, 'file_log_tex', 2, 'texture'))
+# NiSourceTexture::Create(const NiFixedString& name, ...): the snapshot of argument 0 starts with the string handle.
 
 
 def bsa_hashes(path):
@@ -84,6 +89,39 @@ def _model_rel(path):
 
 def _cstr(raw):
     return raw.split(b'\0', 1)[0].decode('cp1252', 'replace')
+
+
+PATH_TAGS = {'MODL', 'MOD2', 'MOD3', 'MOD4', 'ICON', 'MICO', 'ICO2', 'MIC2', 'TX00', 'TX01', 'TX02', 'TX03',
+             'TX04', 'TX05', 'NAM1', 'NIFZ'}
+NOT_AV = ('Data', 'Property', 'ExtraData', 'Controller', 'Interpolator', 'SkinInstance', 'SkinPartition',
+          'Partition', 'Palette', 'Sequence')
+
+
+def _is_av_object(kind):
+    """Whether a NIF block type is a scene object (a node, a shape, a light, a camera), which a node may hold."""
+    if kind.startswith('bhk') or kind.startswith('hk'):
+        return False
+    return not any(kind.endswith(s) for s in NOT_AV)
+
+
+def _node_children(data, head, i):
+    """Child block indices of node block i (NiObjectNET, NiAVObject, NiNode fields of a 20.2.0.7 / 11 / 34 file)."""
+    off, end = head['offsets'][i], head['offsets'][i] + head['sizes'][i]
+    try:
+        p = off + 4                                         # name (string index)
+        n_extra = struct.unpack_from('<I', data, p)[0]
+        p += 4 + 4 * n_extra + 4                            # extra data refs, controller
+        p += 4                                              # flags (u32 in New Vegas files, user version 2 = 34)
+        p += 12 + 36 + 4                                    # translation, rotation, scale
+        n_props = struct.unpack_from('<I', data, p)[0]
+        p += 4 + 4 * n_props + 4                            # properties, collision object
+        n_children = struct.unpack_from('<I', data, p)[0]
+        if n_children > 4096 or p + 4 + 4 * n_children > end:
+            return [len(head['blocks']) + n_children]       # an impossible count: reported as outside the file
+        return list(struct.unpack_from('<%di' % n_children, data, p + 4))
+    except struct.error:
+        return []
+
 
 
 class AssetTools:
@@ -153,7 +191,7 @@ class AssetTools:
             pending = [p for p, root in zip(pending, roots) if not root]
         return live_refs, pending
 
-    def reload(self, path):
+    def reload(self, path, menu=None, ref=None):
         self.live.in_game()
         low = _norm(path)
         self.live.changing('asset reload')
@@ -213,8 +251,50 @@ class AssetTools:
         if 'shaders' in low or low.endswith('.sdp'):
             result = self.live.console('RefreshShaders')
             return {'path': path, 'output': result['output'], 'how': 'console RefreshShaders'}
-        raise LiveError('NOT_BUILT', 'reload handles .nif, .dds, .ini and shader packages; menu XML and .kf are not '
-                                     'built yet')
+        if low.endswith('.xml'):
+            return self._reload_menu(path, menu)
+        if low.endswith('.kf'):
+            refs = [self.live.resolve(ref)['ptr']] if ref else []
+            if refs:
+                done, slow = self._refresh(refs)
+            else:
+                done, slow = [], []
+                self._purge()
+            self.live.journal.add({'kind': 'asset_reload', 'path': path, 'refs': len(done), 'undo': None})
+            return {'path': path, 'refs': len(done), 'refsWithout3D': len(slow),
+                    'how': 'ModelLoader ClearUnusedModels(true) 0x00448620 drops unused KF files too (its second '
+                           'map); an actor keeps the sequences it holds until its 3D is rebuilt, so ref= is disabled, '
+                           'purged and enabled. Then play it with fnv_anim play.',
+                    'note': None if refs else 'Only unused copies were dropped: pass ref (the actor) to rebuild '
+                                              'one that has the animation loaded.'}
+        raise LiveError('UNKNOWN_FILE_TYPE', 'reload handles .nif, .dds, .kf, menu .xml, .ini and shader packages')
+
+    def _reload_menu(self, path, menu):
+        """Evict a menu XML file from the tile cache, then rebuild the menu the way the console's
+        "reload <menu>" does (MenuManager::ReloadMenu 0x00720AA0 with the code of "&<menu>;")."""
+        if not menu:
+            raise LiveError('BAD_ARGUMENTS', 'A menu XML reload needs menu (its name, e.g. HUDMainMenu, '
+                                             'LockPickMenu), as the console command "reload <menu>" takes it.')
+        name = menu if menu.startswith('&') else '&%s;' % menu
+        code = self.live.engine_call('0x%08X' % MENU_CODE_OF, None, [{'type': 'string', 'value': name}], 'int',
+                                     'cdecl', True).get('result')
+        if code in (None, -0x80000000) or (isinstance(code, int) and code & 0xFFFFFFFF == 0x80000000):
+            raise LiveError('UNKNOWN_MENU', '%s is not a menu name the interface knows.' % menu)
+        rel = _norm(path)
+        evict = rel[len('menus\\'):] if rel.startswith('menus\\') else rel
+        for candidate in {rel, evict, 'data\\menus\\' + evict, 'menus\\' + evict}:
+            self.live.engine_call('0x%08X' % REMOVE_MENU_ENTRIES, None,
+                                  [{'type': 'string', 'value': candidate}, {'type': 'int', 'value': 0}], 'int',
+                                  'cdecl', True)
+        system = self.live.engine_call('0x%08X' % MENU_SYSTEM, None, [{'type': 'int', 'value': 1}], 'ptr', 'cdecl',
+                                       True).get('result')
+        self.live.engine_call('0x%08X' % RELOAD_MENU, system, [{'type': 'int', 'value': int(code)}], 'ptr',
+                              'thiscall', True)
+        self.live.journal.add({'kind': 'asset_reload', 'path': path, 'menu': menu, 'undo': None})
+        return {'path': path, 'menu': menu, 'menuCode': code,
+                'how': 'RemoveMenuEntries 0x00A1CA20 evicts the file from both tile caches, then '
+                       'MenuManager::ReloadMenu 0x00720AA0 (the console\'s "reload <menu>") deletes the menu and '
+                       'builds it again from the file.'}
 
     def watch(self, folder):
         """One check of a folder: reload the models and textures whose file time changed since the last check."""
@@ -284,7 +364,9 @@ class AssetTools:
                 self._log_since[label] = int(self.live.u32s([int(h['seqAddress'], 16)])[0] or 0)
             return {'started': True, 'how': 'record hooks on FileFinder::GetFile 0x00AFDF20 (by name: loose files, '
                                             'and missing ones) and the archive open by entry 0x00AF6340 (files read '
-                                            'from BSAs by queued loaders), the name copied at the call, any thread'}
+                                            'from BSAs by queued loaders) and NiSourceTexture::Create 0x00A5FD70 '
+                                            '(textures, which do not pass GetFile), the name copied at the call, any '
+                                            'thread'}
         if mode == 'stop':
             for h in hooks.values():
                 self.link.one('unhook', word(h['id']))
@@ -304,7 +386,35 @@ class AssetTools:
             rows += [(r, source) for r in got]
         rows.sort(key=lambda x: x[0][6] | (x[0][7] << 32))
         out, counts = [], {'opened': 0, 'missing': 0}
+        handles = sorted({r[24] for r, source in rows if source == 'texture' and r[24]})
+        texture_names = dict(zip(handles, (_cstr(t) if t else '' for t in self.live.reads(
+            [(h, 200) for h in handles])))) if handles else {}
+        index = None
         for r, source in rows:
+            if source == 'texture':
+                name = texture_names.get(r[24]) or ''
+                if not name:
+                    continue
+                rel = _norm(name)
+                rel = rel if rel.startswith('textures\\') else 'textures\\' + rel
+                try:
+                    index = index or self._index()
+                    found = index.find(rel) is not None
+                except LiveError:
+                    found = None
+                if found is False:
+                    counts['missing'] += 1
+                elif found:
+                    counts['opened'] += 1
+                if missing and found is not False:
+                    continue
+                if ext and not rel.endswith(ext.lower().lstrip('*')):
+                    continue
+                if folder and _norm(folder) not in rel:
+                    continue
+                out.append({'path': rel, 'found': found, 'source': source, 'thread': r[2],
+                            'caller': '0x%08X' % r[5]})
+                continue
             if source == 'archive':
                 names = self._hash_names().get(r[24] | (r[25] << 32), [])
                 name = names[0] if len(names) == 1 else (' | '.join(names[:3]) if names else
@@ -337,7 +447,9 @@ class AssetTools:
             e['callerName'] = names.get(e['caller'])
         return {'entries': out[-limit:], 'count': len(out), 'totals': counts, 'lost': lost, 'lastSeq': last,
                 'note': 'source "lookup" is FileFinder::GetFile (found false = the file is nowhere), "archive" a file '
-                        'read from a BSA by entry. found null: the call had not returned when read.'}
+                        'read from a BSA by entry, "texture" a texture the renderer asked for (NiSourceTexture::Create; '
+                        'found = the file is loose or in an archive of the load order). found null: the call had not '
+                        'returned when read.'}
 
     # ---------------------------------------------------------------- small reads
     def where(self, path):
@@ -353,6 +465,142 @@ class AssetTools:
                 'archivesSearched': index.archives,
                 'note': 'A valid archive entry wins over a loose file unless archive invalidation is on; MO2 mods are '
                         'searched in priority order, then Data.'}
+
+    def _file_bytes(self, path):
+        """(bytes, where) of a Data-relative file: the winning loose copy, else the first archive that has it."""
+        index = self._index()
+        rel = _norm(path)
+        hit = index.find(rel)
+        if not hit:
+            raise LiveError('FILE_NOT_FOUND', '%s is not a loose file or in an archive of the load order.' % rel)
+        if hit['where'] == 'loose':
+            return Path(hit['path']).read_bytes(), hit['path']
+        from .esp.assets import bsa_extract
+        for root in index.roots:
+            for bsa in sorted(Path(root).glob('*.bsa')):
+                try:
+                    got = bsa_extract(bsa, {rel})
+                except Exception:  # noqa: BLE001 - another archive
+                    continue
+                if rel in got:
+                    return got[rel], str(bsa)
+        raise LiveError('FILE_NOT_READ', '%s is listed in an archive but could not be extracted.' % rel)
+
+    def nif(self, path):
+        """Offline checks of a mesh before it goes in the game (header, root, child links, collision, skin,
+        texture paths)."""
+        from .esp.assets import nif_block_types, nif_textures, AssetError
+        data, where = self._file_bytes(path)
+        problems, warnings = [], []
+        try:
+            head = nif_block_types(data)
+        except (AssetError, struct.error, IndexError) as exc:
+            return {'path': path, 'from': where, 'ok': False, 'problems': ['header: %s' % exc]}
+        blocks = head['blocks']
+        if head['userVersion'] != 11 or head['userVersion2'] != 34:
+            warnings.append('user version %d/%d: New Vegas meshes are 11/34' % (head['userVersion'],
+                                                                                head['userVersion2']))
+        if not blocks:
+            problems.append('no blocks')
+        root = blocks[0] if blocks else None
+        if root and not _is_av_object(root):
+            problems.append('root block is %s, not a node' % root)
+        for i, kind in enumerate(blocks):
+            if not kind.endswith('Node') or kind in ('NiBSBoneLODController',):
+                continue
+            for child in _node_children(data, head, i):
+                if child == -1:
+                    continue
+                if not 0 <= child < len(blocks):
+                    problems.append('block %d (%s): child link %d is outside the file (%d blocks)' % (
+                        i, kind, child, len(blocks)))
+                elif not _is_av_object(blocks[child]):
+                    problems.append('block %d (%s): child link %d points at %s, which is not a scene object '
+                                    '(the engine faults in NiAVObject::AttachParent on this)' % (
+                                        i, kind, child, blocks[child]))
+        has_collision = any(b.startswith('bhk') and 'CollisionObject' in b for b in blocks)
+        skinned = [b for b in blocks if b in ('NiSkinInstance', 'BSDismemberSkinInstance')]
+        if 'NiSkinInstance' in skinned and 'armor' in _norm(path):
+            warnings.append('armour skinned with NiSkinInstance: New Vegas armour uses BSDismemberSkinInstance')
+        textures = []
+        index = self._index()
+        for t in nif_textures(data):
+            found = index.find(_norm(t))
+            textures.append({'path': _norm(t), 'found': bool(found), 'where': (found or {}).get('where')})
+            if not found:
+                problems.append('texture not found: %s' % _norm(t))
+        return {'path': path, 'from': where, 'ok': not problems, 'problems': problems, 'warnings': warnings,
+                'blocks': len(blocks), 'root': root, 'collision': has_collision, 'skin': sorted(set(skinned)),
+                'blockTypes': dict(sorted({b: blocks.count(b) for b in set(blocks)}.items())),
+                'textures': textures,
+                'how': 'NIF 20.2.0.7 header; child links of every node block read from the block body (NiNode '
+                       'layout of New Vegas); texture paths checked against the loose files and archives.'}
+
+    def dds(self, path):
+        """Offline checks of a texture: header, size, format, mip chain."""
+        data, where = self._file_bytes(path)
+        if data[:4] != b'DDS ' or len(data) < 128:
+            return {'path': path, 'from': where, 'ok': False, 'problems': ['not a DDS file']}
+        height, width = struct.unpack_from('<II', data, 12)
+        mips = struct.unpack_from('<I', data, 28)[0] or 1
+        pf_flags, fourcc, bits = struct.unpack_from('<I4sI', data, 80)
+        fmt = fourcc.decode('ascii', 'replace') if pf_flags & 0x4 else '%d-bit %s' % (
+            bits, 'RGBA' if pf_flags & 0x1 else 'RGB')
+        problems, warnings = [], []
+        pow2 = lambda n: n > 0 and n & (n - 1) == 0  # noqa: E731
+        if not (pow2(width) and pow2(height)):
+            problems.append('size %dx%d is not a power of two' % (width, height))
+        full = int(math.log2(max(width, height))) + 1 if width and height else 1
+        if mips < full:
+            warnings.append('%d of %d mip levels: distant surfaces shimmer or show the top level' % (mips, full))
+        if pf_flags & 0x4 and fmt not in ('DXT1', 'DXT3', 'DXT5'):
+            warnings.append('format %s: New Vegas textures are DXT1, DXT3, DXT5 or uncompressed' % fmt)
+        if max(width, height) > 4096:
+            warnings.append('larger than 4096: costs memory on a 32-bit game')
+        return {'path': path, 'from': where, 'ok': not problems, 'problems': problems, 'warnings': warnings,
+                'width': width, 'height': height, 'format': fmt, 'mipLevels': mips, 'fullMipChain': full}
+
+    def users(self, path, limit=100):
+        """Records in the load order that name this file (models, icons, texture sets): which record to fix when a
+        file is bad."""
+        from .fnv_data import load_order
+        from .esp import codec
+        want = _norm(path)
+        bare = want.split('\\', 1)[1] if want.split('\\', 1)[0] in ('meshes', 'textures', 'sound', 'music') else want
+        rows = []
+        entries = load_order(self.live.project, self.records.data._live_plugins())
+        cache = self.__dict__.setdefault('_path_users', {})
+        unreadable = []
+        for e in entries:
+            if not e.get('path'):
+                continue
+            stamp = os.path.getmtime(e['path'])
+            held = cache.get(e['path'])
+            if not held or held[0] != stamp:
+                table = {}
+                try:
+                    plugin = codec.parse(Path(e['path']).read_bytes())
+                    for rec, _labels in plugin.records():
+                        try:
+                            subs = rec.subrecords
+                        except Exception:  # noqa: BLE001 - a record whose compressed data is bad
+                            unreadable.append('%s:%08X' % (e['name'], rec.form_id))
+                            continue
+                        for sub in subs:
+                            if sub.tag in PATH_TAGS and sub.data:
+                                text = _norm(sub.data.split(b'\0', 1)[0].decode('cp1252', 'replace'))
+                                table.setdefault(text, []).append((rec.type, rec.form_id, rec.editor_id, sub.tag))
+                except Exception as exc:  # noqa: BLE001 - one bad plugin does not stop the search
+                    unreadable.append('%s: %s' % (e['name'], str(exc)[:80]))
+                held = cache[e['path']] = (stamp, table)
+            for key in {want, bare}:
+                for rtype, fid, edid, tag in held[1].get(key, []):
+                    rows.append({'plugin': e['name'], 'type': rtype, 'formId': '%08X' % fid, 'editorId': edid,
+                                 'field': tag})
+        return {'path': want, 'users': rows, 'count': len(rows), 'unreadable': unreadable[:20] or None,
+                'how': 'every record of the load order plugins with a model, icon or texture field naming the file '
+                       '(form ids as in each plugin, as fnv_record_find shows them); each plugin is read once and '
+                       'kept until its file changes'}
 
     def queue(self, wait_idle=False, timeout=30):
         self.live.ready()
@@ -387,7 +635,7 @@ class AssetTools:
 
     def run(self, action, **kw):
         if action == 'reload':
-            return self.reload(kw['path'])
+            return self.reload(kw['path'], kw.get('menu'), kw.get('ref'))
         if action == 'watch':
             return self.watch(kw['path'])
         if action == 'file_log':
@@ -401,7 +649,11 @@ class AssetTools:
             return self.models()
         if action == 'archives':
             return self.archives()
-        raise ValueError('action is reload, watch, file_log, queue, where, models or archives')
+        if action in ('nif', 'dds', 'users'):
+            if not kw.get('path'):
+                raise ValueError('%s needs path' % action)
+            return getattr(self, action)(kw['path'])
+        raise ValueError('action is reload, watch, file_log, queue, where, models, archives, nif, dds or users')
 
 
 class FormTools:
@@ -602,10 +854,82 @@ class FormTools:
             return self.reload(kw['plugin'], kw.get('records'))
         if action == 'changes':
             return self.changes(kw.get('since'))
-        if action in ('bytes', 'delete'):
-            raise LiveError('NOT_BUILT', '%s is not built yet: the engine record writer (SaveForm) and form removal '
-                                         'are still to be checked in the game' % action)
+        if action == 'bytes':
+            return self.form_bytes(kw.get('form') or kw.get('clone'))
+        if action == 'delete':
+            return self.delete(kw.get('form') or kw.get('clone'))
         raise ValueError('action is create, reload, changes, bytes or delete')
+
+    def form_bytes(self, form):
+        """The live form as record bytes from the engine's own writer (vtable slot 0xB SaveForm), decoded."""
+        self.live.in_game()
+        if not form:
+            raise ValueError('bytes needs form')
+        f = self.live.resolve(form)
+        ptr = f['ptr']
+        head = self.live.form_ids([ptr])[0] or {}
+        if head.get('flags', 0) & 0x4000:
+            raise LiveError('TEMPORARY_FORM', '%s is a temporary form: the engine writes no record for those '
+                                              '(TESForm_StartForm returns at once).' % f['formId'])
+        vtable = self.live.u32s([ptr])[0]
+        save_form = self.live.u32s([vtable + 0xB * 4])[0]
+        old = self.live.reads([(RECORD_BUFFER, 8)])[0]
+        self.link.write(RECORD_BUFFER, b'\0' * 8)
+        try:
+            self.live.engine_call('0x%08X' % save_form, '0x%08X' % ptr, [], 'int', 'thiscall', True)
+            buf, size = struct.unpack('<II', self.live.reads([(RECORD_BUFFER, 8)])[0])
+            data = self.live.reads([(buf, size)])[0] if buf and 0x18 <= size < 0x100000 else None
+        finally:
+            buf_now = self.live.u32s([RECORD_BUFFER])[0]
+            if buf_now:
+                self.link.one('call', word(FORM_HEAP_FREE), 'c', '0', '0', word(buf_now))
+            self.link.write(RECORD_BUFFER, old or b'\0' * 8)
+        if not data:
+            return {'form': f['formId'], 'written': False, 'saveForm': '0x%08X' % save_form,
+                    'note': 'The class wrote no record: its SaveForm is the base one (no writer found in the decomp '
+                            'for WEAP, CONT, ALCH, INGR, KEYM, FACT, PACK, SPEL, ENCH). Use fnv_form_live_diff.'}
+        sig = data[0:4].decode('ascii', 'replace')
+        flags, fid = struct.unpack_from('<II', data, 8)
+        from .esp import codec
+        from .fnv_data import decode_subrecord
+        fields = []
+        for sub in codec.parse_subrecords(data[0x18:]):
+            item = {'tag': sub.tag, 'size': len(sub.data)}
+            value = decode_subrecord(sig, sub.tag, sub.data)
+            if value is not None:
+                item['value'] = value
+            elif len(sub.data) == 4 and sub.tag not in ('DATA', 'OBND'):
+                item['formIdRuntime'] = '%08X' % struct.unpack('<I', sub.data)[0]
+            else:
+                item['hex'] = sub.data[:64].hex(' ') + (' ...' if len(sub.data) > 64 else '')
+            fields.append(item)
+        return {'form': f['formId'], 'written': True, 'type': sig, 'flags': '0x%08X' % flags, 'formIdInRecord':
+                '%08X' % fid, 'size': len(data), 'fields': fields,
+                'how': 'vtable slot 0xB (SaveForm) called on the live form: TESForm_StartForm 0x004855A0 opens the '
+                       'record in the buffer at 0x011C54CC, the class appends its fields; the buffer is read, freed '
+                       '(FormHeap_Free) and the globals restored. Form ids are runtime ids (load order prefix); '
+                       'there is no EDID (the game keeps none).'}
+
+    def delete(self, form):
+        """Remove a form this session created: flagged deleted and temporary (no save record, no change entry)."""
+        self.live.in_game()
+        if not form:
+            raise ValueError('delete needs form')
+        f = self.live.resolve(form)
+        mine = next((c for c in self.created if c['formId'].upper() == f['formId'].upper()), None)
+        if not mine:
+            raise LiveError('NOT_CREATED_HERE', '%s was not created in this session; only forms fnv_form create made '
+                                                'can be deleted.' % f['formId'])
+        flags = self.live.u32s([f['ptr'] + 8])[0]
+        self.live.changing('form delete')
+        self.link.write(f['ptr'] + 8, struct.pack('<I', flags | FORM_DELETED_FLAGS))
+        self.created.remove(mine)
+        self.live.journal.add({'kind': 'form_delete', 'formId': f['formId'], 'undo': None})
+        return {'deleted': f['formId'], 'flagsBefore': '0x%08X' % flags,
+                'how': 'form flags |= 0x20 (deleted) and 0x4000 (temporary: no record in a save, no change entry). '
+                       'The engine has no "remove from the data handler" function that was found, so the object '
+                       'stays allocated until the game quits; references to it should be removed first '
+                       '(fnv_place remove).'}
 
 
 class PlaceTools:
@@ -783,8 +1107,64 @@ class PlaceTools:
             issues.append('floats %.0f units above the surface under it' % (z - g))
         if g is None:
             issues.append('no surface found under it')
+        overlaps = self._overlaps(r['ptr'])
+        for o in overlaps:
+            issues.append('overlaps %s (%s, %.0f units inside its bound)' % (o['ref'], o['how'], o['depth']))
         return {'ref': r['formId'], **pose, 'surface': None if g is None else round(g, 2), 'issues': issues,
-                'note': 'Overlap with other collision is not tested yet; this checks floating and sinking only.'}
+                'overlaps': overlaps,
+                'note': 'Overlap: the world bound spheres of the loaded references are compared (a sphere is '
+                        'coarse); a candidate counts when a ray from this object\'s centre to the other\'s hits the '
+                        'other inside both bounds ("collision"), or when the centres nearly coincide ("centres").'}
+
+    def _overlaps(self, ptr, limit=8):
+        eyes = getattr(self.hands, 'eyes', None) if self.hands else None
+        if eyes is None:
+            return []
+        from .fnv_eyes import cell_refs
+        refs = cell_refs(self.live)
+        bounds = eyes._bounds(sorted(set(refs) | {ptr}))
+        me = bounds.get(ptr) or {}
+        if not me.get('centre'):
+            return []
+        mx, my, mz = me['centre']
+        mr = me['radius']
+        cands = []
+        for p, info in bounds.items():
+            if p == ptr or not info.get('centre') or info.get('disabled') or not info.get('radius'):
+                continue
+            if info['radius'] > 4000:          # cells, landscape, skies: bounds that cover everything
+                continue
+            d = math.dist((mx, my, mz), info['centre'])
+            depth = mr + info['radius'] - d
+            if depth > 0.25 * min(mr, info['radius']):
+                cands.append((depth, d, p, info))
+        cands.sort(key=lambda c: -c[0])
+        out = []
+        for depth, d, p, info in cands[:limit * 2]:
+            how = None
+            if d < 0.25 * min(mr, info['radius']):
+                how = 'centres'
+            else:
+                hit = self._ray(me['centre'], info['centre'])
+                if hit is not None and hit.get('formId') == info['formId'] and hit['distance'] < min(mr, d):
+                    how = 'collision'
+            if how:
+                out.append({'ref': info['formId'], 'how': how, 'depth': round(depth, 1),
+                            'distance': round(d, 1)})
+            if len(out) >= limit:
+                break
+        return out
+
+    def _ray(self, start, end):
+        engine_ai = getattr(self.live, 'engine_ai', None)
+        if engine_ai is None:
+            return None
+        out = engine_ai.raycast(dict(zip('xyz', start)), dict(zip('xyz', end)), None, None, 'line_of_sight')
+        if not out.get('hit'):
+            return None
+        ref = ((out.get('hitObject') or {}).get('reference') or {})
+        return {'formId': ref.get('formId') if isinstance(ref, dict) else None,
+                'distance': out.get('distanceToHit') or 0.0}
 
     def list(self):
         latest = {}

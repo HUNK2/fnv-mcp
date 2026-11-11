@@ -13,7 +13,13 @@ cells, and Easy Pete's dialogue with voice and lip files).
    photo. Rows come worst first. `fnv_undo` puts the player back.
 3. **Dialogue.** `fnv_crawl` action `dialogue` with `npc` for each speaker: every line written for the NPC, whether
    the engine allows it now and which condition fails, and the voice and lip files with whether they exist.
-4. **Follow up.** A missing file: `fnv_asset where` and `fnv_asset file_log`. A warning: `fnv_warnings read`. A
+4. **Quests and items.** `fnv_crawl` action `quest` with `quest` and `path` (the stages, in order): the stage
+   reached, the objectives shown, targets that do not resolve, script errors. Action `items` with `plugin`: each new
+   item added, equipped or used, its model checked, then taken back.
+5. **Scripts that never ran.** `fnv_script_coverage` action `run` with `folder` (the plugin's tests) and `plugin`:
+   per script, the lines no test reached.
+6. **Meshes and textures before shipping.** `fnv_asset` action `nif` / `dds` on each new file.
+7. **Follow up.** A missing file: `fnv_asset where` and `fnv_asset file_log`. A warning: `fnv_warnings read`. A
    failing condition: `fnv_dialogue_tree` and `fnv_condition_eval`. A crash or regression after a load-order
    change: `fnv_bisect` with the failing `fnv_do` steps.
 

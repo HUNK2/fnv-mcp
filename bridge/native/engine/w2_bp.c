@@ -53,6 +53,11 @@ static BpEntry bp_log[BP_LOG];
 static volatile LONG bp_log_seq;
 static TraceEntry trace_ring[TRACE_ENTRIES];
 static Trace tr;
+/* Extra ranges the trace steps into (fnv_flow depth 1: the direct callees with line data); set by `trace ranges`
+ * before the resume and cleared when the trace ends. */
+#define TRACE_EXTRA 16
+static uint32_t tr_extra[TRACE_EXTRA][2];
+static int tr_extra_n;
 
 static void tr_begin(CONTEXT *c, DWORD tid); /* defined with the trace below */
 
@@ -242,7 +247,12 @@ static void bp_pass(CONTEXT *c, DWORD tid, uint32_t addr, unsigned char orig) {
 }
 
 /* ---------------------------------------------------------------------------------------------- trace */
-static bool tr_in(uint32_t eip) { return eip >= tr.lo && eip < tr.hi; }
+static bool tr_in(uint32_t eip) {
+    if (eip >= tr.lo && eip < tr.hi) return true;
+    for (int i = 0; i < tr_extra_n; i++)
+        if (eip >= tr_extra[i][0] && eip < tr_extra[i][1]) return true;
+    return false;
+}
 
 /* Records the entry of the instruction at the context's eip (before it runs). */
 static void tr_record(const CONTEXT *c) {
@@ -275,6 +285,7 @@ static void tr_end(CONTEXT *c, DWORD tid, uint32_t reason) {
     tr.active = false;
     tr.done = true;
     tr.reason = reason;
+    tr_extra_n = 0;
     for (int i = 0; i < (int)ISITES; i++)
         if (isites[i].live && isites[i].purpose == SITE_TRACE && isites[i].owner == tid) isite_remove(i);
     /* trace read takes the seq while the thread is parked, so it is set before the park: the seq the stop will get */
@@ -716,10 +727,29 @@ static void op_bp(int argc, char **argv) {
     if (argc == 4 && !strcmp(argv[1], "after")) return op_bp_after(argc, argv);
     fail("bad_arguments");
 }
-/* trace read <seq> <since> [max]: the entries of the trace that ended at stop seq, with n above since. */
+/* trace ranges <hex>: packed (lo, hi) u32 pairs, at most 16, that a following resume trace also steps into (empty
+ * hex "-" clears them). trace read <seq> <since> [max]: the entries of the trace that ended at stop seq, with n above
+ * since. */
 static void op_trace(int argc, char **argv) {
     uint32_t seq = 0, since = 0, max = 256, first, last, upto, n;
     bool comma = false;
+    if (argc == 3 && !strcmp(argv[1], "ranges")) {
+        long len = strcmp(argv[2], "-") ? unhex(argv[2]) : 0;
+        if (tr.active || tr.pending) return fail("in_use");
+        if (len < 0 || len % 8 || len / 8 > TRACE_EXTRA) return fail("bad_arguments");
+        tr_extra_n = 0;
+        for (long i = 0; i < len / 8; i++) {
+            uint32_t lo, hi;
+            memcpy(&lo, argv[2] + i * 8, 4);
+            memcpy(&hi, argv[2] + i * 8 + 4, 4);
+            if (hi <= lo) return fail("bad_arguments");
+            tr_extra[tr_extra_n][0] = lo;
+            tr_extra[tr_extra_n][1] = hi;
+            tr_extra_n++;
+        }
+        emit("{\"ok\":true,\"ranges\":%d}", tr_extra_n);
+        return;
+    }
     if (argc < 4 || argc > 5 || strcmp(argv[1], "read") || !parse_u32(argv[2], &seq) || !parse_u32(argv[3], &since))
         return fail("bad_arguments");
     if (argc == 5 && (!parse_u32(argv[4], &max) || max == 0 || max > TRACE_ENTRIES)) return fail("bad_arguments");

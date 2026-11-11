@@ -23,6 +23,7 @@ from .fnv_live import LiveError
 PLAYER = 0x011DEA3C
 CONTROLS_DISABLED = 0x680
 MENU_ARRAY = 0x011F3508
+TEXT_EDIT_MENU, NAME_ENTRY_FINISH = 1051, 0x007AB9A0
 TILEMENU_MENU = 0x3C
 TRAIT_ID, TRAIT_STRING = 0xFAA, 0xFC4
 CAN_FAST_TRAVEL, FAST_TRAVEL = 0x0093D660, 0x0093CDF0
@@ -877,6 +878,25 @@ class HandsTools:
         if action in ('close', 'back'):
             return self.agent.menu_control('close', menu=menu)
         if action == 'type':
-            raise LiveError('NOT_BUILT', 'Typing into menus needs buffered key events, which the companion does not '
-                                         'inject yet. Use fnv_console for console text.')
+            return self.type_text(label if label is not None else target)
         raise ValueError('action is click, button, wait, sleep, fast_travel, message, close, back or type')
+
+    def type_text(self, text):
+        """Enter text in the game's text entry (TextEditMenu 1051: the character name) the way its Done button does:
+        PlayerNameEntryMenu::Finish(text) 0x007AB9A0 sets the name and closes the menu. Other text fields of New
+        Vegas are console text (fnv_console)."""
+        if not text:
+            raise LiveError('BAD_ARGUMENTS', 'type needs label (the text to enter).')
+        self.live.in_game()
+        tile = self.live.u32s([MENU_ARRAY + 4 * (TEXT_EDIT_MENU - 0x3E9)])[0]
+        menu = self.live.u32s([tile + TILEMENU_MENU])[0] if tile else 0
+        if not menu:
+            raise LiveError('NO_TEXT_ENTRY', 'No text entry menu is open (TextEditMenu, 1051). New Vegas asks for text '
+                                             'only when naming the character; console text goes through fnv_console.')
+        self.live.changing('ui type')
+        self.live.engine_call('0x%08X' % NAME_ENTRY_FINISH, '0x%08X' % menu,
+                              [{'type': 'string', 'value': str(text)[:60]}], 'int', 'thiscall', True)
+        self._frames(5)
+        return {'typed': str(text)[:60], 'menu': '0x%08X' % menu,
+                'how': 'PlayerNameEntryMenu::Finish 0x007AB9A0 on the open TextEditMenu: the text the Done button '
+                       'would take (the player\'s name), then the menu closes'}

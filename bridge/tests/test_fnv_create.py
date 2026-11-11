@@ -277,12 +277,22 @@ class FormTests(unittest.TestCase):
                 FormTools(live).reload(str(Path(d) / 'build' / 'Mine.esp'))
             self.assertEqual(cm.exception.code, 'PLUGIN_NOT_FOUND')
 
-    def test_bytes_and_delete_are_not_built(self):
+    def test_bytes_and_delete_need_a_form(self):
         with tempfile.TemporaryDirectory() as d:
             for action in ('bytes', 'delete'):
-                with self.assertRaises(LiveError) as cm:
-                    FormTools(FakeLive(d)).run(action)
-                self.assertEqual(cm.exception.code, 'NOT_BUILT')
+                live = FakeLive(d)
+                live.in_game = lambda: {}
+                with self.assertRaises(ValueError):
+                    FormTools(live).run(action)
+
+    def test_delete_refuses_a_form_this_session_did_not_create(self):
+        with tempfile.TemporaryDirectory() as d:
+            live = FakeLive(d)
+            live.in_game = lambda: {}
+            live.resolve = lambda ref: {'ptr': 0x30000000, 'formId': '0000000F'}
+            with self.assertRaises(LiveError) as cm:
+                FormTools(live).delete('Caps001')
+            self.assertEqual(cm.exception.code, 'NOT_CREATED_HERE')
 
 
 class ScaffoldTests(unittest.TestCase):

@@ -432,16 +432,15 @@ not.
 on the function's entry, then runs `resume trace` over the function's range with a log program that reads its scalar
 locals at their EBP offsets (at most 16). The result lists each executed source line in order with its hit count, the
 source text and the locals that changed (the change is attributed to the line before it). The function needs symbol
-database lines (NO_LINES otherwise) and a hook-free entry (ALREADY_HOOKED). `call` is not built: the companion ignores
-breakpoints while it serves an engine call, so the call cannot be traced from here. depth 1 (direct callees too) is
-not built.
+database lines (NO_LINES otherwise) and a hook-free entry (ALREADY_HOOKED). `call` and `depth 1`: see "Plan 2
+completion pass" below.
 
 **fnv_blame** (`field`, `ref`, `report`, `form`). `field address=<0x...> | <ref> + 0x..` sets a hardware write watch
 (`dbg` set, 1 to 64 bytes, `write` or `readwrite`, scope `main` or `all`, up to 600 seconds). It shares the four
 hardware slots with fnv_debug. Each hit records the thread, the stack with source lines, and the script line when the
 script runner is on the stack. `ref ref=<ref> what=<presets>` hooks the B-debug section 3 presets (comma-separated, or
 all), filtered to the reference pointer, with the log flag so the ring keeps every call. `report` groups hits by
-culprit: the script line, else the writing function. `form` (the change flags of NotifyFormIDChanged) is not built.
+culprit: the script line, else the writing function. `form`: see "Plan 2 completion pass" below.
 Deviation: the script context of a blame hit is the last statement the thread ran, read from the statement ring; it is
 approximate, not the statement that wrote.
 
@@ -529,7 +528,8 @@ How:
   waiting is allowed there; the hours then run through the engine's own one-hour wait (`fnv_time`).
 - `fast_travel` asks `CanFastTravel` 0x0093D660 first (its refusal message is the reason), then
   `FastTravel(marker)` 0x0093CDF0.
-- `type` (text into menus) is not built: it needs buffered key events from the companion.
+- `type`: the character name entry (TextEditMenu 1051) through PlayerNameEntryMenu::Finish 0x007AB9A0; New Vegas
+  asks for no other menu text (see "Plan 2 completion pass").
 - Doors: path-pick rays pass through door collision, so a closed door is not in the plan (seen live). When the walk
   stops gaining ground with a closed, non-load door within 140 units ahead, `goto` opens it and plans again through
   the door's centre. Checked live: the bathroom door of Prospector Saloon opened on the way. Not solved: a door that
@@ -749,8 +749,9 @@ How:
   Checked live: the activation logger as a plugin logged the door and an NPC activation with no companion hook.
 - Generated structs come from the symbol database's best definition of a class; for `TESForm` that definition is a
   36-byte placeholder of `unk` fields (the real class is 0x18 bytes), so check a struct before trusting it.
-- Not built: `fnv_orig_<address>` (calling the old function from the new one), `compare` modes `shadow` and `ab`,
-  redirecting call sites for functions shorter than five bytes, a loader plugin for an exported patch set.
+- Built in the completion pass (below): `fnv_orig_<address>`, `compare mode=shadow`, call-site and vtable redirects
+  for functions under five bytes, a loader module for an exported patch set. Not built: `compare ab` (decided: shadow
+  answers "does the new code agree", and alternating the entry per call would need a hook on our own jump).
 
 ## Performance and inspectors (Plan 2, W6)
 
@@ -785,9 +786,9 @@ How and what was seen:
 - Systems: `skill_value(15, 5, 5)` = 28; XP for levels 1 to 5 = 0, 200, 550, 1050, 1700. The game's actor value is
   spelled `SleepDeprevation`; the hardcore flag is player +0x7BC.
 - Audio log in the saloon: a dog's panting and tongue sounds, with files and `BSAudio::GetSoundHandleByFilename`.
-- Not built: `fnv_audio` voice_check, music, radio; `fnv_anim` idle_tree, biped, face; `fnv_physics` triggers,
-  projectiles, query; `fnv_systems` barter, crime, zone; `fnv_memory` refcount and pressure; `fnv_object` referrers;
-  thread names from the thread-name exception.
+- Built in the completion pass (below): everything listed here before, except `fnv_memory pressure` (decided: the
+  engine's free-memory steps unload cells and textures mid-game; `pools` covers the reading) and thread names from
+  the thread-name exception (the game names few threads; `fnv_threads` names them by start routine).
 
 ## Whole-plugin checks: fnv_crawl, fnv_bisect, fnv_selftest (Plan 2, W7)
 
@@ -817,8 +818,10 @@ What was seen:
 - `fnv_bisect` is tested against a fake profile and runner (eight mods, the culprit in three rounds, the profile put
   back). Its live run needs the MO2 launch of the MCP server (launching from an in-process test client fails), so it
   is not checked in the game yet.
-- Not built: parallel game instances (the game refuses a second instance: a mutex in WinMain), replay of a recorded
-  session, `fnv_crawl quest` and `items`, bisecting `hooks` and `records`.
+- Built in the completion pass (below): replay, `fnv_crawl quest` and `items`, bisect `records`. Decided against:
+  parallel game instances (WinMain refuses a second process through the named mutex whose name is at 0x01082AB8, and
+  refuses Remote Desktop sessions; each worker would also need its own MO2 instance, INI, saves and about 2 GB) and
+  bisect `hooks` (putting another DLL's patch back in a running game is unsafe; level `mods` names the DLL).
 
 ## Acceptance scenarios S1, S2, S4, S6 (Plan 2, run in the game 2026-11-11 night)
 
@@ -888,6 +891,105 @@ folder and `fnv_record_find plugin=HelloCrash.esp` the STAT HelloCrashCrate that
   game hangs in `TES::LoadInterior`.
 
 Not run: `fnv_bisect` in the game (the MCP server must launch the game; it was not reconnected with the new tools).
+
+
+## Plan 2 completion pass (2026-11-11 late night)
+
+Everything the waves left as "not built" was built or decided against; each item below was run in the game
+(Prospector Saloon, a spawned Trudy, the Hello plugins) unless it says otherwise. Tool count: 209 (165 `fnv_`, 44
+`geck_`).
+
+**Inspectors**
+- `fnv_anim groups` (the group map at animation +0xDC, values are AnimSequenceBase: a single one holds its
+  BSAnimGroupSequence at +4): 1,057 groups for the player with their KF files. `biped` (Character +0x1B4, slots of 16
+  bytes at +0x2C): the player's upper body, hands, Pip-Boy; Trudy's NCR outfit. `face` (process +0x178, keyframe
+  blocks with values at +0xC and count at +0x10): counts 15/15/16/1/17/16/1 as the decomp says; Trudy's mood
+  expression 5 = 1.0. `idle_tree`: the roots come from IdleAnimationManager::GetIdleArray 0x00600690 **on the base
+  form** (the manager's own lookup by reference returned no folder); each root is asked with
+  TESIdleForm::FindIdleFormForObject 0x005FF2E0 in order. Approximate: replay delays and the caller's filters
+  (HighProcess::StartIdleAnimation) are not applied, so the LOOSE root idles with no conditions answer first.
+  `events`: record hook on Actor::SetAnimAction 0x008A73E0 (no actions in a quiet saloon).
+- `fnv_audio playing` (BSAudioManager 0x011F6EF0 +0x54 map; BSGameSound flags +8, state +0x10, volume +0x24, file
+  +0x36, sound form +0x134): 12 sounds, 10 playing. The position at +0x17C read as garbage, so positions are not
+  reported. `stop` by form sends message 4 through 0x00ADB610 (two clock loops stopped). `music`: the state block
+  0x011DD0F0; `file=` plays a track as special media (type 6) and `stop` fades it (both seen). `radio`: one station,
+  radio off. `hear`: CanPlaySoundAt 0x0082ECA0 (static, cdecl) says yes next to the player, no 90,000 units away.
+  `subtitles`: record hook on Interface::ShowSubtitle 0x00705210 (not run with a speaker). `voice_check` = `fnv_crawl
+  dialogue`: Trudy's 60 lines all found with the corrected naming rule.
+- Voice file names (fixed in fnv_crawl): quest and topic EditorIDs share 25 characters; when they do not fit, the
+  quest keeps at most 10 and the topic the rest; the id is the record's own 6 hex digits with a `00` prefix in every
+  plugin (DLCs with one master too); then the TRDT response number. Checked on every FalloutNV.esm response that has
+  a file in Fallout - Voices1.bsa (28,767 of 28,768). The old rule (always 10/15, prefix = number of masters) matched
+  67% of vanilla and every mod plugin wrongly.
+- `fnv_physics body` adds the velocity (hkpRigidBody +0x1B0, Havok units x 6.9991); `set`: bhkRigidBody
+  SetLinearVelocity 0x005615D0 takes an NiPoint3 **in game units** and converts it itself (a bottle jumped 12 units).
+  `controller` adds the state (+0x3F0: on ground ...). `triggers`: record hook on the script event raiser 0x005AC750
+  (action ref, the trigger's extra list = trigger + 0x44, flag): OnTrigger runs merged per frame span, two actors in
+  two scripted triggers seen. `projectiles` (ProcessLists 0x011E0E80 +0x70, kept by RTTI class), `query` (six rays),
+  `layers`.
+- `fnv_systems perk`: perk DATA at +0x38 plus its conditions ("Educated: needs level 4, player 1"). `barter`:
+  GetSkillPriceMultipliers 0x00649050 with scratch out-floats: Barter 15 gives x1.482 / x0.517, a 9mm pistol (value
+  100) 148 / 52; not compared with an open barter menu. `GetValue` returns 0 for ingestibles (their value is in
+  ENIT). `zone`: GetCalculatedLevel 0x00526190 returns an unsigned short (mask it): Vault11Zone level 6. `crime`:
+  karma; New Vegas keeps no bounty.
+- `fnv_object referrers`: every writable region read from outside (VirtualQueryEx), 601 MB in 0.7 s; a Havok body
+  pointer was held by its bhkCollisionObject and its native body. `fnv_memory refcount`: a write watchpoint on +4
+  through `fnv_blame field`.
+
+**Creation loop**
+- `fnv_asset nif` (offline): header, root, the child links of every node block (NiAVObject flags are a u32 in New
+  Vegas files, user version 2 = 34), collision, skin, texture paths. It names the S2 crash mesh's bad link (root child
+  10 -> NiTriStripsData) without the game and passes vanilla meshes, the skeleton included. `dds`: size, format, mip
+  chain (read from the archive). `users path`: the records that name a file (the S2 culprit HelloCrashCrate from its
+  mesh path). One FalloutNV.esm record (00150FC0) has compressed data zlib refuses; it is listed as unreadable.
+- `file_log` gains source `texture` (NiSourceTexture::Create 0x00A5FD70; textures never pass FileFinder::GetFile):
+  the crate's diffuse and normal map seen when it was placed.
+- `reload` of a menu XML (`menu=HUDMainMenu`): RemoveMenuEntries 0x00A1CA20, then MenuManager::ReloadMenu 0x00720AA0
+  with the code of `&HUDMainMenu;` from 0x00A01860 (1004), as the console's `reload <menu>` does. `.kf`: ClearUnused-
+  Models also drops unused KF files; `ref=` rebuilds an actor that holds one.
+- `fnv_form bytes`: vtable slot 0xB on the live form, the record buffer 0x011C54CC read, freed (FormHeap_Free) and the
+  globals restored. WEAP has a writer (the research had found none in the decomp): the 9mm pistol came back as 820
+  bytes. `delete`: flags 0x20 | 0x4000 on a form this session created (no engine function to unlist it was found).
+- `fnv_place check` adds overlaps: bound spheres compared, a candidate confirmed by a ray between the centres.
+
+**Debugger and code**
+- `fnv_flow call`: a small module (native/modules/fnvmcp_flowcall.c) makes the call from its frame callback, where
+  breakpoints stop (they are ignored while the companion serves a request); the bridge fills its slot. XP for level
+  5 and CalculateSkillValue(15, 5, 5) traced in the game. A module left loaded by an earlier bridge is found through
+  its export table in memory. A call that times out disarms the slot (a stale armed slot once fired later into a
+  breakpoint).
+- `fnv_flow depth 1`: companion op `trace ranges <hex>` (up to 16 extra ranges, cleared when the trace ends); the
+  bridge passes the direct callees with source lines from the engine map's call table. Each line names its function.
+- `fnv_blame form`: record hook on BGSSaveLoadGame::NotifyFormIDChanged 0x0084A690 filtered to the form; flags named
+  by GetChangeFlagName 0x0083FEF0 ("Moved", "Havok Moved" for a thrown bottle, 67 calls in 4 s, summarised).
+- `fnv_code`: `fnv_orig_<8 hex digits>` (C name or a block-scope C++ declaration's mangled name) binds to a trampoline
+  (the original's first instructions, then a jump back): new = original + 1 gave 29 for 28 while swapped. `export`
+  writes a loader module (checks the expected bytes, places the code, binds relocations, jumps the entry): loaded as
+  a hot module it applied the change (38), unloaded it put it back (28). `compare mode=shadow`: record hook on the
+  original, each live call replayed on the new code (no live calls of the formula in an idle game). Functions under
+  five bytes: their E8 call sites (engine map call table) and vtable slots (exe read-only data) are redirected (fake
+  tested only).
+- `fnv_script_debug step over|out`; `fnv_script_coverage` (statement ring read every 0.2 s in the background:
+  4,500 statements in 11 s, 55 lost; HelloBug's scripts 75% and 89% with the lines never run);
+  `fnv_script_decompile` (xNVSE's DecompileScript command, the file read back and removed: GSTrudyScript).
+
+**Eyes, hands, time**
+- `fnv_render toggle` (the console toggles; flag before and after where known: borders 0 -> 1 -> 0), `imagespace`,
+  `shaders`, `lights` (the world shadow scene node's list: nodes of next, prev, ShadowSceneLight; its NiPointLight at
+  +0xF8): 26 lights with positions.
+- `fnv_overlay text` (DebugText::Print 0x00A0F8B0 on DebugText_Instance 0x00A0D9E0): shows once the debug text layer
+  is on (`fnv_render toggle debug_text`); `marker`, `clear`.
+- `fnv_replay`: two held controls recorded with their frames from a save, replayed under the frame gate: the player
+  ended within 2 units of the recorded position.
+- `fnv_launch start=cell:<interior EditorID>`: SStartingCell in the dev profile's INI for the start, put back after
+  arrival (not run: the MCP server still served the old schema). Intros were already skipped (SIntroSequence blank).
+- `fnv_ui_do type`: not run (no name entry menu could be opened without a new game).
+
+**Whole-plugin checks**
+- `fnv_crawl quest` (HelloCourier, stages 10 and 20: stage reached, objective shown, no unresolved target) and
+  `items` (HelloCourier's token added, model found, taken back; the console takes the load-order form id, not the
+  EditorID). `fnv_bisect level=records plugin=`: variants written with the codec (fake tested); `fnv_bisect` itself
+  is still not run in the game (it needs the MCP server's launch, which the in-process runner cannot do).
 
 ## Loose ends of W1 to W4 (2026-11-11 evening)
 

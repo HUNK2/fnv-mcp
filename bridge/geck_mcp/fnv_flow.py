@@ -6,9 +6,12 @@ one-shot breakpoint at the function's first byte, waits for the game to call it,
 reads `trace read` pages until the companion says done. Locals are read with a log program: one load per local at
 its EBP offset (`reg.ebp.[off]:type`), so the trace entries carry the values in the order of `locals`.
 
-`call` (run the function ourselves under the trace) is not built: the companion ignores stops while it serves an
-engine call (8.2, serving_request), so a call made by this bridge cannot be traced. The helpers here are shared with
-fnv_blame and fnv_script_debug.
+`call` runs the function ourselves under the same trace. The companion ignores stops while it serves an engine call
+(8.2, serving_request), so the call is made by a small native module (native/modules/fnvmcp_flowcall.c) from its frame
+callback: the bridge fills the module's slot, arms the breakpoint, and the next frame makes the call.
+`depth 1` also traces the direct callees that have source lines (up to 16, from the engine map's call table): the
+companion takes them as extra ranges (`trace ranges`). Locals are only read for lines of the traced function itself.
+The helpers here are shared with fnv_blame and fnv_script_debug.
 """
 import struct
 import time
@@ -119,11 +122,12 @@ def scalar(raw, code):
 class FlowTools:
     """fnv_flow: trace (and, later, call). Shares the debugger's breakpoint ids and stop reader."""
 
-    def __init__(self, live, debugger=None, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, live, debugger=None, sleep=time.sleep, clock=time.monotonic, native=None):
         self.live = live
         self.sleep = sleep
         self.clock = clock
         self.dbg = debugger or Debugger(live, sleep=sleep, clock=clock)
+        self.native = native
 
     @property
     def link(self):
@@ -131,21 +135,20 @@ class FlowTools:
 
     def run(self, action, **args):
         if action == 'call':
-            raise ConvError('NOT_YET', 'call is not built: the engine companion ignores breakpoints while it serves an '
-                            'engine call, so the call cannot be traced from here. Next: use action trace and let the '
-                            'game call the function (fnv_do, or play to the call).')
+            return self.trace(args.get('function'), None, args.get('depth') or 0, args.get('max_steps'),
+                              call=(args.get('this'), list(args.get('args') or [])))
         if action != 'trace':
             raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid actions: trace, call.' % action,
                             {'actions': ['trace', 'call']})
         return self.trace(args.get('function'), args.get('when'), args.get('depth') or 0, args.get('max_steps'))
 
     # ================================================================ trace
-    def trace(self, function, when=None, depth=0, max_steps=None, arm_wait=ARM_WAIT):
+    def trace(self, function, when=None, depth=0, max_steps=None, arm_wait=ARM_WAIT, call=None):
         if not function or not str(function).strip():
             raise ConvError('BAD_ARGUMENTS', 'function is needed: a function name, an address, or file:line.')
-        if depth not in (0, None):
-            raise ConvError('NOT_YET', 'depth 1 (direct callees traced too) is not built yet. Next: use depth 0, the '
-                            'default: calls are stepped over.')
+        if depth not in (0, 1, None):
+            raise ConvError('BAD_ARGUMENTS', 'depth is 0 (calls stepped over) or 1 (direct callees with source lines '
+                            'traced too).')
         steps_limit = int(max_steps or DEFAULT_STEPS)
         if not 1 <= steps_limit <= MAX_TRACE:
             raise ConvError('BAD_ARGUMENTS', 'max_steps must be 1 to %d.' % MAX_TRACE)
@@ -179,11 +182,19 @@ class FlowTools:
             if mechanism != 'hw':
                 raise
             armed = self.dbg._set_bp(bp_id, fn['addr'], 'int3', pred, FLAG_ONCE, None)
+        callees = self._callee_ranges(db, fn) if depth == 1 else []
+        slot = self._arm_call(fn, call) if call is not None else None
         stop = self._await_bp(bp_id, arm_wait)
         if stop is None:
             self.link.one('bp', 'clear', word(bp_id))
+            if slot:                        # the module must not make the call later, into another tool's break
+                self.link.write(slot, struct.pack('<I', 0))
             raise ConvError('NOT_CALLED', '%s was not called within %d s, so nothing was traced; the breakpoint is '
                             'cleared. Next: make the game call it, then trace again.' % (fn['name'], arm_wait))
+        packed = ''.join(struct.pack('<II', lo, hi).hex() for lo, hi, _ in callees) or '-'
+        ranged = self.link.one('trace', 'ranges', packed)
+        if callees and not ranged.get('ok'):
+            callees = []        # an older companion: depth 0 only
         args = ['trace', word(steps_limit), word(fn['addr']), word(end)] + ([log_hex] if log_hex else [])
         result = self.link.one('resume', word(stop['seq']), *args)
         if not result.get('ok'):
@@ -191,7 +202,18 @@ class FlowTools:
         entries, reason, done = self._read_trace(stop['seq'])
         if done:
             self._release()
+        called = self._call_result(slot) if slot else None
         rows, summary = self._lines_of(db, fn, entries, locals_)
+        if callees:
+            spans = [(fn['addr'], fn['addr'] + max(fn.get('size') or 1, 1), fn['name'])] + list(callees)
+            for row in rows:
+                eip = row.get('_eip') or 0
+                row['function'] = next((name for lo, hi, name in spans if lo <= eip < hi), None)
+            summary['calleesTraced'] = sorted({name for _, _, name in callees})
+        if called is not None:
+            called['note'] = 'eax as returned; a function returning a float leaves it in st0 instead (see the '                              'last values of its locals in the trace)'
+        for row in rows:
+            row.pop('_eip', None)
         note = {'max': 'The trace stopped at max_steps; raise max_steps to see the rest.',
                 'fault': 'The thread faulted inside the function; the trace ends there.',
                 'returned': 'The function returned.',
@@ -199,7 +221,58 @@ class FlowTools:
         return verdict('Traced %s: %d steps over %d source lines.' % (fn['name'], len(entries), len(rows)),
                        note or 'The trace is complete.', function=fn['name'], address='0x%08X' % fn['addr'],
                        endedBy=reason, done=done, lines=rows, steps=summary, locals=[x['name'] for x in locals_],
-                       localsNotTraced=skipped, when=when or None)
+                       localsNotTraced=skipped, when=when or None, depth=1 if callees else 0, call=called)
+
+    def _callee_ranges(self, db, fn, limit=16):
+        """(lo, hi, name) of the direct callees of fn that have source lines (engine map call table)."""
+        try:
+            calls = self.live.engine().calls.get(fn["addr"], [])
+        except Exception:  # noqa: BLE001 - no call table
+            return []
+        out = []
+        for target in calls:
+            callee = db.function(target)
+            if not callee or callee['addr'] == fn['addr'] or not db.lines_of(callee['addr']):
+                continue
+            out.append((callee['addr'], callee['addr'] + max(callee['size'] or 1, 1), callee['name']))
+            if len(out) >= limit:
+                break
+        return out
+
+    def _arm_call(self, fn, call):
+        """Fill the flow-call module's slot so the next frame calls fn (the breakpoint is already armed)."""
+        if self.native is None:
+            raise ConvError('NOT_AVAILABLE', 'call needs the native module tools.')
+        slot = self.native.flow_slot()
+        this, args = call
+        words = []
+        for a in args:
+            if isinstance(a, float):
+                words.append(struct.unpack('<I', struct.pack('<f', a))[0])
+            elif isinstance(a, str) and not a.lower().startswith('0x') and not a.lstrip('-').isdigit():
+                words.append(self.live.resolve(a)['ptr'])
+            else:
+                words.append(int(str(a), 0) & 0xFFFFFFFF)
+        if len(words) > 12:
+            raise ConvError('BAD_ARGUMENTS', 'call takes at most 12 argument words.')
+        this_ptr = 0
+        if this:
+            this_ptr = int(this, 16) if str(this).lower().startswith('0x') else self.live.resolve(this)['ptr']
+        body = struct.pack('<III', fn['addr'], this_ptr, len(words)) + struct.pack(
+            '<12I', *(words + [0] * (12 - len(words))))
+        self.link.write(slot + 4, body + struct.pack('<II', 0, 0))
+        self.link.write(slot, struct.pack('<I', 1))
+        return slot
+
+    def _call_result(self, slot):
+        deadline = self.clock() + 5.0
+        while self.clock() < deadline:
+            raw = self.live.reads([(slot + 4 * 16, 8)])[0]
+            eax, done = struct.unpack('<II', raw) if raw else (0, 0)
+            if done:
+                return {'eax': '0x%08X' % eax, 'int': eax - (1 << 32) if eax >= 1 << 31 else eax}
+            self.sleep(0.05)
+        return {'eax': None, 'note': 'the call had not returned when read'}
 
     def _hw_used(self):
         return sum(1 for b in self.link.one('bp', 'list').get('bps', []) if b.get('kind') == 'hw')
@@ -273,7 +346,8 @@ class FlowTools:
         rows, prev_key, prev_vals, skipped_prologue, unmapped = {}, None, None, 0, 0
         for e in entries:
             eip = int(str(e['eip']), 16) if isinstance(e['eip'], str) else int(e['eip'])
-            if eip - fn['addr'] < (fn.get('debug_start') or 0):
+            inside = fn['addr'] <= eip < fn['addr'] + max(fn.get('size') or 1, 1)
+            if inside and eip - fn['addr'] < (fn.get('debug_start') or 0):
                 skipped_prologue += 1
                 continue
             pos = db.line_at(eip)
@@ -286,7 +360,13 @@ class FlowTools:
             row = rows.get(key)
             if row is None:
                 row = rows[key] = {'file': key[0], 'line': key[1], 'order': len(rows) + 1, 'hits': 0, 'steps': 0,
-                                   'changed': {}}
+                                   'changed': {}, '_eip': eip}
+            if not fn['addr'] <= eip < fn['addr'] + max(fn.get('size') or 1, 1):
+                if key != prev_key:
+                    row['hits'] += 1
+                row['steps'] += 1          # a callee's line (depth 1): its frame is not the function's, no locals
+                prev_key = key
+                continue
             row['steps'] += 1
             if key != prev_key:
                 row['hits'] += 1

@@ -11,9 +11,18 @@ placed in executable memory, and the original entry jumps to it.
     build               compile the copy with the unit's compiler and flags, link the function: size, relocations,
                         names it could not bind (then it cannot be swapped)
     swap / unswap       place the linked code and redirect the original entry to it / put the entry back
-    compare args        call the original and the new code side by side (before a swap) with the same arguments
+    compare args        call the original and the new code side by side (before a swap) with the same arguments;
+                        mode shadow: record the game's own calls of the original for some seconds (arguments and
+                        result) and replay each on the new code: mismatches with their arguments (pure functions)
     list                active swaps with their source diffs
-    export              a local patch set (target, hash of the expected original bytes, code, relocations)
+    export              a local patch set (target, expected original bytes, code, relocations) and a loader module in
+                        C that applies it at start (load it hot with fnv_native, or build it as a plugin with
+                        fnv_plugin_build)
+
+New code can call the original: declare `extern "C" <type> <convention> fnv_orig_<8 hex digits>(...)` and call it;
+the linker binds it to a trampoline (the original's first instructions, then a jump back), so the call works while
+the entry is redirected. Functions shorter than five bytes are swapped at their call sites (E8 calls found through
+the engine map's call table) and their vtable slots (pointers in the exe's read-only data) instead of their entry.
 
 Limits told in results: functions with exception handling (.text$x / .xdata$x) and functions that need new writable
 statics are refused; a function folded with others changes for all of them; callers that inlined it keep the old
@@ -24,6 +33,8 @@ import difflib
 import hashlib
 import importlib.util
 import json
+import re
+import time
 import shutil
 import struct
 import subprocess
@@ -36,6 +47,9 @@ from .fnv_native import c_name
 
 REL32, DIR32, DIR32NB = 0x14, 0x06, 0x07
 WRITABLE = 0x80000000
+ORIG_RE = re.compile(r'^(?:_|\?)?fnv_orig_([0-9A-Fa-f]{8})(?:@.*)?$')   # C name, or C++ mangled (block scope)
+EXE_RDATA = (0x01000000, 0x01200000)       # read-only data of FalloutNV.exe (vtables); scanned for short swaps
+SHADOW_ARGS = 8
 
 
 class CodeTools:
@@ -239,7 +253,11 @@ class CodeTools:
             name = target['name']
             raw = struct.unpack_from('<i' if kind == REL32 else '<I', code, at)[0]
             entry = {'offset': at, 'kind': kind, 'name': name}
-            if name in mappings:
+            orig = ORIG_RE.match(name)
+            if orig:
+                entry['orig'] = int(orig.group(1), 16)
+                entry['addend'] = raw
+            elif name in mappings:
                 entry['absolute'] = (mappings[name] + raw) & 0xFFFFFFFF
             elif target['section'] == sec_index and start <= target['value'] < end:
                 entry['blob'] = target['value'] - start + raw
@@ -277,10 +295,13 @@ class CodeTools:
         return link
 
     @staticmethod
-    def _final(link, base):
+    def _final(link, base, trampolines=None):
         code = bytearray.fromhex(link['code'])
         for r in link['relocs']:
-            target = r['absolute'] if 'absolute' in r else base + r['blob']
+            if 'orig' in r:
+                target = (trampolines or {})[r['orig']] + r.get('addend', 0)
+            else:
+                target = r['absolute'] if 'absolute' in r else base + r['blob']
             if r['kind'] == REL32:
                 struct.pack_into('<i', code, r['offset'], (target - (base + r['offset'] + 4) + 2 ** 31) % 2 ** 32 - 2 ** 31)
             else:
@@ -288,12 +309,38 @@ class CodeTools:
         return bytes(code)
 
     # ------------------------------------------------------------------ placing
+    def _trampoline(self, target):
+        """Executable copy of a function's first whole instructions plus a jump back: calls the original even while
+        its entry is redirected (fnv_orig_<address>)."""
+        from .fnv_deep import decode_prologue
+        cached = getattr(self, '_trampolines', {}).get(target)
+        if cached:
+            return cached
+        raw = self.live.reads([(target, 24)])[0]
+        if address_swapped := self.swaps.get(target):
+            raw = bytes.fromhex(address_swapped['old']) + raw[5:]
+        stolen, relocs = decode_prologue(raw)
+        out = self.live.link.one('code', 'alloc', word(stolen + 16))
+        if not out.get('ok'):
+            raise ConvError('ALLOC_FAILED', 'No code memory for the trampoline (%s).' % out.get('error'))
+        tramp = int(out['address'], 16)
+        body = bytearray(raw[:stolen])
+        for at in relocs:                          # rel32 operands: same target from the new place
+            rel = struct.unpack_from('<i', body, at)[0]
+            dest = target + at + 4 + rel
+            struct.pack_into('<i', body, at, dest - (tramp + at + 4))
+        body += b'\xE9' + struct.pack('<i', (target + stolen) - (tramp + stolen + 5))
+        self.live.link.one('code', 'patch', word(tramp), bytes(body).hex())
+        self.__dict__.setdefault('_trampolines', {})[target] = tramp
+        return tramp
+
     def _place(self, address, link):
         out = self.live.link.one('code', 'alloc', word(link['size'] + 16))
         if not out.get('ok'):
             raise ConvError('ALLOC_FAILED', 'The companion could not allocate code memory (%s).' % out.get('error'))
         base = int(out['address'], 16)
-        code = self._final(link, base)
+        trampolines = {r['orig']: self._trampoline(r['orig']) for r in link['relocs'] if 'orig' in r}
+        code = self._final(link, base, trampolines)
         wrote = self.live.link.one('code', 'patch', word(base), code.hex())
         if not wrote.get('ok'):
             raise ConvError('WRITE_FAILED', 'Could not write the code (%s).' % wrote.get('error'))
@@ -304,23 +351,71 @@ class CodeTools:
         address, unit, spec = self._target(function)
         if address in self.swaps:
             raise ConvError('ALREADY_SWAPPED', '%s is swapped already. Next: unswap, then swap the new build.' % function)
-        if int(spec['size']) < 5:
-            raise ConvError('TOO_SHORT', 'The function is shorter than a jump (5 bytes); call sites would need '
-                            'redirecting, which is not built yet.')
         link = self._linked(address)
         self.live.changing('code swap')
         base = self.placed.pop(address, None) or self._place(address, link)
+        meta = self._meta(address)
+        if int(spec['size']) < 5:
+            sites = self._redirect_sites(address, base)
+            if not sites:
+                raise ConvError('NO_SITES', 'The function is shorter than a jump (5 bytes) and no call site or vtable '
+                                'slot of it was found to redirect.')
+            self.swaps[address] = {'function': function, 'blob': base, 'old': None, 'size': link['size'],
+                                   'sites': sites}
+            self.live.journal.add({'kind': 'code_swap', 'function': function, 'address': '0x%08X' % address,
+                                   'undo': None})
+            return verdict('Swapped %s at %d call sites and vtable slots (the function is %d bytes, too short for a '
+                           'jump)' % (function, len(sites), int(spec['size'])),
+                           'Calls through those sites run the new code; a call through a pointer made at run time '
+                           'still reaches the original.', blob='0x%08X' % base, sites=[
+                               {'at': '0x%08X' % x['at'], 'kind': x['kind']} for x in sites][:50],
+                           notes=self._notes(spec), diff=self._diff(meta))
         jump = b'\xE9' + struct.pack('<i', base - (address + 5))
         out = self.live.link.one('code', 'patch', word(address), jump.hex())
         if not out.get('ok'):
             raise ConvError('WRITE_FAILED', 'Could not redirect the entry (%s).' % out.get('error'))
-        meta = self._meta(address)
         self.swaps[address] = {'function': function, 'blob': base, 'old': out['old'], 'size': link['size']}
         self.live.journal.add({'kind': 'code_swap', 'function': function, 'address': '0x%08X' % address,
                                'undo': None})
         return verdict('Swapped %s: 0x%08X now runs the new code at 0x%08X' % (function, address, base),
                        'Every call goes to the new code. unswap puts the entry back.', blob='0x%08X' % base,
                        size=link['size'], notes=self._notes(spec), diff=self._diff(meta))
+
+    def _redirect_sites(self, address, base):
+        """Point every direct call (E8 rel32 in the callers the engine map lists) and every vtable slot (an aligned
+        pointer in the exe's read-only data) of address at base. Returns the patched sites with their old bytes."""
+        engine = self.live.engine()
+        callers = [a for a, targets in engine.calls.items() if address in targets]
+        sizes = {}
+        for a in callers:
+            try:
+                sizes[a] = int((engine.summary(a, with_location=False) or {}).get('size') or 0)
+            except Exception:  # noqa: BLE001
+                sizes[a] = 0
+        sites = []
+        for a in callers:
+            size = sizes.get(a) or 0x400
+            code = self.live.reads([(a, size)])[0] or b''
+            for i in range(len(code) - 4):
+                if code[i] == 0xE8 and a + i + 5 + struct.unpack_from('<i', code, i + 1)[0] == address:
+                    rel = struct.pack('<i', base - (a + i + 5))
+                    out = self.live.link.one('code', 'patch', word(a + i + 1), rel.hex())
+                    if out.get('ok'):
+                        sites.append({'at': a + i + 1, 'kind': 'call', 'old': out['old']})
+        lo, hi = EXE_RDATA
+        needle = struct.pack('<I', address)
+        for start in range(lo, hi, 0x10000):
+            data = self.live.reads([(start, 0x10000)])[0]
+            if not data:
+                continue
+            at = data.find(needle)
+            while at >= 0:
+                if at % 4 == 0:
+                    out = self.live.link.one('code', 'patch', word(start + at), struct.pack('<I', base).hex())
+                    if out.get('ok'):
+                        sites.append({'at': start + at, 'kind': 'vtable', 'old': out['old']})
+                at = data.find(needle, at + 1)
+        return sites
 
     @staticmethod
     def _notes(spec):
@@ -338,18 +433,24 @@ class CodeTools:
         done = []
         for address in targets:
             s = self.swaps.pop(address)
-            out = self.live.link.one('code', 'patch', word(address), s['old'])
-            if not out.get('ok'):
-                raise ConvError('WRITE_FAILED', 'Could not restore 0x%08X (%s).' % (address, out.get('error')))
+            for site in s.get('sites') or []:
+                self.live.link.one('code', 'patch', word(site['at']), site['old'])
+            if s.get('old'):
+                out = self.live.link.one('code', 'patch', word(address), s['old'])
+                if not out.get('ok'):
+                    raise ConvError('WRITE_FAILED', 'Could not restore 0x%08X (%s).' % (address, out.get('error')))
             done.append(s['function'])
         return verdict('Restored %s' % ', '.join(done), 'The original entries run again (the new code stays '
                        'allocated, in case a thread is still inside it).', restored=done)
 
-    def compare(self, function, args=None, this=None, returns='float'):
-        """Call the original function and the new code with the same arguments (before a swap)."""
+    def compare(self, function, args=None, this=None, returns='float', mode='call', seconds=5.0, nargs=None):
+        """Call the original function and the new code with the same arguments (before a swap); mode shadow replays
+        the game's own calls."""
         self.live.ready()
         address, unit, spec = self._target(function)
         link = self._linked(address)
+        if mode == 'shadow':
+            return self._shadow(function, address, link, returns, seconds, nargs)
         if address in self.swaps:
             raise ConvError('SWAPPED', 'Compare runs before a swap (both entries now lead to the new code). '
                             'Next: unswap, compare, swap.')
@@ -364,6 +465,54 @@ class CodeTools:
                        'Both ran guarded on the main thread with the same arguments; the new code is placed, not '
                        'swapped.', original=old.get('result'), new=new.get('result'), same=same,
                        blob='0x%08X' % base)
+
+    def _shadow(self, function, address, link, returns, seconds, nargs=None, limit=200):
+        """Record the game's calls of the original (arguments, this, result) for some seconds, then run the new code
+        with each set of arguments and compare. Meant for pure functions (no side effects, no hidden state)."""
+        from .fnv_flow import hook_at
+        from .fnv_deep import HF_RECORD
+        if address in self.swaps:
+            raise ConvError('SWAPPED', 'shadow runs before a swap. Next: unswap, compare mode=shadow, swap.')
+        n = int(nargs if nargs is not None else SHADOW_ARGS)
+        hook = hook_at(self.live, address, 'code.shadow', n, flags=HF_RECORD | 1)     # 1 = also on exit
+        try:
+            time.sleep(float(seconds))
+            h = next((x for x in self.live.deep.hooks() if x.get('label') == 'code.shadow'), None)
+            _, recs, _ = self.live.deep.records(h, 0, limit=4096) if h else (0, [], 0)
+        finally:
+            self.live.link.one('unhook', word(hook['id']))
+        base = self.placed.get(address)
+        if base is None:
+            base = self._place(address, link)
+            self.placed[address] = base
+        calls = [r for r in recs if r[1] == 2][:limit]          # exit records carry the result
+        rows, same, seen = [], 0, set()
+        for r in calls:
+            args = list(r[12:12 + n])
+            key = (r[3], tuple(args))
+            if key in seen:
+                continue
+            seen.add(key)
+            typed = [{'type': 'int', 'value': a} for a in args]
+            new = self.live.engine_call('0x%08X' % base, '0x%08X' % r[3] if r[3] else None, typed, returns, None,
+                                        True)
+            old_value = r[8] if returns != 'float' else None
+            new_value = new.get('result')
+            if returns == 'float':
+                old = self.live.engine_call('0x%08X' % address, '0x%08X' % r[3] if r[3] else None, typed, returns,
+                                            None, True)
+                old_value = old.get('result')
+            match = old_value == new_value if returns == 'float' else (int(new_value or 0) & 0xFFFFFFFF) == old_value
+            same += bool(match)
+            if not match:
+                rows.append({'args': ['0x%08X' % a for a in args], 'this': '0x%08X' % r[3] if r[3] else None,
+                             'original': old_value, 'new': new_value})
+        return verdict('%d distinct live calls replayed on the new code: %d agree, %d differ' % (
+            len(seen), same, len(seen) - same),
+            'A record hook on the original caught the game\'s own calls for %s s (arguments, this, and the result '
+            'at exit); each was run again on the new code (and, for float results, on the original) with the same '
+            'arguments. Only meaningful for pure functions.' % seconds, function=function, calls=len(calls),
+            distinct=len(seen), agree=same, mismatches=rows[:50], blob='0x%08X' % base)
 
     @staticmethod
     def _convention(call_result):
@@ -394,7 +543,70 @@ class CodeTools:
                          'in a native module (fnv_native), which holds only your own code.'}
         out = self._dir(address) / 'patch.json'
         out.write_text(json.dumps(patch, indent=1), encoding='utf-8')
-        return verdict('Patch set written to %s' % out, patch['note'], path=str(out))
+        loader = self._dir(address) / ('fnvmcp_patch_%08x.c' % address)
+        loader.write_text(self._loader_source(address, original or b'', link), encoding='utf-8')
+        return verdict('Patch set written to %s, with a loader module %s' % (out, loader.name), patch['note'],
+                       path=str(out), loader=str(loader),
+                       next='fnv_native build source=<loader path> name=%s, then load: applies the patch now; '
+                            'fnv_plugin_build with the same source applies it at every start (local only).'
+                            % loader.stem)
+
+    @staticmethod
+    def _loader_source(address, original, link):
+        """C source of a module that checks the expected original bytes, places the code, binds its relocations and
+        jumps the entry to it (with the fnvmcp module API: alloc, write; the exe has no NX, so heap code runs)."""
+        code = bytes.fromhex(link['code'])
+        rows = []
+        for r in link['relocs']:
+            if 'orig' in r:
+                raise ConvError('NOT_EXPORTABLE', 'The code calls fnv_orig_%08X: a loader for a trampoline is not '
+                                'generated. Export a version without it.' % r['orig'])
+            kind = 1 if r['kind'] == REL32 else 0
+            if 'absolute' in r:
+                rows.append('{%d, %d, 0x%08Xu, 0}' % (r['offset'], kind, r['absolute']))
+            else:
+                rows.append('{%d, %d, %du, 1}' % (r['offset'], kind, r['blob']))
+        expect = (original or b'')[:16]
+
+        def carray(data):
+            return ', '.join('0x%02x' % b for b in data) or '0'
+        return """/* Loader for a fnv_code patch set (local use only: the code is recompiled game code). Generated. */
+#include "fnvmcp_module.h"
+#include <string.h>
+
+static const unsigned char code[] = {%s};
+static const unsigned char expect[] = {%s};
+typedef struct { unsigned offset, rel32; unsigned value, in_blob; } Reloc;
+static const Reloc relocs[] = {%s};
+#define TARGET 0x%08Xu
+
+FNVMCP_EXPORT int fnvmcp_module_init(const FnvmcpApi *api) {
+    unsigned char now[sizeof(expect)];
+    unsigned char *blob;
+    unsigned char jump[5];
+    if (!api->read(TARGET, now, sizeof(now)) || memcmp(now, expect, sizeof(expect))) {
+        api->log("patch 0x%%08X: the game's bytes differ from the expected ones; not applied", TARGET);
+        return 1;
+    }
+    blob = (unsigned char *)api->alloc(sizeof(code));
+    if (!blob) return 1;
+    memcpy(blob, code, sizeof(code));
+    for (unsigned i = 0; i < sizeof(relocs) / sizeof(relocs[0]); i++) {
+        const Reloc *r = &relocs[i];
+        unsigned target = r->in_blob ? (unsigned)(unsigned long)blob + r->value : r->value;
+        unsigned field = r->rel32 ? target - ((unsigned)(unsigned long)blob + r->offset + 4) : target;
+        memcpy(blob + r->offset, &field, 4);
+    }
+    jump[0] = 0xE9;
+    {
+        unsigned rel = (unsigned)(unsigned long)blob - (TARGET + 5);
+        memcpy(jump + 1, &rel, 4);
+    }
+    if (!api->write(TARGET, jump, 5)) return 1;
+    api->log("patch 0x%%08X applied (%%u bytes)", TARGET, (unsigned)sizeof(code));
+    return 0;
+}
+""" % (carray(code), carray(expect), ', '.join(rows) or '{0, 0, 0, 0}', address)
 
     def run(self, action, **a):
         f = a.get('function')
@@ -411,7 +623,8 @@ class CodeTools:
         if action == 'unswap':
             return self.unswap(f)
         if action == 'compare':
-            return self.compare(f, a.get('args'), a.get('this'), a.get('returns') or 'float')
+            return self.compare(f, a.get('args'), a.get('this'), a.get('returns') or 'float', a.get('mode') or 'call',
+                                a.get('seconds') or 5.0, a.get('nargs'))
         if action == 'list':
             return self.list()
         if action == 'export':

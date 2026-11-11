@@ -7,19 +7,49 @@ dialogue npc      every response written for the NPC (INFO records whose conditi
                   whether the engine would allow it now (TESTopicInfo::CheckCondition through fnv_dialogue_tree) and
                   which condition fails, and the voice and lip files the engine will ask for with whether they exist,
                   loose or in an archive. The file name rule was read from the game's own archives:
-                  sound\\voice\\<plugin>\\<voice type>\\<quest EditorID, 10 chars>_<topic EditorID, 15 chars>_
-                  <info form id as in its plugin>_<response number>.ogg, with a .lip beside it. (Calling the engine's
+                  sound\\voice\\<plugin>\\<voice type>\\<quest>_<topic>_00<info's own 6 hex digits>_<response
+                  number>.ogg, quest and topic EditorIDs sharing 25 characters (voice_stem), with a .lip beside it.
+                  (Calling the engine's
                   VFDialogue::BuildVoiceFilePath 0x00616FA0 directly faulted: it needs a this pointer the decomp does
                   not show.)
 """
 import struct
 import time
 
+ITEM_TYPES = ('WEAP', 'ARMO', 'ALCH', 'MISC', 'BOOK', 'AMMO', 'KEYM', 'NOTE', 'IMOD', 'CHIP', 'CMNY')
+EQUIPPABLE = ('WEAP', 'ARMO')
+USABLE = ('ALCH',)
+
 from .fnv_conv import ConvError, verdict
 from .fnv_link import word
 
 BUILD_VOICE_PATH = 0x00616FA0
-QUEST_CHARS, TOPIC_CHARS = 10, 15
+QUEST_CHARS, NAME_CHARS = 10, 25
+
+
+def voice_stem(quest_edid, topic_edid, local_id, number):
+    """The voice file name (no extension) the game's archives use for one response.
+
+    Checked on 2026-11-11 against every FalloutNV.esm response that has a file in Fallout - Voices1.bsa (28,767 of
+    28,768; the one left over was recorded under another quest) and the DLC archives: quest and topic EditorIDs share
+    25 characters; when they do not fit, the quest keeps at most 10 and the topic gets the rest. The id is the
+    record's own 6 hex digits with a 00 prefix in every plugin (DLCs with one master use 00 too), then the TRDT
+    response number."""
+    q, t = quest_edid, topic_edid
+    if len(q) + len(t) > NAME_CHARS:
+        q = q[:QUEST_CHARS]
+        t = t[:NAME_CHARS - len(q)]
+    return ('%s_%s_%08x_%d' % (q, t, local_id & 0xFFFFFF, number)).lower()
+
+
+def _response_number(field, index):
+    """The response number of a TRDT field shown by record_show (byte 12), or its position + 1."""
+    raw = field.get('hex')
+    if raw:
+        parts = raw.replace('...', '').split()
+        if len(parts) > 12:
+            return int(parts[12], 16)
+    return index + 1
 MARKER_BASES = 0x800            # form ids below this are the engine's own markers (no 3D in the game)
 
 
@@ -238,16 +268,15 @@ class CrawlTools:
         entry = next((e for e in entries if e['name'].lower() == owner), None)
         if not quest_edid or not entry:
             return []
-        own_prefix = len(entry.get('masters') or [])
-        responses = 1
+        numbers = [1]
         try:
             shown = self.data.record_show(info, all_versions=False)
-            responses = max(1, sum(1 for x in shown.get('fields') or [] if isinstance(x, dict) and x.get('tag') == 'TRDT'))
+            trdt = [x for x in shown.get('fields') or [] if isinstance(x, dict) and x.get('tag') == 'TRDT']
+            numbers = [_response_number(x, i) for i, x in enumerate(trdt)] or [1]
         except Exception:  # noqa: BLE001
             pass
-        stem = 'sound\\voice\\%s\\%s\\%s_%s_%02x%06x' % (owner, voice.lower(), quest_edid[:QUEST_CHARS].lower(),
-                                                       topic_edid[:TOPIC_CHARS].lower(), own_prefix, local)
-        return ['%s_%d' % (stem, n) for n in range(1, responses + 1)]
+        return ['sound\\voice\\%s\\%s\\%s' % (owner, voice.lower(), voice_stem(quest_edid, topic_edid, local, n))
+                for n in numbers]
 
     def _voice(self, speaker_base, topic, quest, info, buffer):
         if not all((speaker_base, topic, quest, info)):
@@ -314,7 +343,115 @@ class CrawlTools:
                        base=base, voiceType=voice, lines=rows, missingVoice=len(missing_voice),
                        voiceNotChecked=len(unknown))
 
+    # ================================================================ quest
+    def quest(self, quest, path, settle_frames=30):
+        """Drive a quest along declared stages: set each, let scripts run, then check what the player would see."""
+        self.live.in_game()
+        if not path:
+            raise ConvError('BAD_ARGUMENTS', 'quest needs path: the stages to set, in order.')
+        q = self.live.resolve(quest)
+        rows = []
+        for stage in path:
+            row = {'stage': int(stage)}
+            try:
+                since = (self.live.events(0) or {}).get('seq', 0)
+                self.live.changing('crawl quest')
+                out = self.live.console('SetStage %s %d' % (q['formId'], int(stage)))
+                row['accepted'] = bool(out.get('accepted'))
+                self._settle(settle_frames)
+                row['stageNow'], row['running'] = self.live.values(['GetStage %s' % q['formId'],
+                                                                     'GetQuestRunning %s' % q['formId']])
+                if row['stageNow'] is not None and int(row['stageNow']) < int(stage):
+                    row['problem'] = 'the quest is at stage %s after SetStage %d' % (row['stageNow'], int(stage))
+                try:
+                    targets = self.agent.quest_targets(q['formId'])
+                    shown = [o for o in targets.get('objectives', []) if o.get('displayed')]
+                    row['objectivesShown'] = [{'index': o.get('index'), 'text': o.get('text')} for o in shown]
+                    row['targetsUnresolved'] = [
+                        {'objective': o.get('index'), 'target': (t.get('ref') or {}).get('formId'),
+                         'why': [w for w in t.get('whyNotShown') or [] if 'reference' in w or 'conditions' in w]}
+                        for o in shown for t in o.get('targets', [])
+                        if not t.get('ref') or any('reference' in w or 'conditions' in w
+                                                   for w in t.get('whyNotShown') or [])]
+                except Exception as e:  # noqa: BLE001 - a quest with no objectives is fine
+                    row['objectives'] = 'not read: %s' % str(e)[:80]
+                evts = (self.live.events(since) or {}).get('events', [])
+                row['scriptErrors'] = [e.get('text') for e in evts if e.get('type') == 'script_error'][:20]
+            except Exception as e:  # noqa: BLE001 - one bad stage does not stop the path
+                row['error'] = str(e)[:300]
+            rows.append(row)
+        bad = [r for r in rows if r.get('scriptErrors') or r.get('targetsUnresolved') or r.get('problem')
+               or r.get('error')]
+        return verdict('%s: %d stages driven, %d with problems' % (q['formId'], len(rows), len(bad)),
+                       'Each stage set with SetStage (its result script runs), %d frames to settle, then the stage, '
+                       'the objectives the player sees, their targets (fnv_quest_targets) and script errors.'
+                       % int(settle_frames), quest=q['formId'], stages=rows)
+
+    # ================================================================ items
+    def items(self, plugin, limit=40, photos=False):
+        """Each item the plugin adds: given to the player, equipped or used where it can be, then checked."""
+        self.live.in_game()
+        from .fnv_data import load_order
+        from .esp import codec
+        entries = load_order(self.live.project, self.data._live_plugins())
+        target = next((e for e in entries if e['name'].lower() == str(plugin).lower()), None)
+        if not target or not target.get('path'):
+            raise ConvError('PLUGIN_NOT_FOUND', '%s is not in the active load order.' % plugin)
+        found = []
+        for rec, _ in codec.iter_records(open(target['path'], 'rb').read(), types=list(ITEM_TYPES)):
+            modl = rec.get('MODL')
+            found.append((rec.type, rec.form_id, rec.editor_id,
+                          modl.split(b'\0', 1)[0].decode('cp1252', 'replace') if modl else None))
+        rows = []
+        for rtype, local, edid, model in found[:int(limit)]:
+            # The running game keeps no EditorIDs for most forms: the console takes the load-order form id.
+            ref = '%02X%06X' % (target.get('index', 0), local & 0xFFFFFF)
+            row = {'item': ref, 'editorId': edid, 'type': rtype, 'model': model}
+            try:
+                if model and self.assets:
+                    hit = self.assets.where('meshes\\' + model).get('winner')
+                    row['modelFound'] = bool(hit)
+                since = (self.live.events(0) or {}).get('seq', 0)
+                self.live.changing('crawl items')
+                added = self.live.console('player.AddItem %s 1 1' % ref)
+                row['added'] = bool(added.get('accepted'))
+                if rtype in EQUIPPABLE + USABLE:
+                    used = self.live.console('player.EquipItem %s 0 1' % ref)
+                    row['equipped' if rtype in EQUIPPABLE else 'used'] = bool(used.get('accepted'))
+                    self._settle(15)
+                    if photos and self.eyes and rtype == 'ARMO':
+                        try:
+                            row['photo'] = self.eyes.photo('ref', ref='player', size=480).get('path')
+                        except Exception as e:  # noqa: BLE001
+                            row['photo'] = 'not taken: %s' % str(e)[:80]
+                    if rtype in EQUIPPABLE:
+                        self.live.console('player.UnequipItem %s 0 1' % ref)
+                count, = self.live.values(['player.GetItemCount %s' % ref])
+                row['countAfter'] = count
+                self.live.console('player.RemoveItem %s %d 1' % (ref, max(1, int(count or 1))))
+                evts = (self.live.events(since) or {}).get('events', [])
+                row['scriptErrors'] = [e.get('text') for e in evts if e.get('type') == 'script_error'][:10]
+            except Exception as e:  # noqa: BLE001 - one bad item does not stop the crawl
+                row['error'] = str(e)[:300]
+            row['problems'] = (10 * len(row.get('scriptErrors') or []) + (5 if row.get('modelFound') is False else 0)
+                               + (5 if row.get('added') is False else 0) + (50 if row.get('error') else 0))
+            rows.append(row)
+        rows.sort(key=lambda r: -r['problems'])
+        return verdict('%s: %d items checked, %d with problems' % (target['name'], len(rows),
+                                                                   sum(1 for r in rows if r['problems'])),
+                       'Each new item given to the player (AddItem), equipped or used where it can be, then taken '
+                       'back; its model checked against the loose files and archives; script errors meanwhile.',
+                       plugin=target['name'], items=rows, notChecked=max(0, len(found) - int(limit)))
+
     def run(self, action, **a):
+        if action == 'quest':
+            if not a.get('quest'):
+                raise ConvError('BAD_ARGUMENTS', 'quest needs quest and path.')
+            return self.quest(a['quest'], a.get('path'), a.get('settle_frames') or 30)
+        if action == 'items':
+            if not a.get('plugin'):
+                raise ConvError('BAD_ARGUMENTS', 'items needs plugin.')
+            return self.items(a['plugin'], a.get('limit') or 40, a.get('photos', False))
         if action == 'cells':
             if not a.get('plugin'):
                 raise ConvError('BAD_ARGUMENTS', 'cells needs plugin.')
@@ -324,4 +461,4 @@ class CrawlTools:
             if not a.get('npc'):
                 raise ConvError('BAD_ARGUMENTS', 'dialogue needs npc (a reference).')
             return self.dialogue(a['npc'], a.get('limit') or 60)
-        raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: cells, dialogue.' % action)
+        raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: cells, dialogue, quest, items.' % action)

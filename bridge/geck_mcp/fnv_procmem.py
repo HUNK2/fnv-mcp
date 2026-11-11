@@ -75,6 +75,20 @@ kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(THREADENTRY32
 kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(THREADENTRY32)]
 
 
+class MEMORY_BASIC_INFORMATION(ctypes.Structure):
+    _fields_ = [('BaseAddress', ctypes.c_void_p), ('AllocationBase', ctypes.c_void_p),
+                ('AllocationProtect', wintypes.DWORD), ('PartitionId', wintypes.WORD),
+                ('RegionSize', ctypes.c_size_t), ('State', wintypes.DWORD), ('Protect', wintypes.DWORD),
+                ('Type', wintypes.DWORD)]
+
+
+MEM_COMMIT, PAGE_GUARD = 0x1000, 0x100
+WRITABLE_PROTECT = (0x04, 0x08, 0x40, 0x80)            # RW, WRITECOPY, EXECUTE_RW, EXECUTE_WRITECOPY
+READABLE_PROTECT = WRITABLE_PROTECT + (0x02, 0x20)      # + READONLY, EXECUTE_READ
+kernel32.VirtualQueryEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+kernel32.VirtualQueryEx.restype = ctypes.c_size_t
+
+
 class ProcMemError(Exception):
     def __init__(self, code, message, evidence=None):
         super().__init__(message)
@@ -139,6 +153,24 @@ class GameProcess:
     def u32(self, address):
         data = self.read(address, 4)
         return struct.unpack('<I', data)[0] if data else None
+
+    def regions(self, writable_only=True):
+        """Committed regions below 4 GB as (base, size, protect), from VirtualQueryEx."""
+        info = MEMORY_BASIC_INFORMATION()
+        out, address = [], 0x10000
+        while address < 0xFFFF0000:
+            if not kernel32.VirtualQueryEx(self.handle, ctypes.c_void_p(address), ctypes.byref(info),
+                                           ctypes.sizeof(info)):
+                break
+            base, size = info.BaseAddress or 0, info.RegionSize
+            if size <= 0:
+                break
+            protect = info.Protect & 0xFF
+            if info.State == MEM_COMMIT and not info.Protect & PAGE_GUARD and protect in (
+                    WRITABLE_PROTECT if writable_only else READABLE_PROTECT):
+                out.append((base, size, info.Protect))
+            address = base + size
+        return out
 
     def modules(self):
         """32-bit modules: [{'name', 'path', 'base', 'size'}] sorted by base."""

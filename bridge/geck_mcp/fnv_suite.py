@@ -1,7 +1,10 @@
 """Plan 2 W7: fnv_bisect and fnv_selftest.
 
-fnv_bisect level=mods|plugins steps=[...] (the fnv_do steps of a scenario that fails): find the one MO2 mod or plugin
-that makes it fail. Round zero checks that the scenario fails with everything on and passes with every candidate
+fnv_bisect level=mods|plugins|records steps=[...] (the fnv_do steps of a scenario that fails): find the one MO2 mod,
+plugin, or record of a plugin (records plugin=<name>: variants of the plugin file with half of its records left out,
+written with the plugin codec over the plugin in its mod folder, the original put back at the end) that makes it fail.
+Level hooks (other DLLs' engine patches) is not offered: putting a foreign patch back in a running game is unsafe (its
+DLL keeps state that expects it, threads may be inside it); level mods names the DLL's mod instead. Round zero checks that the scenario fails with everything on and passes with every candidate
 off; then each round turns off half of the remaining suspects (fnv_profile_set, game closed), runs the scenario
 (the runner launches the game), and keeps the half that holds the culprit. The profile is put back at the end.
 
@@ -29,6 +32,8 @@ class BisectTools:
         self.quit_game = quit_game or (lambda: self.live.game.quit())
 
     def _candidates(self, level, keep):
+        if level == 'records':
+            return self._record_candidates(keep)
         profile = self.live.game.profile_dir
         keep = {k.lower() for k in keep or []}
         if level == 'mods':
@@ -47,6 +52,9 @@ class BisectTools:
                 if not self.live.game.process():
                     break
                 time.sleep(0.5)
+        if level == 'records':
+            self._write_variant(set(on))
+            return
         changes = {**{x: True for x in on}, **{x: False for x in off}}
         if level == 'mods':
             self.records.profile_set(changes, None, self.live.game, False)
@@ -57,9 +65,63 @@ class BisectTools:
         report = self.runner_factory().run(data=dict(scenario))
         return bool(report.get('passed')), report.get('summary') or report.get('failures')
 
-    def bisect(self, level, steps, start='continue', keep=None, max_rounds=10):
-        if level not in ('mods', 'plugins'):
-            raise ConvError('BAD_ARGUMENTS', 'level is mods or plugins.')
+    def _plugin_file(self):
+        from .fnv_data import load_order
+        entries = load_order(self.live.project, self.records.data._live_plugins())
+        target = next((e for e in entries if e['name'].lower() == str(self.plugin).lower()), None)
+        if not target or not target.get('path'):
+            raise ConvError('PLUGIN_NOT_FOUND', '%s is not in the active load order.' % self.plugin)
+        return Path(target['path'])
+
+    def _record_candidates(self, keep):
+        """The plugin's records (top-level groups and cell children alike) by form id, as hex text."""
+        from .esp import codec
+        if not getattr(self, 'plugin', None):
+            raise ConvError('BAD_ARGUMENTS', 'level records needs plugin.')
+        path = self._plugin_file()
+        if not hasattr(self, '_original'):
+            self._original = (path, path.read_bytes())
+        keep = {k.upper() for k in keep or []}
+        out = []
+        for rec, _ in codec.parse(self._original[1]).records():
+            fid = '%08X' % rec.form_id
+            if rec.type not in ('TES4', 'CELL', 'WRLD', 'DIAL') and fid not in keep and fid not in out:
+                out.append(fid)
+        return out
+
+    def _write_variant(self, on):
+        """The plugin with only the records in `on` (and every CELL, WRLD, DIAL container) kept."""
+        from .esp import codec
+        path, data = self._original
+        plugin = codec.parse(data, lazy=False)
+        everything = set(self._record_candidates(None))
+
+        def prune(items):
+            kept = []
+            for item in items:
+                if isinstance(item, codec.Group):
+                    item.children = prune(item.children)
+                    kept.append(item)
+                elif '%08X' % item.form_id in everything and '%08X' % item.form_id not in on:
+                    continue
+                else:
+                    kept.append(item)
+            return kept
+        plugin.groups = prune(plugin.groups)
+        path.write_bytes(codec.write(plugin))
+
+    def _restore_plugin(self):
+        original = getattr(self, '_original', None)
+        if original:
+            original[0].write_bytes(original[1])
+            del self._original
+
+    def bisect(self, level, steps, start='continue', keep=None, max_rounds=10, plugin=None):
+        if level not in ('mods', 'plugins', 'records'):
+            raise ConvError('BAD_ARGUMENTS', 'level is mods, plugins or records (with plugin).')
+        self.plugin = plugin
+        if level == 'records' and self.live.game.process():
+            self.quit_game()
         if not steps:
             raise ConvError('BAD_ARGUMENTS', 'steps (the failing scenario, as for fnv_do) are needed.')
         scenario = {'name': 'bisect', 'start': start, 'steps': list(steps), 'relaunch_on_crash': True}
@@ -97,7 +159,12 @@ class BisectTools:
                            culprit=culprit, suspects=suspects, rounds=rounds, candidates=everything)
         finally:
             try:
-                self._set(level, everything, [])        # the profile as it was
+                if level == 'records':
+                    if self.live.game.process():
+                        self.quit_game()
+                    self._restore_plugin()
+                else:
+                    self._set(level, everything, [])        # the profile as it was
             except Exception:  # noqa: BLE001 - reported by the caller's next fnv_profile_set
                 pass
 

@@ -35,6 +35,9 @@ tool descriptions in this repository. The tests check that every tool name below
    samples the call stacks from outside the process and names the functions it is stuck in. When the main thread
    waits (in a load, on a lock), it also samples the threads that use the most CPU, and any thread the crash hold
    parked at a fault, with the file paths found on that thread's stack.
+10. **A file on that stack?** When a mesh or texture path shows up (a held loader fault names the file), check it
+   offline with `fnv_asset` action `nif` (header, child links, collision, textures) or `dds`, and find the record
+   that uses it with `fnv_asset` action `users`: a bad child link is what makes `NiAVObject::AttachParent` fault.
 
 ## What the answers mean
 

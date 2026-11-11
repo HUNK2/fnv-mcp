@@ -415,12 +415,31 @@ class MemoryTools:
                        'Counted by the caller of MemoryManager::Allocate 0x00AA3E40 (a counting hook, removed).',
                        sites=out, total=total, note=note)
 
+    def refcount(self, pointer, seconds=5.0):
+        """Who changes an NiRefObject's reference count (+4): a write watchpoint through fnv_blame field."""
+        self.live.ready()
+        blame = getattr(self, 'blame', None)
+        if blame is None:
+            raise ConvError('NOT_AVAILABLE', 'refcount needs the blame tools.')
+        p = int(str(pointer), 16) if isinstance(pointer, str) else int(pointer)
+        count = self.live.u32s([p + 4])[0]
+        out = blame.field('0x%08X' % (p + 4), length=4, access='write', scope='all', seconds=seconds)
+        out['refcountBefore'] = count
+        out['refcountAfter'] = self.live.u32s([p + 4])[0]
+        out['answer'] = 'Reference count of 0x%08X: %s -> %s; %s' % (p, count, out['refcountAfter'],
+                                                                     out.get('answer', ''))
+        return out
+
     def run(self, action, **a):
         if action == 'pools':
             return self.pools()
         if action == 'alloc_trace':
             return self.alloc_trace(a.get('seconds') or 3.0, a.get('top') or 20)
-        raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: pools, alloc_trace.' % action)
+        if action == 'refcount':
+            if not a.get('pointer'):
+                raise ConvError('BAD_ARGUMENTS', 'refcount needs pointer (an NiRefObject).')
+            return self.refcount(a['pointer'], a.get('seconds') or 5.0)
+        raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: pools, alloc_trace, refcount.' % action)
 
 
 class ObjectTools:
@@ -493,6 +512,51 @@ class ObjectTools:
                        'Pool blocks whose first word is the vtable 0x%08X; objects in the general heap are not '
                        'scanned.' % vtable, vtable='0x%08X' % vtable, objects=['0x%08X' % h for h in hits])
 
+    def referrers(self, pointer, limit=40, identify=12):
+        """Who holds this address: every aligned word equal to it in the writable memory of the process, read from
+        outside (ReadProcessMemory, region by region); the first hits are identified (pool block, class, form)."""
+        self.live.ready()
+        p = int(str(pointer), 16) if isinstance(pointer, str) else int(pointer)
+        needle = struct.pack('<I', p)
+        found = self.live.game.process()
+        hits, scanned, started = [], 0, time.time()
+        with fnv_procmem.GameProcess(found[0]) as proc:
+            for base, size, _ in proc.regions():
+                for start in range(base, base + size, 0x100000):
+                    data = proc.read(start, min(0x100000, base + size - start))
+                    if not data:
+                        continue
+                    scanned += len(data)
+                    at = data.find(needle)
+                    while at >= 0:
+                        if at % 4 == 0:
+                            hits.append(start + at)
+                            if len(hits) >= limit:
+                                break
+                        at = data.find(needle, at + 1)
+                    if len(hits) >= limit:
+                        break
+                if len(hits) >= limit:
+                    break
+        rows = []
+        for h in hits:
+            row = {'at': '0x%08X' % h}
+            if len(rows) < identify:
+                try:
+                    who = self.identify(h)
+                    row.update({k: who.get(k) for k in ('heap', 'blockStart', 'offsetInBlock', 'class', 'form')
+                                if who.get(k) is not None})
+                except ConvError:
+                    pass
+            rows.append(row)
+        return verdict('%d places hold 0x%08X%s' % (len(hits), p, ' (stopped at the limit)' if len(hits) >= limit
+                                                    else ''),
+                       'Aligned words equal to the address in every committed writable region (%.0f MB read in '
+                       '%.1f s, from outside the process); the game keeps running, so values can change meanwhile. '
+                       'The first %d hits are identified like fnv_object identify.' % (
+                           scanned / 1048576.0, time.time() - started, identify), pointer='0x%08X' % p,
+                       referrers=rows)
+
     def _vtable(self, class_name):
         """The class's complete-object vtable (offset 0) from the engine map's RTTI."""
         engine = self.live.engine()
@@ -515,4 +579,8 @@ class ObjectTools:
             if not a.get('class_name'):
                 raise ConvError('BAD_ARGUMENTS', 'find needs class_name.')
             return self.find(a['class_name'], a.get('limit') or 200)
-        raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: identify, find.' % action)
+        if action == 'referrers':
+            if not a.get('pointer'):
+                raise ConvError('BAD_ARGUMENTS', 'referrers needs pointer.')
+            return self.referrers(a['pointer'], min(int(a.get('limit') or 40), 500))
+        raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: identify, find, referrers.' % action)

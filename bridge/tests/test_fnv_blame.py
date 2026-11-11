@@ -30,10 +30,10 @@ class BlameTests(unittest.TestCase):
             self.tool().run('jump')
         self.assertEqual(cm.exception.code, 'UNKNOWN_ACTION')
 
-    def test_form_is_not_built_yet(self):
+    def test_form_needs_a_ref(self):
         with self.assertRaises(fnv_conv.ConvError) as cm:
             self.tool().run('form')
-        self.assertEqual(cm.exception.code, 'NOT_YET')
+        self.assertEqual(cm.exception.code, 'BAD_ARGUMENTS')
 
     def test_field_refuses_a_bad_access(self):
         with self.assertRaises(fnv_conv.ConvError) as cm:

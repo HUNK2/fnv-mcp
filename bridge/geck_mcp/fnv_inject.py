@@ -147,6 +147,9 @@ class Injector:
         if not result.get('ok'):
             raise ConvError('INPUT_REFUSED', 'The engine companion refused the %s job (%s). Next: call fnv_status; if the '
                             'companion is old, call fnv_companion_install.' % (kind, result.get('error')), result)
+        recorder = getattr(self.live, 'replay_recorder', None)
+        if recorder is not None:            # fnv_replay record: the job and the frame it was queued at
+            recorder(op, result.get('frame'))
         waited = self.wait_frames(int(frames)) if wait else None
         return verdict('%s for %d frames' % (detail, int(frames)),
                        'The job ends by itself after its frames; the engine input poll applies it each frame.'

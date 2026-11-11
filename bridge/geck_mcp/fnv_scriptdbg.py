@@ -484,12 +484,17 @@ class ScriptDebugger:
 
     # ================================================================ running
     def step(self, mode):
-        if mode != 'line':
-            raise ConvError('NOT_YET', 'step %s is not built. Next: use line; over and out come later.' % mode)
+        """line / over: the next statement of the same run (a function the line calls runs in its own runner, so it
+        is stepped over). out: the next statement the game runs outside this run: the caller after a function, or
+        else the next script that runs."""
+        if mode not in ('line', 'over', 'out'):
+            raise ConvError('BAD_ARGUMENTS', 'step is line, over or out.')
         stop = self._current()
         here = self._state(stop)
         if not self._ours(stop):
-            raise ConvError('BAD_MODE', 'Only a script stop can step by line.')
+            raise ConvError('BAD_MODE', 'Only a script stop can step.')
+        if mode == 'out':
+            return self._step_out(stop, here)
         script_pred = compile_predicate('arg0.[%d]:u32 == %d' % (FORM_ID, self._form_of(here['script'])))['hex']
         self.eval.filter(SELECTORS['none'], 0)
         self.eval.hold(script_pred)
@@ -511,6 +516,28 @@ class ScriptDebugger:
             self._arm()
         raise ConvError('STEP_LIMIT', 'The line did not change within %d statements. Next: continue, or set a break on the '
                         'line.' % STEP_LIMIT)
+
+    def _step_out(self, stop, here):
+        self.eval.filter(SELECTORS['none'], 0)
+        self.eval.hold(compile_predicate('1')['hex'])
+        try:
+            cur = stop
+            for _ in range(STEP_LIMIT):
+                self.dbg._resume(cur, 'run')
+                new = self._await_ours(cur['seq'])
+                if new is None:
+                    return verdict('No statement ran within %d s after this run.' % STOP_WAIT,
+                                   'The game runs on; status shows where it is.', state='running')
+                st = self._state(new)
+                if st['runner'] != here['runner']:
+                    view = self._view(new)['stop']
+                    return verdict('Stepped out to %s line %s.' % (view.get('script'), view.get('line')),
+                                   'The first statement outside the run that was stopped (its caller after a '
+                                   'function, else the next script the game ran).', stop=view)
+                cur = new
+        finally:
+            self._arm()
+        raise ConvError('STEP_LIMIT', 'The run did not end within %d statements. Next: continue.' % STEP_LIMIT)
 
     def _form_of(self, script_ptr):
         form = self.live.form_ids([script_ptr])[0] or {}

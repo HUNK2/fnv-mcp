@@ -48,15 +48,42 @@ class FlowTests(unittest.TestCase):
             self.run_tool(make_live(), 'jump')
         self.assertEqual(cm.exception.code, 'UNKNOWN_ACTION')
 
-    def test_call_is_not_built_yet(self):
+    def test_call_needs_a_function(self):
         with self.assertRaises(fnv_conv.ConvError) as cm:
-            self.run_tool(make_live(), 'call', function='Actor::ApplyDamage')
-        self.assertEqual(cm.exception.code, 'NOT_YET')
+            self.run_tool(make_live(), 'call', function='')
+        self.assertEqual(cm.exception.code, 'BAD_ARGUMENTS')
 
-    def test_trace_depth_one_is_not_built_yet(self):
+    def test_trace_depth_two_is_refused(self):
         with self.assertRaises(fnv_conv.ConvError) as cm:
-            self.run_tool(make_live(), 'trace', function='Actor::ApplyDamage', depth=1)
-        self.assertEqual(cm.exception.code, 'NOT_YET')
+            self.run_tool(make_live(), 'trace', function='Actor::ApplyDamage', depth=2)
+        self.assertEqual(cm.exception.code, 'BAD_ARGUMENTS')
+
+    def test_call_fills_the_module_slot_then_arms_it(self):
+        writes = []
+        live = make_live()
+        live.link.write = lambda address, data: writes.append((address, bytes(data)))
+        live.resolve = lambda name: {'ptr': 0x12345678}
+        tool = fnv_flow.FlowTools(live, sleep=lambda s: None, clock=lambda: 0.0,
+                                  native=SimpleNamespace(flow_slot=lambda: 0x20000000))
+        slot = tool._arm_call({'addr': FUNC}, ('0x00ABCDEF', [3, 1.5, 'player']))
+        self.assertEqual(slot, 0x20000000)
+        (body_at, body), (armed_at, armed) = writes
+        self.assertEqual((body_at, armed_at, armed), (0x20000004, 0x20000000, struct.pack('<I', 1)))
+        function, this, nargs = struct.unpack_from('<III', body, 0)
+        self.assertEqual((function, this, nargs), (FUNC, 0x00ABCDEF, 3))
+        self.assertEqual(struct.unpack_from('<3I', body, 12), (3, struct.unpack('<I', struct.pack('<f', 1.5))[0],
+                                                               0x12345678))
+
+    def test_depth_one_ranges_are_the_callees_with_lines(self):
+        live = make_live()
+        live.engine = lambda: SimpleNamespace(calls={FUNC: [0x500000, 0x600000, FUNC]})
+        db = SimpleNamespace(
+            function=lambda a: {0x500000: {'addr': 0x500000, 'size': 0x40, 'name': 'A'},
+                                0x600000: {'addr': 0x600000, 'size': 0x20, 'name': 'B'},
+                                FUNC: {'addr': FUNC, 'size': 0x10, 'name': 'F'}}.get(a),
+            lines_of=lambda a: [] if a == 0x600000 else [(a, 1)])
+        tool = fnv_flow.FlowTools(live, sleep=lambda s: None, clock=lambda: 0.0)
+        self.assertEqual(tool._callee_ranges(db, {'addr': FUNC}), [(0x500000, 0x500040, 'A')])
 
     def test_trace_needs_a_function(self):
         with self.assertRaises(fnv_conv.ConvError) as cm:
