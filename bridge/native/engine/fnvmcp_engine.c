@@ -1138,10 +1138,12 @@ static void dbg_note(EXCEPTION_POINTERS *e, uint32_t which) {
     }
     c->Dr6 = 0;
 }
+static bool cov_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result); /* w6_cov.c */
 static LONG CALLBACK on_trap(EXCEPTION_POINTERS *e) {
     DWORD code = e->ExceptionRecord->ExceptionCode;
     CONTEXT *c = e->ContextRecord;
     LONG handled;
+    if (code == EXCEPTION_BREAKPOINT && cov_on_breakpoint(e, &handled)) return handled;
     if (code == EXCEPTION_BREAKPOINT && bp_on_breakpoint(e, &handled)) return handled;
     if (code == EXCEPTION_SINGLE_STEP && bp_on_single_step(e, &handled)) return handled;
     if (code == EXCEPTION_BREAKPOINT && int3_count) {
@@ -2019,6 +2021,7 @@ static void op_events(int argc, char **argv) {
 #include "w2_bp.c"
 #include "w5_mod.c"
 #include "w5_code.c"
+#include "w6_cov.c"
 
 static void serve_op(char *op) {
     char *argv[40];
@@ -2066,6 +2069,7 @@ static void serve_op(char *op) {
     else if (!strcmp(argv[0], "mod")) op_mod(argc, argv);
     else if (!strcmp(argv[0], "hooknative")) op_hooknative(argc, argv);
     else if (!strcmp(argv[0], "code")) op_code(argc, argv);
+    else if (!strcmp(argv[0], "cov")) op_cov(argc, argv);
     else fail("unknown_op");
 }
 /* A request runs on the main thread. step and until can stop it in the middle: the ops after them are

@@ -117,3 +117,41 @@ class ModuleTests(StopTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+class CoverageTests(StopTestCase):
+    """W6 line coverage: one-shot int3 sites that restore themselves on the first hit."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        receipt = build(cls.tmp.name)
+        cls.host = StopHost(receipt, Path(receipt['dll']).parent, cls.tmp.name, 300)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.host.close()
+        cls.tmp.cleanup()
+
+    def test_sites_hit_once_and_restore_their_bytes(self):
+        link, t = self.host.link, self.host.t
+        sites = [t['bpTarget'], t['bpCall'], t['bpAfter'], t['bpRet'], t['faulter']]
+        before = [link.one('rd', hexint(a), '1')['hex'] for a in sites]
+        packed = b''.join(a.to_bytes(4, 'little') for a in sites).hex()
+        self.assertEqual(link.one('cov', 'add', packed)['added'], 5)
+        self.assertEqual(link.one('cov', 'arm')['armed'], 5)
+        self.assertEqual(link.one('rd', hexint(t['bpTarget']), '1')['hex'], 'cc')
+        link.schedule(0, 'bpcall 3')
+        self.assertTrue(self.wait_line('bpcall 12'))                    # the function still computes the same
+        read = link.one('cov', 'read', '0')
+        hits = {int.from_bytes(bytes.fromhex(read['addresses'][i:i + 8]), 'little')
+                for i in range(0, len(read['addresses']), 8)}
+        self.assertEqual(hits, set(sites[:4]))                          # faulter never ran
+        self.assertEqual(link.one('rd', hexint(t['bpTarget']), '1')['hex'], before[0])   # restored on the hit
+        self.assertEqual(link.one('rd', hexint(t['faulter']), '1')['hex'], 'cc')
+        link.one('cov', 'disarm')
+        self.assertEqual([link.one('rd', hexint(a), '1')['hex'] for a in sites], before)
+        link.schedule(0, 'bpcall 4')
+        self.assertTrue(self.wait_line('bpcall 12') and self.wait_line('bpcall 12'))
+        self.assertEqual(link.one('cov', 'reset')['ok'], True)

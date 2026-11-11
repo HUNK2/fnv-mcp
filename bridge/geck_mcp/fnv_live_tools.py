@@ -20,6 +20,9 @@ from .fnv_sampling import FrameSampler, SinkTools
 from .fnv_native import NativeTools
 from .fnv_code import CodeTools
 from .fnv_plugin_build import PluginTools
+from .fnv_perf import MemoryTools, ObjectTools, ProfileTools, ThreadTools
+from .fnv_coverage import CoverageTools
+from .fnv_inspect import AnimTools, AudioTools, PhysicsTools, SystemsTools
 
 FNV_LIVE_TOOLS = {
     # milestone 4: game control, tests, logs
@@ -164,6 +167,15 @@ FNV_LIVE_TOOLS = {
     'fnv_native': ('act', 'C modules inside the game: generate engine headers, build with Zig, load (hooks installed), call exports, read their log, reload, unload'),
     'fnv_code': ('act', "swap an engine function for one compiled from edited decomp source: checkout, edit, build (with the game's own compiler), compare side by side, swap, unswap, export"),
     'fnv_plugin_build': ('control', 'ship a native module as its own xNVSE plugin (no companion needed): scaffold, build with hook prologues planned, install into the dev profile, read its log'),
+    'fnv_profile': ('read', 'where the time goes: sample thread stacks from outside the game, self and inclusive time per function and source line, callers, a flame-graph file; diff two profiles'),
+    'fnv_threads': ('read', 'every game thread with its start routine and current function, and the known locks with their owner'),
+    'fnv_memory': ('read', 'memory pools with exact numbers, live NiRefObject count, allocation counts by call site'),
+    'fnv_object': ('read', 'what a pointer is (pool block, class, form); every live object of a class'),
+    'fnv_coverage': ('act', 'which decomp source lines ran during a scenario: one-shot traps at every line start, then lines run and never run per file and function; diff two runs'),
+    'fnv_anim': ('act', 'animation of an actor: current and queued groups per body section with their sequences; play a group or an idle'),
+    'fnv_audio': ('act', 'every sound the engine creates for a while (form or file, and who asked); play a sound'),
+    'fnv_physics': ('read', 'character controller of an actor (fall time and distance) and the Havok body chain of a reference'),
+    'fnv_systems': ('read', 'call game formulas (catalog or any function) and sweep an argument; level and XP progression; hardcore needs'),
     'fnv_place': ('act', 'level work in the game: place a form at a position or near a ref, rows, grids and circles, nudge, rotate, scale, snap to the surface, check floating or sinking, list and remove what this session placed'),
     'fnv_author': ('control', "turn the session's live work into a plugin spec part, check a plugin (missing files, conflicts, engine warnings), scaffold a starting project, package a release folder and archive"),
     # milestone 10: setup
@@ -238,6 +250,15 @@ def register(server, project, annotations, result_type):
     native_tools = NativeTools(live)
     code_tools = CodeTools(live)
     plugin_tools = PluginTools(live)
+    profile_tools = ProfileTools(live)
+    thread_tools = ThreadTools(live)
+    memory_tools = MemoryTools(live, deep)
+    object_tools = ObjectTools(live)
+    coverage_tools = CoverageTools(live)
+    anim_tools = AnimTools(live)
+    audio_tools = AudioTools(live, deep)
+    physics_tools = PhysicsTools(live)
+    systems_tools = SystemsTools(live)
     frame_sampler = FrameSampler(live)
     sinks = SinkTools(live)
     live.eyes, live.hands = eyes, hands      # the scenario runner's photo / play / ui steps
@@ -1830,6 +1851,103 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_plugin_build', lambda: plugin_tools.run(action, name=name, source=source,
                                                                          hooks=hooks),
                             'read' if action == 'log' else 'control')
+
+    @server.tool(annotations=read)
+    async def fnv_profile(action: Literal['sample', 'diff'] = 'sample',
+                          seconds: Annotated[float, Field(gt=0, le=120)] = 5.0,
+                          rate: Annotated[int, Field(ge=1, le=1000)] = 200,
+                          threads: Literal['main', 'all'] = 'main',
+                          name: Annotated[str, Field(max_length=60)] | None = None,
+                          before: Annotated[str, Field(max_length=300)] | None = None,
+                          after: Annotated[str, Field(max_length=300)] | None = None,
+                          top: Annotated[int, Field(ge=1, le=200)] = 25) -> result_type:
+        """Where the frame time goes (Plan 2 W6). sample: suspend the thread(s) rate times a second for seconds
+        from outside the game (nothing patched), read the call chain, and report self time per function and per
+        decomp source line, inclusive time, the callers of the hottest functions, the frame rate meanwhile, and a
+        folded-stack file for flame graphs (saved under state/fnv/profiles). diff before after: two saved profiles
+        side by side (inclusive percent per function, frame rate)."""
+        return await invoke('fnv_profile', lambda: profile_tools.run(action, seconds=seconds, rate=rate,
+                                                                     threads=threads, name=name, before=before,
+                                                                     after=after, top=top), 'read')
+
+    @server.tool(annotations=read)
+    async def fnv_threads() -> result_type:
+        """Every thread of the game: its start routine (named), what it runs now (one outside sample), and the
+        known spin locks (process lists, garbage collector, global, script delayed actions) with their owner."""
+        return await invoke('fnv_threads', lambda: thread_tools.list(), 'read')
+
+    @server.tool(annotations=read)
+    async def fnv_memory(action: Literal['pools', 'alloc_trace'] = 'pools',
+                         seconds: Annotated[float, Field(gt=0, le=60)] = 3.0,
+                         top: Annotated[int, Field(ge=1, le=200)] = 20) -> result_type:
+        """Memory. pools: every pool with its block size, committed bytes and peak, and the live NiRefObject
+        count. alloc_trace seconds: allocation counts by call site (a counting hook on the allocator, removed
+        after), with the function and source line of each caller."""
+        return await invoke('fnv_memory', lambda: memory_tools.run(action, seconds=seconds, top=top), 'read')
+
+    @server.tool(annotations=read)
+    async def fnv_object(action: Literal['identify', 'find'] = 'identify',
+                         pointer: Annotated[str, Field(max_length=20)] | None = None,
+                         class_name: Annotated[str, Field(max_length=200)] | None = None,
+                         limit: Annotated[int, Field(ge=1, le=5000)] = 200) -> result_type:
+        """What memory is. identify pointer: the pool and block it is in, the class (RTTI) and the form when it
+        is one. find class_name: live objects of that class (pool blocks starting with its vtable)."""
+        return await invoke('fnv_object', lambda: object_tools.run(action, pointer=pointer, class_name=class_name,
+                                                                   limit=limit), 'read')
+
+    @server.tool(annotations=act)
+    async def fnv_coverage(action: Literal['start', 'stop', 'diff'],
+                           files: list[Annotated[str, Field(max_length=300)]] | None = None,
+                           functions: list[Annotated[str, Field(max_length=200)]] | None = None,
+                           name: Annotated[str, Field(max_length=60)] | None = None,
+                           a: Annotated[str, Field(max_length=300)] | None = None,
+                           b: Annotated[str, Field(max_length=300)] | None = None) -> result_type:
+        """Line coverage of engine code (Plan 2 W6). start files=[decomp paths, e.g. tesobjectrefr.cpp] or
+        functions=[names]: a one-shot trap at every source line start of those functions (verified functions only),
+        each removing itself on its first hit. stop: lines run and never run per file, functions entered; saved
+        under state/fnv/coverage. diff a b: lines that ran in one saved run and not the other."""
+        return await invoke('fnv_coverage', lambda: coverage_tools.run(action, files=files, functions=functions,
+                                                                       name=name, a=a, b=b), 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_anim(action: Literal['state', 'play'], ref: Ref,
+                       group: Annotated[str, Field(max_length=80)] | None = None,
+                       idle: Annotated[str, Field(max_length=80)] | None = None) -> result_type:
+        """Animation (Plan 2 W6). state ref: per body section the current and queued group (type name, weapon,
+        move, power armour) and the sequence playing. play ref group=<name> or idle=<IDLE form>."""
+        return await invoke('fnv_anim', lambda: anim_tools.run(action, ref=ref, group=group, idle=idle),
+                            'read' if action == 'state' else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_audio(action: Literal['log', 'play'],
+                        seconds: Annotated[float, Field(gt=0, le=60)] = 3.0,
+                        sound: Annotated[str, Field(max_length=80)] | None = None,
+                        ref: Ref | None = None) -> result_type:
+        """Sound (Plan 2 W6). log seconds: every sound the engine creates meanwhile, with its sound form or file and
+        the function that asked (footsteps, weapons, scripts...), from record hooks removed after. play sound [ref]:
+        a SOUN form, 2D or from a reference."""
+        return await invoke('fnv_audio', lambda: audio_tools.run(action, seconds=seconds, sound=sound, ref=ref),
+                            'read' if action == 'log' else 'act')
+
+    @server.tool(annotations=read)
+    async def fnv_physics(action: Literal['controller', 'body'], ref: Ref) -> result_type:
+        """Physics (Plan 2 W6). controller ref: the actor's character controller, fall time and fall distance (the
+        engine's GetFallDistance). body ref: 3D root to collision object to Havok body, with each object's class."""
+        return await invoke('fnv_physics', lambda: physics_tools.run(action, ref=ref), 'read')
+
+    @server.tool(annotations=read)
+    async def fnv_systems(action: Literal['formulas', 'formula', 'sweep', 'progression', 'needs'],
+                          name: Annotated[str, Field(max_length=200)] | None = None,
+                          args: list[Any] | None = None,
+                          index: Annotated[int, Field(ge=0, le=15)] | None = None,
+                          start: float | None = None, stop: float | None = None,
+                          steps: Annotated[int, Field(ge=1, le=100)] = 10) -> result_type:
+        """Game systems (Plan 2 W6). formulas: the catalog (skill value, XP for a level, walk and run speed, item
+        value by condition, force-lock chance). formula name args: call it (or any engine function by name) with
+        those inputs, guarded. sweep name args index start stop [steps]: one argument over a range. progression:
+        level, XP, the XP the next level needs. needs: hardcore values and radiation."""
+        return await invoke('fnv_systems', lambda: systems_tools.run(action, name=name, args=args, index=index,
+                                                                     start=start, stop=stop, steps=steps), 'read')
 
     @server.tool(annotations=act)
     async def fnv_place(action: Literal['at', 'array', 'nudge', 'rotate', 'scale', 'snap', 'check', 'list', 'remove'],

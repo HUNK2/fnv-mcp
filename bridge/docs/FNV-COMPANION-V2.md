@@ -207,3 +207,15 @@ thread then parks again as kind `step`. `trace read <seq> <since> [max]` returns
 | `code alloc <size>` / `code free <addr>` | Executable memory for swapped functions |
 | `code patch <addr> <hex>` | Writes bytes with the other threads suspended; `{"ok":true,"length","old":"<hex>"}` |
 
+## W6: line coverage
+
+| Op | Result |
+|---|---|
+| `cov add <hex>` | Packed u32 addresses (hex) into a sorted table of up to 262,144; addresses already holding 0xCC, a breakpoint site or a probe are skipped. `{"ok":true,"added","skipped","total"}` |
+| `cov arm` / `cov disarm` | Write 0xCC at every address not hit yet / put back every byte not hit yet (other threads suspended) |
+| `cov read <since>` | `{"ok":true,"total","hits","next","addresses":"<packed hex>"}` in hit order (up to 8,000 per call) |
+| `cov reset` | Empty the table (refused while armed) |
+
+A coverage trap restores its byte on the first hit, re-runs the instruction and is handled before the breakpoint and
+probe handlers; a trap already in flight after the byte was restored is still recognised.
+

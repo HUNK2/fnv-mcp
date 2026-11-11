@@ -752,6 +752,43 @@ How:
 - Not built: `fnv_orig_<address>` (calling the old function from the new one), `compare` modes `shadow` and `ab`,
   redirecting call sites for functions shorter than five bytes, a loader plugin for an exported patch set.
 
+## Performance and inspectors (Plan 2, W6)
+
+Code: `geck_mcp/fnv_perf.py` (profile, threads, memory, object), `geck_mcp/fnv_coverage.py`, `geck_mcp/fnv_inspect.py`
+(anim, audio, physics, systems); companion `native/engine/w6_cov.c`. Checked in the game on 2026-11-11.
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `fnv_profile` | read | `sample` the thread stacks from outside the game (nothing patched): self, inclusive and innermost-game-function time per function and per decomp source line, callers, frame rate, a folded-stack file; `diff` two saved profiles |
+| `fnv_coverage` | act | `start` one-shot traps at every line start of decomp files or functions (verified only), `stop` lines run and never run, `diff` two runs |
+| `fnv_threads` | read | Every thread with its start routine and current function; the four known spin locks with their owner |
+| `fnv_memory` | read | `pools` (block size, committed bytes, peak; live NiRefObjects), `alloc_trace` (allocations per call site, named) |
+| `fnv_object` | read | `identify` a pointer (pool block, class by RTTI, form), `find` live objects of a class |
+| `fnv_anim` | act | `state` per body section (group name, weapon, move, power armour, sequence file), `play` a group or an idle |
+| `fnv_audio` | act | `log` every sound created (form or file, and the asking function), `play` a sound |
+| `fnv_physics` | read | `controller` (fall time and distance), `body` (3D root to Havok body with classes) |
+| `fnv_systems` | read | `formulas`, `formula`, `sweep`, `progression`, `needs` |
+
+How and what was seen:
+
+- Profiling suspends the thread about 190 times a second (Wow64GetThreadContext, then the EBP chain), names each
+  address once (engine map and symbol database, module + offset outside the exe). `gameFunctions` attributes each
+  sample to its innermost game function, so a wait inside the driver counts for `PresentFrame`.
+- S5 checked live: an idle saloon runs at 61 fps with 81% of the main thread in `PresentFrame` (vsync). A module that
+  spends 25 ms in front of TES::RunScripts every frame: the profile put 83% of the main thread under
+  `FUN_008705d0` (`main.cpp:908`, the call into RunScripts) with the module's code as self time; after unloading it
+  the diff read 34.3 -> 57.0 fps and that function -82.9 points.
+- Coverage on `TESObjectREFR::Activate` while opening a door: 32 of 67 lines ran, the others listed.
+- Memory: 37 pools, 63.5 MB committed, 242,268 NiRefObjects; in two idle seconds 5,227 allocations from 17 call sites
+  (most from `BSAudioManager::SetVoiceState`). Pool blocks are laid out per 4 KB page (Character blocks of 0x1E0:
+  eight per page); the page tail after the last whole block is not a block.
+- Systems: `skill_value(15, 5, 5)` = 28; XP for levels 1 to 5 = 0, 200, 550, 1050, 1700. The game's actor value is
+  spelled `SleepDeprevation`; the hardcore flag is player +0x7BC.
+- Audio log in the saloon: a dog's panting and tongue sounds, with files and `BSAudio::GetSoundHandleByFilename`.
+- Not built: `fnv_audio` voice_check, music, radio; `fnv_anim` idle_tree, biped, face; `fnv_physics` triggers,
+  projectiles, query; `fnv_systems` barter, crime, zone; `fnv_memory` refcount and pressure; `fnv_object` referrers;
+  thread names from the thread-name exception.
+
 ## Loose ends of W1 to W4 (2026-11-11 evening)
 
 Built and checked in the game in this run:
