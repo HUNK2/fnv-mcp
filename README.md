@@ -1,4 +1,44 @@
-# GECK MCP for New Vegas — 0.4.0 Beta
+# fnv-mcp
+
+**MCP tools that let an AI agent build, run, debug and change Fallout: New Vegas: the GECK, the running game and the
+engine itself.**
+
+fnv-mcp is a standalone continuation of [geck-mcp-nv](https://github.com/2Shay96/geck-mcp-nv) by **2Shay**, which
+it is built on and keeps the full history of. Everything 2Shay made (the GECK bridge, the plugin builder, the script
+compiler, the console companion) is here unchanged in purpose; see the original README below.
+
+What fnv-mcp adds, on top of the 44 `geck_*` tools: **160 `fnv_*` tools** for the running game (204 in all).
+
+- **Engine knowledge**: function and class lookup from the decompilation, a symbol database with source lines and
+  named locals for the retail exe, crash explanation, engine warnings.
+- **Live control**: time control (pause, step, frame advance), breakpoints and a debugger, screenshots and photo
+  sheets ("eyes"), walking, talking, using doors and fast travel ("hands"), forms and scripts changed in place.
+- **Engine changes**: C modules hooked into the running game, decomp functions recompiled with the game's own
+  compiler and swapped in, both exportable as normal xNVSE plugins.
+- **Performance and checks**: a sampling profiler, code coverage, thread, memory and object views, animation, audio,
+  physics and formula inspectors, whole-plugin crawls, load-order bisection and a self-test.
+
+Start with [bridge/docs/FNV-MCP-SETUP.md](bridge/docs/FNV-MCP-SETUP.md) and
+[bridge/docs/FNV-LIVE-TOOLS.md](bridge/docs/FNV-LIVE-TOOLS.md). The `fnv_guide` tool has step-by-step guides.
+
+Nothing from the game, the GECK or the decompilation is in this repository: each user builds the engine map and
+symbol database from their own copies.
+
+## Credits
+
+- **2Shay**: author of [geck-mcp-nv](https://github.com/2Shay96/geck-mcp-nv), the project this repository is built
+  on: `bridge/` (GECK bridge, plugin builder, script compiler, runtime diagnostics, console companion) and the FNV
+  port in `windows/`.
+- **maksimka2432fr23**: [GECK MCP for Fallout 3](https://github.com/maksimka2432fr23/codex-skill-mcp-fallout3), the
+  origin of `windows/`.
+- **HUNK2**: the `fnv_*` live, engine and debugging tools and the engine companion.
+- The [fnv_decomp](https://github.com/momusdigital/fnv_decomp) project, xNVSE, JIP LN NVSE and Yvile's Crash Logger,
+  whose work these tools read at runtime; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+---
+
+## Original project: GECK MCP for New Vegas 0.4.0 Beta (2Shay)
+
 
 **0.4.0 Beta is a major upgrade:** the bundled companion source lets your AI agent **enter in-game console commands** and **query live mod indices/load-order prefixes with GetModIndex**, including explicitly named loaded plugins. Typed inventory and equipped-condition readback help verify effects; resumable compilation improves the editor workflow.
 
@@ -79,7 +119,9 @@ a GECK restart, and the Render Window can be captured on Windows. Next steps: a 
 
 - MIT. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - `bridge/` © 2026 2Shay. `windows/` © 2026 maksimka2432fr23, with the FNV port by 2Shay.
-- Made with AI coding agents (Anthropic Claude and OpenAI Codex), directed and tested by 2Shay.
+- The `fnv_*` tools and the engine companion (fnv-mcp) © 2026 HUNK2.
+- Made with AI coding agents (Anthropic Claude and OpenAI Codex), directed and tested by 2Shay; the fnv-mcp additions
+  directed and tested by HUNK2.
 - Not affiliated with or endorsed by Bethesda Softworks, ZeniMax, Microsoft, Anthropic or OpenAI.
   Fallout and G.E.C.K. are trademarks of their owners.
 

@@ -1,5 +1,9 @@
 # Third-party notices
 
+## geck-mcp-nv, by 2Shay (MIT)
+- Source: https://github.com/2Shay96/geck-mcp-nv
+- fnv-mcp is built on it and keeps its full commit history; its copyright notice is kept in `LICENSE`.
+
 ## GECK MCP (Fallout 3), by maksimka2432fr23 (MIT)
 - Source: https://github.com/maksimka2432fr23/codex-skill-mcp-fallout3 (commit `b3c1044a`, 2026-09-06)
 - Used in: `windows/` (ported to Fallout: New Vegas; changes listed in `windows/PORT-NOTES.md`)
