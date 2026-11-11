@@ -789,6 +789,37 @@ How and what was seen:
   projectiles, query; `fnv_systems` barter, crime, zone; `fnv_memory` refcount and pressure; `fnv_object` referrers;
   thread names from the thread-name exception.
 
+## Whole-plugin checks: fnv_crawl, fnv_bisect, fnv_selftest (Plan 2, W7)
+
+Code: `geck_mcp/fnv_crawl.py`, `geck_mcp/fnv_suite.py`; guides `slow`, `change-engine`, `check-plugin` in
+`geck_mcp/guides/`. Checked in the game on 2026-11-11 except `fnv_bisect` (see below).
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `fnv_crawl` | control | `cells plugin`: every cell the plugin adds or edits, visited and settled, then script errors, engine warnings, files not found, references with no 3D, dead load doors, frame rate and a photo, worst first. `dialogue npc`: every line written for the NPC with topic, quest, the engine's verdict and failing condition, and the voice and lip files with whether they exist |
+| `fnv_bisect` | control | `level=mods\|plugins` and the failing `fnv_do` steps: checks it fails with everything on and passes with every candidate off, then halves the suspects each round (the game is quit and relaunched) and names the culprit; the profile is put back |
+| `fnv_selftest` | read | What each family relies on, against the running game: ok, degraded or broken with the fact |
+
+What was seen:
+
+- `fnv_crawl cells` on HelloWasteland.esp (7.8 s): one row, a real finding: the engine asks for
+  `data\sound\fx\fx\fire\fx_fire_barrel_lp.ogg` (a doubled `fx\fx`), which does not exist. HelloQuest.esp: clean.
+- `fnv_crawl dialogue` on Easy Pete: each line with its topic (GREETING, PLAYERTHROWGRENADE, ...), quest
+  (VFreeformGoodsprings), the engine's verdict (one GREETING line blocked by `GetQuestVariable 00104EAE 14 == 1`) and
+  its voice and lip files, all found. The file names follow the archives' rule, read from Fallout - Voices1.bsa:
+  `sound\voice\<plugin>\<voice type>\<quest EditorID, 10 chars>_<topic EditorID, 15 chars>_<info id>_<n>.ogg`.
+  Calling `VFDialogue::BuildVoiceFilePath` 0x00616FA0 directly faulted at 0xC (guarded): it needs a this pointer the
+  decomp does not show.
+- `fnv_selftest`: 21 ok, 1 degraded (`Warning` starts with xNVSE's jump, as expected), 0 broken. It found a companion
+  bug on its first run: `code free 0` matched an empty slot of the block table (fixed: 0 is refused).
+- The companion's build hash listed only some source files, so a change to `w5_code.c` alone reused a stale build;
+  every `engine/*.c` and the module header are hashed now (a test checks it).
+- `fnv_bisect` is tested against a fake profile and runner (eight mods, the culprit in three rounds, the profile put
+  back). Its live run needs the MO2 launch of the MCP server (launching from an in-process test client fails), so it
+  is not checked in the game yet.
+- Not built: parallel game instances (the game refuses a second instance: a mutex in WinMain), replay of a recorded
+  session, `fnv_crawl quest` and `items`, bisecting `hooks` and `records`.
+
 ## Loose ends of W1 to W4 (2026-11-11 evening)
 
 Built and checked in the game in this run:

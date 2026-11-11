@@ -23,6 +23,8 @@ from .fnv_plugin_build import PluginTools
 from .fnv_perf import MemoryTools, ObjectTools, ProfileTools, ThreadTools
 from .fnv_coverage import CoverageTools
 from .fnv_inspect import AnimTools, AudioTools, PhysicsTools, SystemsTools
+from .fnv_crawl import CrawlTools
+from .fnv_suite import BisectTools, SelfTest
 
 FNV_LIVE_TOOLS = {
     # milestone 4: game control, tests, logs
@@ -176,6 +178,9 @@ FNV_LIVE_TOOLS = {
     'fnv_audio': ('act', 'every sound the engine creates for a while (form or file, and who asked); play a sound'),
     'fnv_physics': ('read', 'character controller of an actor (fall time and distance) and the Havok body chain of a reference'),
     'fnv_systems': ('read', 'call game formulas (catalog or any function) and sweep an argument; level and XP progression; hardcore needs'),
+    'fnv_crawl': ('control', 'unattended checks of a plugin: every cell it adds or edits (errors, warnings, missing files, refs without 3D, dead load doors, frame rate, photo) and every line an NPC can say (conditions, voice and lip files)'),
+    'fnv_bisect': ('control', 'find the one MO2 mod or plugin that makes a failing scenario fail, by halves (the game restarts each round)'),
+    'fnv_selftest': ('read', 'check what every tool family relies on against the running game: ok, degraded or broken, with the fact that failed'),
     'fnv_place': ('act', 'level work in the game: place a form at a position or near a ref, rows, grids and circles, nudge, rotate, scale, snap to the surface, check floating or sinking, list and remove what this session placed'),
     'fnv_author': ('control', "turn the session's live work into a plugin spec part, check a plugin (missing files, conflicts, engine warnings), scaffold a starting project, package a release folder and archive"),
     # milestone 10: setup
@@ -259,6 +264,15 @@ def register(server, project, annotations, result_type):
     audio_tools = AudioTools(live, deep)
     physics_tools = PhysicsTools(live)
     systems_tools = SystemsTools(live)
+    crawl_tools = CrawlTools(live, agent=agent, data=data, records=records, social=social, assets=asset_tools,
+                             eyes=eyes, warnings=warnings_for_live)
+
+    def _scenario_runner():
+        from .fnv_scenario import ScenarioRunner
+        return ScenarioRunner(live)
+    bisect_tools = BisectTools(live, records, _scenario_runner)
+    self_test = SelfTest(live, {'memory': memory_tools, 'systems': systems_tools, 'eyes': eyes,
+                                'profile': profile_tools})
     frame_sampler = FrameSampler(live)
     sinks = SinkTools(live)
     live.eyes, live.hands = eyes, hands      # the scenario runner's photo / play / ui steps
@@ -1948,6 +1962,44 @@ def register(server, project, annotations, result_type):
         level, XP, the XP the next level needs. needs: hardcore values and radiation."""
         return await invoke('fnv_systems', lambda: systems_tools.run(action, name=name, args=args, index=index,
                                                                      start=start, stop=stop, steps=steps), 'read')
+
+    @server.tool(annotations=control)
+    async def fnv_crawl(action: Literal['cells', 'dialogue'],
+                        plugin: Annotated[str, Field(max_length=200)] | None = None,
+                        npc: Ref | None = None,
+                        max_cells: Annotated[int, Field(ge=1, le=500)] = 20,
+                        settle_frames: Annotated[int, Field(ge=1, le=3000)] = 90,
+                        photos: bool = True,
+                        limit: Annotated[int, Field(ge=1, le=500)] = 60) -> result_type:
+        """Unattended checks of a whole plugin (Plan 2 W7). cells plugin: every cell the plugin adds or edits is
+        visited and settled, then checked for script errors, engine warnings, files not found, references with no
+        3D, load doors that lead nowhere and the frame rate, with a photo; one row per cell, worst first (moves the
+        player; fnv_undo moves it back). dialogue npc: every line written for the NPC with its topic and quest,
+        whether the engine allows it now and which condition fails, and the voice and lip files the engine will ask
+        for, found or not."""
+        return await invoke('fnv_crawl', lambda: crawl_tools.run(action, plugin=plugin, npc=npc, max_cells=max_cells,
+                                                                 settle_frames=settle_frames, photos=photos,
+                                                                 limit=limit), 'control')
+
+    @server.tool(annotations=control)
+    async def fnv_bisect(level: Literal['mods', 'plugins'], steps: Annotated[list[Any], Field(min_length=1, max_length=200)],
+                         start: Start = 'continue',
+                         keep: list[Annotated[str, Field(max_length=200)]] | None = None,
+                         max_rounds: Annotated[int, Field(ge=1, le=12)] = 10) -> result_type:
+        """Find the one MO2 mod or plugin that makes a scenario fail (Plan 2 W7). steps: the failing scenario as for
+        fnv_do. Checks that it fails with everything on and passes with every candidate off, then turns off half of
+        the suspects each round (the game is quit and the runner relaunches it), and names the culprit. keep: mods
+        or plugins never turned off (the companion, xNVSE data and JIP are always kept; base game files too). The
+        profile is put back at the end."""
+        return await invoke('fnv_bisect', lambda: bisect_tools.bisect(level, steps, start, keep, max_rounds), 'control')
+
+    @server.tool(annotations=read)
+    async def fnv_selftest() -> result_type:
+        """Check what the tool families rely on, against the running game (Plan 2 W7): the companion and its wire,
+        the engine map and symbol database, the singletons the tools read, the prologues hooks plan, the camera, and a
+        cheap call into each family (memory, systems, eyes, profile, modules, code placement, coverage). Each row is
+        ok, degraded or broken with the fact that failed. Use after a game, xNVSE, plugin or decomp update."""
+        return await invoke('fnv_selftest', lambda: self_test.run(), 'read')
 
     @server.tool(annotations=act)
     async def fnv_place(action: Literal['at', 'array', 'nudge', 'rotate', 'scale', 'snap', 'check', 'list', 'remove'],

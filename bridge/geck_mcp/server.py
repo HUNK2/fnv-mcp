@@ -95,7 +95,13 @@ def make_server(project, service=None):
                        'engine warnings (missing files, wrong form types): fnv_warnings; '
                        'what is this object or record: fnv_ref, fnv_record_show; '
                        'how does the engine do X: fnv_guide engine, then fnv_func_find; '
-                       'test a change: fnv_test_run. Act tools change the running game and need fnv.engine_control full.')
+                       'test a change: fnv_test_run; '
+                       'the game is slow: fnv_profile (fnv_guide topic "slow"); '
+                       'run C in the game or change an engine function: fnv_native, fnv_code (topic "change-engine"); '
+                       'check a whole plugin: fnv_crawl, fnv_selftest, fnv_bisect (topic "check-plugin"); '
+                       'see and play the game: fnv_photo, fnv_look, fnv_play, fnv_ui_do; '
+                       'debug engine code: fnv_debug, fnv_flow, fnv_blame. '
+                       'Act tools change the running game and need fnv.engine_control full.')
     observe = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                               idempotentHint=True, openWorldHint=False)
     ui = ToolAnnotations(readOnlyHint=False, destructiveHint=False,

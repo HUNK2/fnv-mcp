@@ -17,7 +17,8 @@ from pathlib import Path
 
 NATIVE = Path(__file__).resolve().parents[1] / 'native'
 SOURCES = ('engine/fnvmcp_engine.c', 'engine/w1_pred.c', 'engine/w1_gate.c', 'engine/w1_samp.c', 'engine/w1_sink.c',
-           'engine/w1_guard.c', 'engine/w1_input.c', 'engine/w2_stop.c', 'engine/w2_bp.c', 'engine/fake_host.c', 'runtime/nvse_abi.h')
+           'engine/w1_guard.c', 'engine/w1_input.c', 'engine/w2_stop.c', 'engine/w2_bp.c', 'engine/w5_mod.c',
+           'engine/w5_code.c', 'engine/w6_cov.c', 'engine/fake_host.c', 'runtime/nvse_abi.h', 'sdk/fnvmcp_module.h')
 DLL_NAME = 'fnvmcp_engine.dll'
 MOD_NAME = 'fnvmcp engine companion'
 DEFAULT_PIPE = 'fnvmcp-engine'
@@ -241,7 +242,10 @@ def file_digest(path):
 
 
 def source_hashes():
-    return {name: file_digest(NATIVE / name) for name in SOURCES}
+    """Digests of every file the companion is built from: the listed ones and any other C file in engine/ (a
+    file left out would let a change reuse a stale build)."""
+    names = set(SOURCES) | {'engine/%s' % p.name for p in (NATIVE / 'engine').glob('*.c')}
+    return {name: file_digest(NATIVE / name) for name in sorted(names)}
 
 
 def find_zig(project=None):

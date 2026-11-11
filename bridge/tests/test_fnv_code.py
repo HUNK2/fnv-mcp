@@ -97,3 +97,13 @@ class PluginBuildTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CompanionHashTests(unittest.TestCase):
+    def test_every_engine_source_is_in_the_build_hash(self):
+        # A C file left out of the hash let a change reuse a stale build (seen with w5_code.c).
+        from geck_mcp import fnv_link
+        names = set(fnv_link.source_hashes())
+        engine = {'engine/%s' % p.name for p in (fnv_link.NATIVE / 'engine').glob('*.c')}
+        self.assertTrue(engine <= names, engine - names)
+        self.assertIn('sdk/fnvmcp_module.h', names)

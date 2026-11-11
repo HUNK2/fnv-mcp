@@ -38,7 +38,7 @@ static void op_code(int argc, char **argv) {
         return;
     }
     if (argc == 3 && !strcmp(argv[1], "free")) {
-        if (!parse_u32(argv[2], &value)) return fail("bad_arguments");
+        if (!parse_u32(argv[2], &value) || !value) return fail("bad_arguments"); /* 0 would match an empty slot */
         for (unsigned slot = 0; slot < CODE_BLOCKS; slot++) {
             if (code_blocks[slot] != value) continue;
             VirtualFree((void *)(uintptr_t)value, 0, MEM_RELEASE);

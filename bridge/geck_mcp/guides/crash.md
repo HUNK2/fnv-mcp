@@ -67,6 +67,9 @@ thread waits: `fnv_debug status` shows the source line, `stack` and `locals` rea
 lets the crash logger write its log as usual. `return` or `skip` try to recover, to test a guess. `dump` writes a
 minidump to look at later.
 
-## Planned (Plan 2, not available yet)
+## Find the culprit plugin or object
 
-`fnv_object` and `fnv_bisect` (find the plugin that causes a crash).
+`fnv_object identify` on a pointer from `locals` or the crash log says which pool block it is in, its class and its
+form: a freed or reused block shows a class that does not fit. When a load-order change brought the crash,
+`fnv_bisect` with level `mods` or `plugins` and the `fnv_do` steps that reproduce it names the one mod or plugin
+(the game restarts each round).
