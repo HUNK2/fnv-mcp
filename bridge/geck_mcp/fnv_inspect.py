@@ -21,6 +21,8 @@ SOUND_CREATORS = ((0x00AE5870, 'sound_form'), (0x00AE5A50, 'sound_path'))
 GET_FALL_DISTANCE = 0x00C70550
 IDLE_MANAGER, FIND_IDLE, IDLE_ARRAY, IDLE_VALID = 0x011CB6A0, 0x00600950, 0x00600690, 0x005FF430
 IDLE_SEARCH = 0x005FF2E0
+GENERAL_SUBTITLES = 0x011D8928          # Setting bGeneralSubtitles:GamePlay (value at +4)
+REF_MODEL_PATH, BUILD_IDLE_PATH, IDLE_DIR_ARRAY = 0x005715D0, 0x006007F0, 0x00600560
 INIT_WORN, SET_ANIM_ACTION = 0x00606050, 0x008A73E0
 BIPED_SLOTS = ('head', 'hair', 'upper body', 'left hand', 'right hand', 'weapon', 'pip-boy', 'backpack', 'necklace',
                'headband', 'hat', 'eyeglasses', 'nose ring', 'earrings', 'mask', 'choker', 'mouth object',
@@ -43,11 +45,17 @@ MEDIA_TYPES = {6: 'special', 7: 'radio', 8: 'main menu', 9: 'start menu'}   # ot
 
 
 PERK_DATA, PRICE_MULTIPLIERS, ZONE_LEVEL = 0x38, 0x00649050, 0x00526190
+EXTRA_BY_TYPE, ENTRY_VALUE, BASE_VALUE = 0x00410220, 0x004BD400, 0x0048E8A0
 
 
 def _menu_round(value):
-    """The barter menu's rounding: to a whole number from 1 up, to a tenth below."""
-    return round(value) if abs(value) > 1.0 else round(value, 1)
+    """The barter menu's rounding (InventoryStackRecord::RoundToNearestStep 0x004BD510): half up, to a whole number
+    above 1, to a tenth otherwise."""
+    step = 1.0 if abs(value) > 1.0 else 0.1
+    ratio = value / step
+    whole = int(ratio)
+    out = (whole + (0 if ratio - whole < 0.5 else 1)) * step
+    return int(out) if step == 1.0 else round(out, 1)
 
 
 def _flag_names(value, table):
@@ -245,11 +253,12 @@ class AnimTools:
                        'sequence names its KF file.' % buckets, actor=r['formId'], count=count, groups=rows)
 
     def idle_tree(self, actor, target=None, explain=6, limit=80):
-        """The idle the engine picks now and the walk that leads there. The roots are the idle forms of the actor's
-        idle folder (IdleAnimationManager::GetIdleArray 0x00600690 on its base form); each root is asked with the
-        engine's own TESIdleForm::FindIdleFormForObject 0x005FF2E0 (conditions, children depth first, replay delays
-        not applied) in order, as the manager does, and the first answer wins. Every node on the way is checked with
-        IsValidForReferences 0x005FF430; failing ones name their failing conditions (fnv_condition_eval)."""
+        """The idle the engine picks now and the walk that leads there. The answer is the engine's own
+        IdleAnimationManager::FindIdleFormForObject 0x00600950 (what HighProcess::StartIdleAnimation 0x008DAB40 asks):
+        the idle folder of the reference's model, each idle asked in the array's order with
+        TESIdleForm::FindIdleFormForObject 0x005FF2E0 and the actor's replay delays (animation +0x134), first answer
+        wins. The walk repeats that per idle so each node shows whether it passes (IsValidForReferences 0x005FF430),
+        is held back by a replay delay, and which conditions fail (fnv_condition_eval)."""
         self.live.in_game()
         r = self.live.resolve(actor)
         t = self.live.resolve(target) if target else None
@@ -257,10 +266,32 @@ class AnimTools:
         if not manager:
             raise ConvError('NOT_READY', 'The idle manager is not created yet.')
         args = [{'type': 'int', 'value': r['ptr']}, {'type': 'int', 'value': t['ptr'] if t else 0}]
-        base = self.live.u32s([r['ptr'] + 0x20])[0]       # GetIdleArray takes the base form (its model's folder)
-        roots = _as_int(self.live.engine_call('0x%08X' % IDLE_ARRAY, '0x%08X' % manager,
-                                              [{'type': 'int', 'value': base}], 'ptr', 'thiscall',
+        anim = self._animation(r)
+        delays_list = anim + 0x134 if anim else 0
+        delayed = set()
+        node, guard = delays_list, 0
+        while node and guard < 256:                     # BSSimpleList {item, next}; item = {idle, time...}
+            item, nxt = self.live.u32s([node, node + 4])
+            if item:
+                delayed.add(self.live.u32s([item])[0])
+            node, guard = nxt, guard + 1
+        engine = _as_int(self.live.engine_call('0x%08X' % FIND_IDLE, '0x%08X' % manager, args, 'ptr', 'thiscall',
+                                               True).get('result'))
+        # The same idle folder as the engine: the reference's model path (TESObjectREFR::GetModelFilePath
+        # 0x005715D0) through BuildIdlePath 0x006007F0, then the folder's array (GetFormArrayForIdleDir 0x00600560).
+        model = _as_int(self.live.engine_call('0x%08X' % REF_MODEL_PATH, '0x%08X' % r['ptr'], [], 'ptr', 'thiscall',
                                               True).get('result'))
+        folder, roots = None, 0
+        if model:
+            buf = self.live.scratch(b'\0' * 264)
+            self.live.engine_call('0x%08X' % BUILD_IDLE_PATH, '0x%08X' % manager,
+                                  [{'type': 'int', 'value': model}, {'type': 'int', 'value': buf}], 'void', 'thiscall',
+                                  True)
+            folder = _text(self.live.reads([(buf, 264)])[0]) or None
+            if folder:
+                roots = _as_int(self.live.engine_call('0x%08X' % IDLE_DIR_ARRAY, '0x%08X' % manager,
+                                                      [{'type': 'int', 'value': buf}], 'ptr', 'thiscall',
+                                                      True).get('result'))
         rows, failing = [], []
 
         def members(arr):
@@ -281,30 +312,30 @@ class AnimTools:
             fid, path_ptr, children = self.live.u32s([idle + 0x0C, idle + 0x1C, idle + 0x40])
             path = _text(self.live.reads([(path_ptr, 120)])[0]) if path_ptr else None
             row = {'depth': depth, 'idle': '%08X' % fid, 'file': path, 'passes': bool(ok)}
+            if idle in delayed:
+                row['replayDelayed'] = True
             rows.append(row)
             if not ok:
                 failing.append(row)
             return ok, children
 
-        winner = 0
-        everything = members(roots)
-        parents = self.live.u32s([p + 0x44 for p in everything]) if everything else []
-        tops = [p for p, parent in zip(everything, parents) if not parent] or everything   # the tree's roots
-        for root in tops:
+        walked, asked = 0, 0
+        for root in members(roots):       # every entry, in the array's order, as the manager loops
             if len(rows) >= limit:
                 break
+            asked += 1
             found = _as_int(self.live.engine_call('0x%08X' % IDLE_SEARCH, '0x%08X' % root,
-                                                  args + [{'type': 'int', 'value': 0}], 'ptr', 'thiscall',
+                                                  args + [{'type': 'int', 'value': delays_list}], 'ptr', 'thiscall',
                                                   True).get('result'))
             ok, children = describe(root, 0)
             if found:
-                winner = found
-                level, depth = children, 1        # show the path into the winning root
+                walked = found
+                level, depth = children, 1        # show the path into the answering root
                 while level and depth < 8 and len(rows) < limit:
                     nxt = None
                     for child in members(level):
                         c_ok, c_children = describe(child, depth)
-                        if c_ok:
+                        if c_ok and child not in delayed:
                             nxt = c_children
                             break
                     level, depth = nxt, depth + 1
@@ -318,18 +349,24 @@ class AnimTools:
                                   for c in lst['conditions'] if not c.get('passed')][:4]
             except ConvError as exc:
                 row['failing'] = exc.code
-        win = self.live.form_ids([winner])[0] if winner else None
-        win_id = win['formId'] if win else None
+        ids = self.live.form_ids([x for x in (engine, walked) if x])
+        names = dict(zip([x for x in (engine, walked) if x], [i['formId'] for i in ids]))
+        win_id, walk_id = names.get(engine), names.get(walked)
         for row in rows:
             row['chosen'] = row['idle'] == win_id
+        out = dict(actor=r['formId'], chosen=win_id, folder=folder, replayDelays=len(delayed), rootsAsked=asked,
+                   walk=rows)
+        if walk_id != win_id:
+            # The engine drops an answer that is a group with no file of its own (its last check).
+            out['walkAnswer'] = walk_id
+            if walk_id and not engine:
+                out['walkAnswerNote'] = 'a group with no animation file of its own: the engine drops it (no idle)'
         return verdict('%s would play %s' % (r['formId'], win_id or 'no idle'),
-                       'Roots of the actor\'s idle folder in the engine\'s order, each asked with '
-                       'TESIdleForm::FindIdleFormForObject 0x005FF2E0 until one answers (the winner); the passing '
-                       'path into it is shown. Approximate: replay delays and the filters of the caller '
-                       '(HighProcess::StartIdleAnimation 0x008DAB40) are not applied, so root idles with no '
-                       'conditions (the LOOSE ones scripts play) can answer first. failing: the conditions that fail, '
-                       'from fnv_condition_eval.',
-                       actor=r['formId'], chosen=win_id, walk=rows)
+                       'The engine\'s own IdleAnimationManager::FindIdleFormForObject 0x00600950 (with the actor\'s '
+                       'replay delays). The game asks it only when no special idle plays and the package allows it '
+                       '(HighProcess::StartIdleAnimation 0x008DAB40): a sitting or scripted actor keeps its own idle. '
+                       'walk: the idle folder in order, the path into the answer; failing: the conditions that fail '
+                       '(fnv_condition_eval).', **out)
 
     def biped(self, actor, rebuild=False):
         """The 20 equipment slots of the actor's BipedAnim (Character +0x1B4, slots of 16 bytes at +0x2C)."""
@@ -612,17 +649,35 @@ class AudioTools:
                        'at +0x1B); current 0x011DD42C; enable through FalloutRadio::SetRadioEnabled 0x008324E0.',
                        enabled=enabled, current=cur, stations=rows)
 
-    def subtitles(self, seconds=5.0, limit=100):
+    def subtitles(self, seconds=5.0, limit=100, enable=None):
+        """Subtitle lines shown meanwhile. Outside dialogue a spoken line gets one only when General Subtitles is on
+        (bGeneralSubtitles, off by default; VoiceHost::PlayVoiceTopic 0x00578A80 checks it): enable=true turns it on
+        for the recording and puts it back."""
         self.live.ready()
-        recs = record_hooks(self.live, self.deep, [(SHOW_SUBTITLE, 'subtitle')], seconds)
+        general = bool(self.live.reads([(GENERAL_SUBTITLES + 4, 1)])[0][0])
+        turned_on = bool(enable) and not general
+        if turned_on:
+            self.live.changing('audio subtitles enable')
+            self.live.link.write(GENERAL_SUBTITLES + 4, b'\x01')
+        try:
+            recs = record_hooks(self.live, self.deep, [(SHOW_SUBTITLE, 'subtitle')], seconds)
+        finally:
+            if turned_on:
+                self.live.link.write(GENERAL_SUBTITLES + 4, b'\x00')
         texts = self.live.reads([(rec[12], 260) for _, rec in recs]) if recs else []
         speakers = [rec[19] for _, rec in recs]
         heads = self.live.form_ids(speakers) if speakers else []
         rows = [{'frame': rec[22], 'text': _text(t), 'speaker': (h or {}).get('formId')}
                 for (_, rec), t, h in zip(recs, texts, heads)]
+        out = dict(generalSubtitles=general or turned_on, subtitles=rows[:int(limit)])
+        if not (general or turned_on):
+            out['note'] = ('General Subtitles is off (bGeneralSubtitles): lines spoken outside the dialogue menu show '
+                           'no subtitle and are not caught here. Pass enable=true to turn it on while recording; '
+                           'fnv_audio playing lists the voice files that play.')
         return verdict('%d subtitles in %.1f s' % (len(rows), float(seconds)),
                        'Record hook on Interface::ShowSubtitle 0x00705210 (text, sound handle, position, speaker); '
-                       'removed after.', subtitles=rows[:int(limit)])
+                       'removed after.%s' % (' General Subtitles was on only for the recording.' if turned_on else ''),
+                       **out)
 
     def hear(self, sound, x, y, z, scale=1.0):
         self.live.ready()
@@ -654,7 +709,7 @@ class AudioTools:
         if action == 'radio':
             return self.radio(a.get('enable'))
         if action == 'subtitles':
-            return self.subtitles(a.get('seconds') or 5.0)
+            return self.subtitles(a.get('seconds') or 5.0, enable=a.get('enable'))
         if action == 'hear':
             pos = a.get('position') or []
             if not a.get('sound') or len(pos) != 3:
@@ -958,9 +1013,29 @@ class SystemsTools:
                        minLevel=min_level, ranks=ranks, playable=bool(playable), trait=bool(trait),
                        hidden=bool(hidden), playerLevel=level, rankHeld=have, failing=failing)
 
+    def _inventory_entries(self, ref_ptr):
+        """{form pointer: entry pointer} from the reference's ExtraContainerChanges (extra type 0x15 via
+        ExtraDataList::GetByType 0x00410220; data +0xC, its entry list at +0; entry: extras, count, form at +8)."""
+        xcc = _as_int(self.live.engine_call('0x%08X' % EXTRA_BY_TYPE, '0x%08X' % (ref_ptr + 0x44),
+                                            [{'type': 'int', 'value': 0x15}], 'ptr', 'thiscall', True).get('result'))
+        data = self.live.u32s([xcc + 0x0C])[0] if xcc else 0
+        node = self.live.u32s([data])[0] if data else 0
+        out, guard = {}, 0
+        while node and guard < 2000:
+            item, nxt = self.live.u32s([node, node + 4])
+            if item:
+                form = self.live.u32s([item + 8])[0]
+                if form:
+                    out.setdefault(form, item)
+            node, guard = nxt, guard + 1
+        return out
+
     def barter(self, items, vendor=None):
-        """Buy and sell prices the way the barter menu computes them: base value x the skill multiplier pair
-        (GetSkillPriceMultipliers 0x00649050), the buy price through perk entry point 17, rounded like the menu."""
+        """Buy and sell prices the way the barter menu computes them (BarterMenu item price 0x0072ED00): the item's
+        value from its inventory entry (0x004BD400: condition and weapon mods) or, when the player does not carry it,
+        the form's own value (0x0048E8A0), times the skill multiplier pair (GetSkillPriceMultipliers 0x00649050),
+        the buy price through perk entry point 17, rounded half up, then held at the value: a buy price never under
+        it, a sell price never over it."""
         self.live.in_game()
         if not items:
             raise ConvError('BAD_ARGUMENTS', 'barter needs args = [item forms].')
@@ -971,16 +1046,28 @@ class SystemsTools:
                                                                     {'type': 'int', 'value': buf + 4}],
                               'int', 'cdecl', True)
         buy_mult, sell_mult = struct.unpack('<ff', self.live.reads([(buf, 8)])[0])
+        player = self.live.resolve('player')
+        entries = self._inventory_entries(player['ptr'])
         rows = []
         for item in items:
             f = self.live.resolve(item)
-            value, = self.live.values(['GetValue %s' % f['formId']])
-            if value is None:
-                rows.append({'item': f['formId'], 'error': 'no value'})
+            entry = entries.get(f['ptr'])
+            if entry:
+                value = self.live.engine_call('0x%08X' % ENTRY_VALUE, '0x%08X' % entry, [], 'float', 'thiscall',
+                                              True).get('result')
+                source = 'carried'
+            else:
+                value = self.live.engine_call('0x%08X' % BASE_VALUE, None, [{'type': 'int', 'value': f['ptr']}],
+                                              'int', 'cdecl', True).get('result')
+                source = 'form'
+            if value is None or float(value) < 0:
+                rows.append({'item': f['formId'], 'error': 'no value (not an item with a price)'})
                 continue
-            # The menu multiplies the item value by the buy (vendor sells) or sell (player sells) factor.
-            buy = float(value) * buy_mult
-            sell = float(value) * sell_mult
+            value = round(float(value), 2)
+            kind = self.live.reads([(f['ptr'] + 4, 1)])[0][0]
+            flat = kind in (0x6C, 0x74)          # the menu leaves these two form types unmultiplied
+            buy = value * (1.0 if flat else buy_mult)
+            sell = value * (1.0 if flat else sell_mult)
             perk = None
             ai = getattr(self, 'engine_ai', None)
             if ai is not None:
@@ -989,14 +1076,16 @@ class SystemsTools:
                     buy = float(perk.get('valueAfter', buy))
                 except Exception:  # noqa: BLE001 - keep the price without perks
                     perk = None
-            rows.append({'item': f['formId'], 'value': value, 'buy': _menu_round(buy), 'sell': _menu_round(sell),
+            rows.append({'item': f['formId'], 'value': value, 'valueFrom': source,
+                         'buy': max(_menu_round(buy), value), 'sell': min(_menu_round(sell), value),
                          'perksOnBuy': (perk or {}).get('appliedEntries')})
         return verdict('Barter %s: buy x%.3f, sell x%.3f' % (skill, buy_mult, sell_mult),
-                       'Multipliers from GetSkillPriceMultipliers(Barter skill) 0x00649050 (the settings it reads '
-                       'are live); buy price through ApplyPerkModifiers entry point 17 (the barter menu does the '
-                       'same, BarterMenu 0x0072ED00); rounding to 1 (or 0.1 under 1) as the menu. Item condition and '
-                       'a vendor\'s disposition change are not applied.', barterSkill=skill, buyMultiplier=buy_mult,
-                       sellMultiplier=sell_mult, vendor=vendor, items=rows)
+                       'As the barter menu prices an item (0x0072ED00): value from the player\'s inventory entry '
+                       '(0x004BD400, with condition and weapon mods) or the form (0x0048E8A0, for items not carried), '
+                       'x GetSkillPriceMultipliers(Barter skill) 0x00649050, buy price through perk entry point 17, '
+                       'rounded half up (0x004BD510), buy held at or over the value and sell at or under it. Not '
+                       'applied: the modifier a script passes when it opens the menu (usually 0).',
+                       barterSkill=skill, buyMultiplier=buy_mult, sellMultiplier=sell_mult, vendor=vendor, items=rows)
 
     def zone(self, zone):
         """An encounter zone: the level the game uses now (GetCalculatedLevel 0x00526190), its minimum and maximum,

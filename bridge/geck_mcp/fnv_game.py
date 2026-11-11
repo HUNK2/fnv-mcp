@@ -354,43 +354,9 @@ class Game:
         if not mo2.exists():
             raise GameError('MO2_MISSING', 'ModOrganizer.exe not found in %s' % self.mo2_root)
         kind, value = parse_start(start, self.saves_dir)
-        ini_restore = self._set_starting_cell(value) if kind == 'cell' else None
-        try:
-            return self._launch(start, timeout, kind, value, ini_restore)
-        finally:
-            if ini_restore is not None:
-                ini_restore()
+        return self._launch(start, timeout, kind, value)
 
-    def _set_starting_cell(self, cell):
-        """Write SStartingCell into the dev profile's Fallout.ini ([General]), keeping the old text to put back once
-        the game is up: the engine reads it at start (Main_InitStartCell 0x00876DD0) and loads that cell with no
-        main menu. Only the dev profile is touched."""
-        ini = self.mo2_root / 'profiles' / self.profile / 'Fallout.ini'
-        if not ini.is_file():
-            raise GameError('NO_PROFILE_INI', 'The dev profile has no Fallout.ini (%s).' % ini)
-        old = ini.read_bytes()
-        text = old.decode('cp1252', 'replace')
-        lines = text.replace('\r\n', '\n').split('\n')
-        out, done = [], False
-        for line in lines:
-            if line.split('=', 1)[0].strip().lower() == 'sstartingcell':
-                out.append('SStartingCell=%s' % cell)
-                done = True
-            else:
-                out.append(line)
-        if not done:
-            at = next((i for i, l in enumerate(out) if l.strip().lower() == '[general]'), None)
-            if at is None:
-                out = ['[General]', 'SStartingCell=%s' % cell] + out
-            else:
-                out.insert(at + 1, 'SStartingCell=%s' % cell)
-        ini.write_bytes('\r\n'.join(out).encode('cp1252'))
-
-        def restore():
-            ini.write_bytes(old)
-        return restore
-
-    def _launch(self, start, timeout, kind, value, ini_restore):
+    def _launch(self, start, timeout, kind, value):
         mo2 = self.mo2_root / 'ModOrganizer.exe'
         leftover = self.close_stale_mo2()
         stale = self.clear_stale_mo2_state()
@@ -427,16 +393,6 @@ class Game:
         self._wait(lambda: (self.ping().get('deferredInit') or None), deadline, 'COMPANION_NOT_READY',
                    'The engine companion did not answer (is it installed and enabled in the dev profile?)', pid)
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'companion_ready'})
-        if kind == 'cell':
-            # The engine loads SStartingCell itself: no main menu; the INI goes back once gameplay is reached.
-            result = self.wait_in_game(deadline, pid, start='cell:%s' % value)
-            ini_restore()
-            timeline.append({'t': round(time.time() - launched, 1), 'event': 'ini_restored'})
-            result['how'] = 'SStartingCell in the dev profile INI (read at start by Main_InitStartCell 0x00876DD0); ' \
-                            'the INI was put back after arrival'
-            timeline.append({'t': round(time.time() - launched, 1), 'event': 'ready', 'phase': result['phase']})
-            self.save_session(ready=True)
-            return {**result, 'pid': pid, 'timeline': timeline, 'seconds': round(time.time() - launched, 1)}
         self._wait(lambda: self.phase()[0] == 'main_menu' or None, deadline, 'NO_MAIN_MENU', 'Main menu not reached', pid)
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'main_menu'})
         result = self.start_from_menu(kind, value, deadline, pid)
@@ -771,9 +727,14 @@ def parse_start(start, saves_dir):
         if not (Path(saves_dir) / (value + '.fos')).exists():
             raise GameError('SAVE_MISSING', 'No save %s.fos in %s' % (value, saves_dir))
         return 'save', value
-    if kind in ('coc', 'cell'):
+    if kind == 'cell':
+        # Tried 2026-11-12: SStartingCell in the INI makes the retail engine crash during startup in every cell
+        # (TES::LoadInterior -> LoadingMenu setup 0x00788AB0 -> Tile::Set on InterfaceManager's root tile, still null
+        # because the main menu has not built it yet).
+        raise GameError('CELL_START_UNSUPPORTED', 'Starting straight in a cell (SStartingCell) crashes the game at '
+                        'startup; use coc:%s, which goes through the main menu' % value, {'use': 'coc:%s' % value})
+    if kind == 'coc':
         if not CELL_NAME.match(value):
             raise GameError('BAD_CELL', 'A cell is given by its EditorID (letters, digits, _)')
         return kind, value
-    raise GameError('BAD_START', 'start must be menu, continue, save:<name>, coc:<cell EditorID> or '
-                                 'cell:<interior cell EditorID>')
+    raise GameError('BAD_START', 'start must be menu, continue, save:<name> or coc:<cell EditorID>')

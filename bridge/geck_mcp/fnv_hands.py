@@ -23,7 +23,7 @@ from .fnv_live import LiveError
 PLAYER = 0x011DEA3C
 CONTROLS_DISABLED = 0x680
 MENU_ARRAY = 0x011F3508
-TEXT_EDIT_MENU, NAME_ENTRY_FINISH = 1051, 0x007AB9A0
+TEXT_EDIT_MENU, TEXT_EDIT_SINGLETON, TEXT_EDIT_CLICK = 1051, 0x011DAEC4, 0x007E66A0
 TILEMENU_MENU = 0x3C
 TRAIT_ID, TRAIT_STRING = 0xFAA, 0xFC4
 CAN_FAST_TRAVEL, FAST_TRAVEL = 0x0093D660, 0x0093CDF0
@@ -882,21 +882,25 @@ class HandsTools:
         raise ValueError('action is click, button, wait, sleep, fast_travel, message, close, back or type')
 
     def type_text(self, text):
-        """Enter text in the game's text entry (TextEditMenu 1051: the character name) the way its Done button does:
-        PlayerNameEntryMenu::Finish(text) 0x007AB9A0 sets the name and closes the menu. Other text fields of New
-        Vegas are console text (fnv_console)."""
+        """Enter text in the game's text entry (TextEditMenu 1051) the way its Done button does: the text goes into
+        the menu's own string (+0x34), then the menu's click handler 0x007E66A0 runs for the Done tile (id 1), which
+        copies it to the text-entry result (0x011DAED8) and closes the menu. The menu that asked (the player name
+        entry) takes the result on its next update. Other text fields of New Vegas are console text (fnv_console)."""
         if not text:
             raise LiveError('BAD_ARGUMENTS', 'type needs label (the text to enter).')
         self.live.in_game()
-        tile = self.live.u32s([MENU_ARRAY + 4 * (TEXT_EDIT_MENU - 0x3E9)])[0]
-        menu = self.live.u32s([tile + TILEMENU_MENU])[0] if tile else 0
+        menu = self.live.u32s([TEXT_EDIT_SINGLETON])[0]
         if not menu:
             raise LiveError('NO_TEXT_ENTRY', 'No text entry menu is open (TextEditMenu, 1051). New Vegas asks for text '
                                              'only when naming the character; console text goes through fnv_console.')
+        data = str(text)[:60].encode('cp1252', 'replace')
         self.live.changing('ui type')
-        self.live.engine_call('0x%08X' % NAME_ENTRY_FINISH, '0x%08X' % menu,
-                              [{'type': 'string', 'value': str(text)[:60]}], 'int', 'thiscall', True)
+        buf = self.live.scratch(data + b'\0')          # game heap: the menu's string frees it with the menu
+        self.live.link.write(menu + 0x34, struct.pack('<IHH', buf, len(data), len(data) + 1))
+        self.live.engine_call('0x%08X' % TEXT_EDIT_CLICK, '0x%08X' % menu,
+                              [{'type': 'int', 'value': 1}, {'type': 'int', 'value': 0}], 'void', 'thiscall', True)
         self._frames(5)
-        return {'typed': str(text)[:60], 'menu': '0x%08X' % menu,
-                'how': 'PlayerNameEntryMenu::Finish 0x007AB9A0 on the open TextEditMenu: the text the Done button '
-                       'would take (the player\'s name), then the menu closes'}
+        still = bool(self.live.u32s([TEXT_EDIT_SINGLETON])[0])
+        return {'typed': data.decode('cp1252'), 'menu': '0x%08X' % menu, 'closed': not still,
+                'how': 'the TextEditMenu string (+0x34) set, then its Done click (0x007E66A0, tile id 1): the result '
+                       'goes to 0x011DAED8 and the menu that asked (player name entry) takes it on its next update'}

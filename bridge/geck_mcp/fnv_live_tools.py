@@ -123,7 +123,7 @@ FNV_LIVE_TOOLS = {
     'fnv_patch': ('act', "write bytes, NOPs, ret or jmp/call into the game's code, journaled, checked against the clean exe"),
     'fnv_tracepoint': ('read', 'record calls of a function when conditions hold: arguments as objects, caller, call stack'),
     'fnv_engine_get': ('read', 'call a proven read-only engine getter with typed arguments (no full control needed)'),
-    'fnv_globals': ('read', 'global variables from the data handler, filtered; set values (journaled)'),
+    'fnv_globals': ('act', 'global variables from the data handler, filtered; set values (journaled)'),
     'fnv_dialogue': ('read', 'the conversation now: speaker, spoken topic and line, the choices shown and their state'),
     'fnv_heap': ('read', "memory: the 2 GB address space, the game's pools, form and actor counts, growth over time"),
     'fnv_world_edit': ('act', 'move, rotate, scale, enable, disable, delete or duplicate a ref; weather; image space'),
@@ -158,7 +158,7 @@ FNV_LIVE_TOOLS = {
     'fnv_camera': ('act', "the camera: get the view, set a free camera at a position and direction or looking at a ref, orbit a ref (fit to its size), switch first/third person, restore the player's view"),
     'fnv_look': ('read', 'the screen as data: references in view, largest first, with screen rectangles, distance, line of sight and flags, plus the crosshair, prompt, corner message, subtitle and open menus'),
     'fnv_photo': ('act', 'pictures: a reference from set angles in one sheet (world paused, view restored), the cell from above and the corners, the view with labels, a frame-exact film strip, a compare against an earlier image'),
-    'fnv_hud': ('read', 'the HUD: mode, visible parts, crosshair ref and prompt, the corner message and the queue, subtitle; post shows a corner message'),
+    'fnv_hud': ('act', 'the HUD: mode, visible parts, crosshair ref and prompt, the corner message and the queue, subtitle; post shows a corner message'),
     'fnv_visibility': ('read', 'why a reference does not draw: no 3D, disabled, deleted, culled, zero scale, first person, other cell, outside the view or behind something'),
     # Plan 2 wave 3: hands
     'fnv_play': ('act', 'play as a player: goto a ref or position on foot (route around walls, through doors), look_at, activate with the reason when refused, talk, item actions, stop'),
@@ -176,7 +176,7 @@ FNV_LIVE_TOOLS = {
     'fnv_coverage': ('act', 'which decomp source lines ran during a scenario: one-shot traps at every line start, then lines run and never run per file and function; diff two runs'),
     'fnv_anim': ('act', 'animation of an actor: current and queued groups with their sequences, every group it has, the idle the engine would pick and why others fail, equipment slots, face values, animation actions over time; play a group or an idle'),
     'fnv_audio': ('act', 'sounds playing now and every sound created for a while (form or file, and who asked); play and stop; music channels and why; radio stations; subtitles shown; would a sound be heard; voice and lip files of an NPC\'s lines'),
-    'fnv_physics': ('read', 'character controller of an actor (state, fall time and distance), the Havok body of a reference with its velocity (and set it), trigger enter and leave events, projectiles in flight, is a spot free, collision layers'),
+    'fnv_physics': ('act', 'character controller of an actor (state, fall time and distance), the Havok body of a reference with its velocity (and set it), trigger enter and leave events, projectiles in flight, is a spot free, collision layers'),
     'fnv_systems': ('read', 'call game formulas (catalog or any function) and sweep an argument; level and XP progression; hardcore needs; can a perk be taken and why not; barter prices; encounter zone levels; karma'),
     'fnv_replay': ('control', 'record the input sent through the bridge frame by frame from a save, and play it again frame-exact under the frame gate'),
     'fnv_render': ('act', 'render toggles that still work in retail (wireframe, sky, grass, trees, LOD, menus, borders, trigger volumes, collision, test light...), image-space modifiers, shader reload, the scene lights'),
@@ -311,10 +311,8 @@ def register(server, project, annotations, result_type):
 
     Ref = Annotated[str, Field(min_length=1, max_length=200, description=(
         'player | crosshair | form id (0x00000014, 000A3E7C) | Plugin.esp:LOCALID | EditorID'))]
-    Start = Annotated[str, Field(pattern=r'^(menu|continue|save:[A-Za-z0-9_. \-]{1,120}|(coc|cell):[A-Za-z0-9_]{1,120})$',
-                                 description='menu | continue (newest dev save) | save:<name> | coc:<cell EditorID> '
-                                             '(through the main menu) | cell:<interior cell EditorID> (straight in, '
-                                             'no main menu: SStartingCell)')]
+    Start = Annotated[str, Field(pattern=r'^(menu|continue|save:[A-Za-z0-9_. \-]{1,120}|coc:[A-Za-z0-9_]{1,120})$',
+                                 description='menu | continue (newest dev save) | save:<name> | coc:<cell EditorID>')]
 
     # ------------------------------------------------------------------ milestone 4
     @server.tool(annotations=read)
@@ -1173,7 +1171,7 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_engine_get', lambda: control_tools.engine_get(function, this, args))
 
     # ------------------------------------------------------------------ phase 2: world, UI, memory
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_globals(query: Annotated[str, Field(max_length=120)] | None = None,
                           set: dict[Annotated[str, Field(min_length=1, max_length=120)], float] | None = None,
                           limit: Annotated[int, Field(ge=1, le=2000)] = 200) -> result_type:
@@ -1826,7 +1824,7 @@ def register(server, project, annotations, result_type):
                                                             every=every, baseline=baseline, name=name,
                                                             distance=distance), 'act')
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_hud(action: Literal['read', 'post'] = 'read',
                       text: Annotated[str, Field(max_length=250)] | None = None,
                       seconds: Annotated[float, Field(gt=0, le=30)] = 3.0) -> result_type:
@@ -2083,17 +2081,18 @@ def register(server, project, annotations, result_type):
         reference. playing: every sound the audio manager holds (file, form, 2D/3D, loop, volume, position, state).
         stop sound|sound_id. music: the two music channels, what plays and its media type, the location controller
         and media set behind it; file=<path> forces a track, stop=true fades music out. radio [enable]: stations,
-        signal, the current one; enable turns the radio on or off. subtitles seconds: subtitle lines shown, with
+        signal, the current one; enable turns the radio on or off. subtitles seconds [enable]: subtitle lines shown, with
         speaker. hear sound position=[x,y,z]: whether the engine would play it there (its distance test).
         voice_check ref: for each line of an NPC the voice and lip files the engine asks for, and whether they
         exist (same as fnv_crawl dialogue)."""
-        acts = ('play', 'stop') + (('music',) if file or stop else ()) + (('radio',) if enable is not None else ())
+        acts = ('play', 'stop') + (('music',) if file or stop else ()) + (('radio',) if enable is not None else ()) \
+            + (('subtitles',) if enable else ())
         return await invoke('fnv_audio', lambda: audio_tools.run(action, seconds=seconds, sound=sound, ref=ref,
                                                                  sound_id=sound_id, file=file, stop=stop,
                                                                  fade_ms=fade_ms, enable=enable, position=position),
                             'act' if action in acts else 'read')
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_physics(action: Literal['controller', 'body', 'set', 'triggers', 'projectiles', 'query', 'layers'],
                           ref: Ref | None = None,
                           velocity: list[float] | None = None,

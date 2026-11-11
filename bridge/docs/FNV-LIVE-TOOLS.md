@@ -528,8 +528,9 @@ How:
   waiting is allowed there; the hours then run through the engine's own one-hour wait (`fnv_time`).
 - `fast_travel` asks `CanFastTravel` 0x0093D660 first (its refusal message is the reason), then
   `FastTravel(marker)` 0x0093CDF0.
-- `type`: the character name entry (TextEditMenu 1051) through PlayerNameEntryMenu::Finish 0x007AB9A0; New Vegas
-  asks for no other menu text (see "Plan 2 completion pass").
+- `type`: the text entry menu (TextEditMenu 1051, the character name): its string (+0x34) set, then its Done click
+  0x007E66A0 (tile 1), which copies the text to 0x011DAED8 for the menu that asked; New Vegas asks for no other menu
+  text (see "Live checks of the leftovers").
 - Doors: path-pick rays pass through door collision, so a closed door is not in the plan (seen live). When the walk
   stops gaining ground with a closed, non-load door within 140 units ahead, `goto` opens it and plans again through
   the door's centre. Checked live: the bathroom door of Prospector Saloon opened on the way. Not solved: a door that
@@ -981,8 +982,10 @@ Everything the waves left as "not built" was built or decided against; each item
   is on (`fnv_render toggle debug_text`); `marker`, `clear`.
 - `fnv_replay`: two held controls recorded with their frames from a save, replayed under the frame gate: the player
   ended within 2 units of the recorded position.
-- `fnv_launch start=cell:<interior EditorID>`: SStartingCell in the dev profile's INI for the start, put back after
-  arrival (not run: the MCP server still served the old schema). Intros were already skipped (SIntroSequence blank).
+- `fnv_launch start=cell:<interior EditorID>` (SStartingCell in the INI): run 2026-11-12, crashed the game at startup
+  in every cell tried (HelloWasteland, GSProspectorSaloonInterior): TES::LoadInterior -> LoadingMenu setup 0x00788AB0
+  -> Tile::Set on InterfaceManager's root tile, still null before the main menu builds it. Removed; `coc:` goes
+  through the main menu. Intros were already skipped (SIntroSequence blank).
 - `fnv_ui_do type`: not run (no name entry menu could be opened without a new game).
 
 **Whole-plugin checks**
@@ -1325,3 +1328,57 @@ Dialogue, AI packages and live diffs (2026-11-07, a fresh game started in the Pr
 - xNVSE's menu ids, `Tile` / `Tile::Value` layouts and the data handler address (`g_dataHandler`), used by
   `fnv_menu` and `fnv_script_instances` (offsets and names only).
 - The Fallout: New Vegas decompilation and fnvsym's proof table: addresses, layouts and proven names.
+
+## Live checks of the leftovers (2026-11-12)
+
+Every item the completion pass left as "built, checked offline" was run in the game (Prospector Saloon, the Hello
+plugins). Five were wrong and are fixed; one was removed. Tests: 858 pass.
+
+- `fnv_launch start=cell:` **removed**. SStartingCell in the INI crashes the retail game at startup in every cell
+  tried (a plugin interior and GSProspectorSaloonInterior): TES::LoadInterior -> LoadingMenu setup 0x00788AB0 ->
+  Tile::Set on InterfaceManager's root tile, still null because the main menu builds it. `coc:` (through the main
+  menu) reaches a cell in 11 s. A `cell:` start now answers CELL_START_UNSUPPORTED with the `coc:` to use.
+- `fnv_ui_do type` **fixed**: calling PlayerNameEntryMenu::Finish 0x007AB9A0 on the TextEditMenu crashed the game
+  (Finish belongs to the name entry menu object, whose +0x28 is the player's NPC). The TextEditMenu is generic: its
+  Done handler 0x007E66A0 copies its string (+0x34) to 0x011DAED8 and closes it, and the name entry menu takes the
+  text on its next update (PlayerNameEntryMenu::UpdateDialog 0x007AB7E0). Run: the menu opened through the engine's
+  queue (9 written to 0x011D8950, HandleQueuedMenuOpen builds "Player Name Entry Menu"), `type` "Courier Six", the
+  menu closed and the player's base form is named Courier Six.
+- `fnv_anim idle_tree` **fixed** (was approximate and wrong: it named SpecialIdle_Shrug for every actor). The answer
+  now is the engine's own IdleAnimationManager::FindIdleFormForObject 0x00600950 (what HighProcess::StartIdleAnimation
+  0x008DAB40 asks), with the actor's replay delays (animation +0x134). The walk uses the same folder as the engine:
+  TESObjectREFR::GetModelFilePath 0x005715D0 -> BuildIdlePath 0x006007F0 -> GetFormArrayForIdleDir 0x00600560 (20
+  roots for a male NPC, not the one-entry array GetIdleArray gives for the base form). Seen: Easy Pete (sitting) 0006F8C1
+  from engine and walk alike; Sunny and a settler "no idle": the walk reaches a group with no file of its own, which
+  the engine's last check drops (reported as walkAnswer with a note).
+- `fnv_systems barter` **fixed** and compared with open barter menus: 28 of 28 prices equal (14 the player sells to
+  Sunny, 14 Trudy sells). The value now comes from the player's inventory entry (ExtraContainerChanges via
+  GetByType 0x00410220; entry value 0x004BD400 with condition and weapon mods: a worn 10mm pistol is 1,197, not
+  1,200) or, for items not carried, the form (0x0048E8A0, which also prices ingestibles; the console's GetValue
+  gives 0 for them). Rounding is half up (0x004BD510; Python's round() is not), and the menu holds a buy price at or
+  over the value and a sell price at or under it (0x0072ED00).
+- `fnv_code compare mode=shadow` **fixed** and run: FUN_00404010 (max of two floats): 200 live calls in 3 s, 39
+  distinct, all agree; with max turned into min, 37 of 38 differ (original 5, new 1 for 1 and 5). The replay passed
+  the recorded ecx as `this` to every function, which a cdecl function takes as an extra first argument (the
+  originals then read 32916.06 for max(1, 5)); `this` now goes only to thiscall and fastcall functions.
+- Short-function swaps run: FUN_00a62660 (4 bytes, an NiTexture getter): 19 call sites and 3 vtable slots
+  redirected, frames kept coming, unswap put all 22 back (checked byte by byte). **Fixed**: the swap list lived only in
+  the bridge process, so a restarted MCP server could not undo a swap the game still had. It is now kept in the
+  bridge state (`fnv/code/swaps.json`) with the game's pid and start time; a new game process starts empty.
+- `fnv_script_debug step over|line|out` run on HelloBugQuestScript and VCG01SCRIPT. `out` **fixed**: the script
+  runner is a stack object, so scripts the game runs one after another reuse its address and "a different runner"
+  never came (4,096 statements, then STEP_LIMIT). A run now also ends when another script runs or the same script
+  starts again (its offset goes back). Also **fixed**: after the last break was cleared the EvaluateLine hook stayed,
+  recording every statement of every script for the rest of the session (1.46 million records seen); it is now
+  removed unless `fnv_script_log commands` started it. Breaks and the stop live in the server process: a restarted
+  server drops its hooks (a held game resumes). Inside a block the runner skips (a MenuMode block outside that menu)
+  the stop's opcode field showed the previous statement's opcode; the line mapping was right.
+- `fnv_audio subtitles`: a spoken line outside dialogue gets a subtitle only when General Subtitles is on
+  (bGeneralSubtitles 0x011D8928, value at +4, off by default; VoiceHost::PlayVoiceTopic 0x00578A80 checks it). The
+  result now says when it is off, and `enable=true` turns it on for the recording only (seen on, then back to 0). No
+  subtitle was caught: after Sunny's first Say (her greeting voice file played), no NPC spoke again on Say or SayTo
+  (PlayVoiceTopic was never called; the hooks themselves recorded 752 calls of a test function), so the capture of a
+  subtitle is still not seen.
+- `fnv_asset reload .kf` with `ref=`: Sunny's animation object was rebuilt (0x1C5D2888 -> 0x1B293158) with her 287
+  groups; without `ref` only unused copies are dropped.
+- Still to run: `fnv_bisect` (mods, then records), from the MCP server once it serves the new tool list.

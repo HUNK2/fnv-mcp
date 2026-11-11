@@ -111,6 +111,37 @@ class BarterRoundingTests(unittest.TestCase):
         self.assertEqual(fnv_inspect._menu_round(12.6), 13)
         self.assertEqual(fnv_inspect._menu_round(0.46), 0.5)
 
+    def test_halves_round_up_like_the_menu(self):
+        # RoundToNearestStep 0x004BD510 rounds half up (Python's round() would give 2 and 0.2).
+        self.assertEqual(fnv_inspect._menu_round(2.5), 3)
+        self.assertEqual(fnv_inspect._menu_round(0.25), 0.3)
+        self.assertEqual(fnv_inspect._menu_round(620.4), 620)
+
+
+class LaunchStartTests(unittest.TestCase):
+    def test_cell_start_is_refused_with_the_coc_alternative(self):
+        from geck_mcp.fnv_game import GameError, parse_start
+        with self.assertRaises(GameError) as caught:
+            parse_start('cell:HelloWasteland', '.')
+        self.assertEqual(caught.exception.code, 'CELL_START_UNSUPPORTED')
+        self.assertEqual(caught.exception.evidence['use'], 'coc:HelloWasteland')
+        self.assertEqual(parse_start('coc:HelloWasteland', '.'), ('coc', 'HelloWasteland'))
+
+
+class SwapListTests(unittest.TestCase):
+    def tools(self, state, game):
+        live = SimpleNamespace(project=SimpleNamespace(state_dir=state), game=SimpleNamespace(process=lambda: game))
+        return fnv_code.CodeTools(live)
+
+    def test_swaps_survive_a_new_server_for_the_same_game_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            first = self.tools(d, (1234, 99))
+            first.swaps[0x00A62660] = {'function': '0x00A62660', 'blob': 1, 'old': None, 'size': 4, 'sites': []}
+            first._save_swaps()
+            self.assertIn(0x00A62660, self.tools(d, (1234, 99)).swaps)      # restarted server, same game
+            self.assertEqual(self.tools(d, (1234, 100)).swaps, {})          # a new game process: unpatched code
+            self.assertEqual(self.tools(d, None).swaps, {})                 # no game
+
 
 class CodeLinkTests(unittest.TestCase):
     def test_orig_relocation_binds_to_the_trampoline(self):

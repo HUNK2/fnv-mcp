@@ -76,6 +76,7 @@ class EvalHook:
         self.live = live
         self.hook_id = None
         self.holding = False            # a hold predicate is set (breaks armed); the companion has no release
+        self.log_on = False             # fnv_script_log commands mode=start asked for the ring: keep the hook
 
     @property
     def link(self):
@@ -232,10 +233,14 @@ class ScriptDebugger:
         return verdict('Cleared %d script break(s).' % len(cleared), None, cleared=cleared)
 
     def _arm(self):
-        """Hold and filter of the shared hook follow the breaks; with no break the hook keeps only its record ring."""
+        """Hold and filter of the shared hook follow the breaks. With no break left the hook goes (it would record every
+        statement of every script for the rest of the session), unless the statement log asked for its ring."""
         if not self.breaks:
-            if self.eval.holding:
-                self.eval.reset()
+            if self.eval.log_on:
+                if self.eval.holding:
+                    self.eval.reset()
+            else:
+                self.eval.remove()
             return
         self.eval.ensure()
         parts = []
@@ -521,7 +526,7 @@ class ScriptDebugger:
         self.eval.filter(SELECTORS['none'], 0)
         self.eval.hold(compile_predicate('1')['hex'])
         try:
-            cur = stop
+            cur, last = stop, here['offset']
             for _ in range(STEP_LIMIT):
                 self.dbg._resume(cur, 'run')
                 new = self._await_ours(cur['seq'])
@@ -529,12 +534,15 @@ class ScriptDebugger:
                     return verdict('No statement ran within %d s after this run.' % STOP_WAIT,
                                    'The game runs on; status shows where it is.', state='running')
                 st = self._state(new)
-                if st['runner'] != here['runner']:
+                # The runner is a stack object: scripts the game runs one after another reuse its address, so a run
+                # also ends when another script runs or this one starts again (its offset goes back; a loop's jump
+                # back looks the same).
+                if st['runner'] != here['runner'] or st['script'] != here['script'] or st['offset'] < last:
                     view = self._view(new)['stop']
                     return verdict('Stepped out to %s line %s.' % (view.get('script'), view.get('line')),
                                    'The first statement outside the run that was stopped (its caller after a '
                                    'function, else the next script the game ran).', stop=view)
-                cur = new
+                cur, last = new, st['offset']
         finally:
             self._arm()
         raise ConvError('STEP_LIMIT', 'The run did not end within %d statements. Next: continue.' % STEP_LIMIT)
@@ -641,6 +649,7 @@ class ScriptLog:
     def commands(self, mode, script, ref, opcode, since, limit):
         if mode == 'start':
             self.eval.ensure()
+            self.eval.log_on = True
             return verdict('The statement log is on.', 'Every statement of every script is recorded in a ring of 200 '
                            'records; read it with mode read.', armed=True)
         if mode == 'stop':
@@ -648,6 +657,7 @@ class ScriptLog:
                 return verdict('Breaks from fnv_script_debug still use the statement hook; it stays on.',
                                'Clear the breaks first, then stop the log.', armed=True)
             self.eval.remove()
+            self.eval.log_on = False
             return verdict('The statement log is off.', None, armed=False)
         if mode != 'read':
             raise ConvError('BAD_ARGUMENTS', 'mode must be start, read or stop.')

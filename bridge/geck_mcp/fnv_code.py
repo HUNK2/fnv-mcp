@@ -55,11 +55,43 @@ SHADOW_ARGS = 8
 class CodeTools:
     def __init__(self, live):
         self.live = live
-        self.swaps = {}            # address -> {name, blob, old, size}
+        self._swaps = {}           # address -> {function, blob, old, size[, sites]}; see swaps
+        self._swaps_game = False   # the game process the swap list belongs to (False: not read yet)
         self.placed = {}           # address -> blob address (placed for compare, not redirected)
         self._units = None
         self._names = None
         self._coff = None
+
+    # ------------------------------------------------------------------ swap list
+    @property
+    def swaps(self):
+        """Active swaps of the running game. Kept in the bridge state (swaps.json) with the game's pid and start
+        time, so a restarted MCP server can still list and undo the swaps it made; a new game process starts empty
+        (its code is unpatched)."""
+        game = self._game_id()
+        if game != self._swaps_game:
+            self._swaps_game = game
+            self._swaps = {}
+            try:
+                data = json.loads((self.work / 'swaps.json').read_text(encoding='utf-8'))
+                if game and data.get('game') == game:
+                    self._swaps = {int(k, 16): v for k, v in data.get('swaps', {}).items()}
+            except (OSError, ValueError):
+                pass
+        return self._swaps
+
+    def _save_swaps(self):
+        self.work.mkdir(parents=True, exist_ok=True)
+        (self.work / 'swaps.json').write_text(json.dumps(
+            {'game': self._swaps_game, 'swaps': {'0x%08X' % k: v for k, v in self._swaps.items()}}, indent=1),
+            encoding='utf-8')
+
+    def _game_id(self):
+        try:
+            proc = self.live.game.process()
+        except Exception:  # noqa: BLE001 - no game (or several): nothing is swapped in it
+            return None
+        return '%d:%s' % proc if proc else None
 
     # ------------------------------------------------------------------ decomp access
     @property
@@ -362,6 +394,7 @@ class CodeTools:
                                 'slot of it was found to redirect.')
             self.swaps[address] = {'function': function, 'blob': base, 'old': None, 'size': link['size'],
                                    'sites': sites}
+            self._save_swaps()
             self.live.journal.add({'kind': 'code_swap', 'function': function, 'address': '0x%08X' % address,
                                    'undo': None})
             return verdict('Swapped %s at %d call sites and vtable slots (the function is %d bytes, too short for a '
@@ -375,6 +408,7 @@ class CodeTools:
         if not out.get('ok'):
             raise ConvError('WRITE_FAILED', 'Could not redirect the entry (%s).' % out.get('error'))
         self.swaps[address] = {'function': function, 'blob': base, 'old': out['old'], 'size': link['size']}
+        self._save_swaps()
         self.live.journal.add({'kind': 'code_swap', 'function': function, 'address': '0x%08X' % address,
                                'undo': None})
         return verdict('Swapped %s: 0x%08X now runs the new code at 0x%08X' % (function, address, base),
@@ -433,6 +467,7 @@ class CodeTools:
         done = []
         for address in targets:
             s = self.swaps.pop(address)
+            self._save_swaps()
             for site in s.get('sites') or []:
                 self.live.link.one('code', 'patch', word(site['at']), site['old'])
             if s.get('old'):
@@ -486,33 +521,40 @@ class CodeTools:
             base = self._place(address, link)
             self.placed[address] = base
         calls = [r for r in recs if r[1] == 2][:limit]          # exit records carry the result
+        # The record hook always keeps ecx; it is `this` only for a thiscall function (a cdecl one would get it as
+        # an extra first argument). Same rule as engine_call: the decomp signature.
+        try:
+            _, record, signature, _ = self.live._signature('0x%08X' % address)
+        except Exception:  # noqa: BLE001
+            record, signature = {}, ''
+        conv = next((c for c in ('thiscall', 'fastcall', 'stdcall', 'cdecl') if '__' + c in signature), None)             or ('thiscall' if '::' in (record.get('name') or '') else 'cdecl')
+        uses_this = conv in ('thiscall', 'fastcall')
         rows, same, seen = [], 0, set()
         for r in calls:
             args = list(r[12:12 + n])
-            key = (r[3], tuple(args))
+            this = ('0x%08X' % r[3] if r[3] else None) if uses_this else None
+            key = (r[3] if uses_this else None, tuple(args))
             if key in seen:
                 continue
             seen.add(key)
             typed = [{'type': 'int', 'value': a} for a in args]
-            new = self.live.engine_call('0x%08X' % base, '0x%08X' % r[3] if r[3] else None, typed, returns, None,
-                                        True)
+            new = self.live.engine_call('0x%08X' % base, this, typed, returns, conv, True)
             old_value = r[8] if returns != 'float' else None
             new_value = new.get('result')
             if returns == 'float':
-                old = self.live.engine_call('0x%08X' % address, '0x%08X' % r[3] if r[3] else None, typed, returns,
-                                            None, True)
+                old = self.live.engine_call('0x%08X' % address, this, typed, returns, conv, True)
                 old_value = old.get('result')
             match = old_value == new_value if returns == 'float' else (int(new_value or 0) & 0xFFFFFFFF) == old_value
             same += bool(match)
             if not match:
-                rows.append({'args': ['0x%08X' % a for a in args], 'this': '0x%08X' % r[3] if r[3] else None,
+                rows.append({'args': ['0x%08X' % a for a in args], 'this': this,
                              'original': old_value, 'new': new_value})
         return verdict('%d distinct live calls replayed on the new code: %d agree, %d differ' % (
             len(seen), same, len(seen) - same),
             'A record hook on the original caught the game\'s own calls for %s s (arguments, this, and the result '
             'at exit); each was run again on the new code (and, for float results, on the original) with the same '
             'arguments. Only meaningful for pure functions.' % seconds, function=function, calls=len(calls),
-            distinct=len(seen), agree=same, mismatches=rows[:50], blob='0x%08X' % base)
+            distinct=len(seen), agree=same, convention=conv, mismatches=rows[:50], blob='0x%08X' % base)
 
     @staticmethod
     def _convention(call_result):
