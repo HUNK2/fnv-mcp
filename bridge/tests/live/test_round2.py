@@ -49,7 +49,6 @@ class Round2Tests(LiveCase):
             self.call('fnv_undo')
         self.assertTrue(before)
 
-    @unittest.expectedFailure                     # G11: open
     def test_g11_hook_limit_counts(self):
         self.ok('fnv_hook_set', function='Actor::GetLevel', action='result', value=7, value_type='int', limit=5)
         try:
@@ -64,7 +63,6 @@ class Round2Tests(LiveCase):
         self.assertEqual(self.code('fnv_mem_write', target='player', value=300, as_type='u8'),
                          'INVALID_ARGUMENT')
 
-    @unittest.expectedFailure                     # G13: open
     def test_g13_break_clear_name(self):
         self.ok('fnv_debug', action='break', op='set', location='Actor::GetLevel', thread='any')
         try:

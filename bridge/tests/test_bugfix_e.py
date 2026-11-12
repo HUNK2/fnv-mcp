@@ -57,12 +57,21 @@ class DebuggerFixes(DebugTestBase):
         self.assertEqual(out['resumed'], [1001, 1002])
         self.assertFalse(ProcState(self.live).load('dbg_frozen', 1234, 0))
 
-    def test_e6_thaw_with_nothing_on_record_resumes_every_thread(self):
+    def test_e6_thaw_with_nothing_on_record_resumes_a_stalled_game(self):
         proc = frozen_process()
+        proc.read.return_value = b'\x10\x00\x00\x00'     # the frame counter stands still (S6.3: only then)
         with mock.patch('geck_mcp.fnv_procmem.GameProcess', return_value=proc):
             out = self.run_tool('thaw')
         proc.resume_all.assert_called_once_with([1000, 1001, 1002])
         self.assertTrue(out['forced'])
+
+    def test_e6_thaw_with_nothing_on_record_leaves_a_running_game(self):
+        proc = frozen_process()
+        proc.read.side_effect = [b'\x10\x00\x00\x00', b'\x40\x00\x00\x00']    # frames advance
+        with mock.patch('geck_mcp.fnv_procmem.GameProcess', return_value=proc):
+            out = self.run_tool('thaw')
+        proc.resume_all.assert_not_called()
+        self.assertFalse(out['forced'])
 
     def test_e6_a_record_of_another_game_process_is_ignored(self):
         ProcState(self.live).save('dbg_frozen', 999, 0, [1, 2])

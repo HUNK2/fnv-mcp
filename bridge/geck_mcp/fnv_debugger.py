@@ -193,6 +193,7 @@ class Debugger:
         self.next_number = max([int(saved.get('next') or 1)] + [n + 1 for n in self.breaks])
         self.frozen = [int(t) for t in (self.state.load('dbg_frozen', self.pid, self.start) or [])]
         self.pending_to = {int(a) for a in (self.state.load('dbg_pending_to', self.pid, self.start) or [])}
+        self.stop_breaks = {}      # stop seqs start again in a new game process (S6 review A M5)
 
     # ================================================================ entry point
     def run(self, action, **args):
@@ -286,6 +287,10 @@ class Debugger:
                             'fnv_status; if the companion is old, call fnv_companion_install.'
                             % (result.get('error') or 'no reason given'), result)
         stops = sorted(result['stops'], key=lambda s: s['seq'])
+        reached = {_addr(s['eip']) for s in stops if s.get('kind') == 'step' and s.get('eip')} & self.pending_to
+        if reached:     # the companion consumed these `to` sites when the thread got there (S6 review A I1)
+            self.pending_to -= reached
+            self._persist()
         for stop in stops:
             if stop.get('seq') not in self.stop_breaks and stop.get('kind') in ('hook', 'bp'):
                 hit = self._break_of(stop)
@@ -725,14 +730,18 @@ class Debugger:
     def _why(self, stop):
         kind = stop.get('kind')
         if kind in ('hook', 'bp'):
-            hit = self._break_of(stop)
-            if hit:
-                self.stop_breaks.setdefault(stop.get('seq'), hit['number'])
-                name = 'break %d' % hit['number']
-            elif stop.get('seq') in self.stop_breaks:      # the break was cleared while this stop stayed parked
-                name = 'break %d (cleared)' % self.stop_breaks[stop['seq']]
-            else:
+            number = self.stop_breaks.get(stop.get('seq'))
+            if number is None:
+                hit = self._break_of(stop)
+                number = hit['number'] if hit else None
+                if number is not None:
+                    self.stop_breaks[stop.get('seq')] = number
+            if number is None:
                 name = 'a cleared break'
+            elif number in self.breaks:
+                name = 'break %d' % number
+            else:                  # cleared while this stop stayed parked (its bp id may serve a newer break now)
+                name = 'break %d (cleared)' % number
             return name + (' (hook on the function entry)' if kind == 'hook' else ' (trap)')
         if kind == 'step':
             return 'single step'
@@ -1155,7 +1164,7 @@ class Debugger:
         if mode not in STEP_MODES:
             raise ConvError('BAD_ARGUMENTS', 'mode must be one of %s.' % ', '.join(STEP_MODES))
         stop = self._current()
-        pending_before = set(self.pending_to)
+        self._unreached = set()
         if stop['kind'] == 'hook':
             raise ConvError('BAD_MODE', 'A hook stop cannot be stepped. Next: continue, or return <value> from the '
                             'function; to step the function, set a break on a line inside it.')
@@ -1170,7 +1179,7 @@ class Debugger:
             new = self._run_to(stop, self._return_address(stop), self._esp_of(stop) + 4)
         else:
             new = self._step_line(stop)
-        left = sorted(self.pending_to - pending_before)
+        left = sorted(self._unreached)
         reason = 'Mode %s.' % mode
         if left:
             reason += (' %s came first; the temporary stop at %s is still armed (continue runs on to it, break clear '
@@ -1211,6 +1220,7 @@ class Debugger:
                 # Another stop of the thread came first: the companion keeps the `to` site armed for it, so it is
                 # recorded (status lists it, a server restart keeps it) (R11).
                 self.pending_to.add(address)
+                getattr(self, '_unreached', set()).add(address)
                 self._persist()
                 return new
             if min_esp is None or self._esp_of(new) >= min_esp:
@@ -1425,9 +1435,9 @@ class Debugger:
                 # every thread would also release threads the game, a plugin or the companion holds suspended (its
                 # code writes suspend the game's threads): only a game whose frames stand still is thawed, and only
                 # the threads suspend_all freezes (not the companion's pipe thread) (R13).
-                if not self._frames_stalled(proc):
-                    return verdict('Nothing is frozen.', "Nothing was on record as frozen and the game's frames advance, "
-                                   'so no thread was resumed.', resumed=[], state='running', forced=False)
+                why = self._not_frozen(proc)
+                if why:
+                    return verdict('Nothing is frozen.', why, resumed=[], state=None, forced=False)
                 keep = {t for t in (self._pipe_thread(),) if t}
                 done = proc.resume_all([t for t in proc.threads() if t not in keep])
         self.frozen = []
@@ -1436,13 +1446,36 @@ class Debugger:
                        'Nothing was on record as frozen and the frames stood still: each thread suspend_all would '
                        'freeze was resumed once.', resumed=done, state='running', forced=not was)
 
+    def _not_frozen(self, proc):
+        """Why a thaw with nothing on record must resume nothing, or None when the game looks frozen by suspension
+        (S6 review A M3: a debugger stop or a held frame gate also stops the frames)."""
+        try:
+            ping = self.link.ping(timeout=1.0) or {}
+        except Exception:  # noqa: BLE001 - a frozen game cannot answer
+            ping = {}
+        if ping.get('parked'):
+            return ('Nothing was on record as frozen: the game is parked by the debugger (%s stop(s)). Next: fnv_debug '
+                    'continue.' % ping['parked'])
+        if ping.get('held'):
+            return ('Nothing was on record as frozen: the frame gate is held. Next: fnv_time_control release (or '
+                    'resume for a paused clock).')
+        stalled = self._frames_stalled(proc)
+        if stalled is None:
+            return ('Nothing was on record as frozen and the frame counter cannot be read, so I cannot tell whether the '
+                    'game is frozen: no thread was resumed.')
+        if not stalled:
+            return "Nothing was on record as frozen and the game's frames advance, so no thread was resumed."
+        return None
+
     def _frames_stalled(self, proc, window=0.5):
         """Does the engine's frame counter stand still over `window` seconds (read from outside the game)?"""
         from .fnv_time import FRAME_COUNTER
         first = proc.read(FRAME_COUNTER, 4)
         self.sleep(window)
         second = proc.read(FRAME_COUNTER, 4)
-        return first is not None and first == second
+        if first is None or second is None:
+            return None
+        return first == second
 
     def threads(self):
         stops = {}

@@ -172,9 +172,10 @@ class ControlTools:
             out['hook'] = self._hook_view(h)
             calls = out.get('calls') or []
             changed = sum(1 for c in calls if c.get('applied'))
-            which = ('%d of the %d calls listed (applied: true; actionApplied %s of actionHits %s%s)'
-                     % (changed, len(calls), h.get('actionApplied'), h.get('actionHits'),
-                        ', limit %s' % h['actionLimit'] if h.get('actionLimit') else ''))
+            counts = ('actionApplied %s of actionHits %s' % (h['actionApplied'], h.get('actionHits'))
+                      if h.get('actionApplied') is not None else 'actionHits %s' % h.get('actionHits'))
+            which = ('%d of the %d calls listed (applied: true; %s%s)'
+                     % (changed, len(calls), counts, ', limit %s' % h['actionLimit'] if h.get('actionLimit') else ''))
             if out['hook']['action'] == 'result':
                 out['resultNote'] = ('returned = what the function computed; callers got %s instead on %s'
                                      % (out['hook']['actionValue'], which))

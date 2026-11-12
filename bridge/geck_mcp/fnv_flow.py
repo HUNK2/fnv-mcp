@@ -200,11 +200,11 @@ class FlowTools:
             slot = self._write_call(prepared) if prepared is not None else None
             stop = self._await_bp(bp_id, arm_wait)
         except BaseException:
-            # Nothing armed may outlive the call: the breakpoint, and the module's slot (R5).
+            # Nothing armed may outlive the call: the module's slot first (a call made later lands in whatever break
+            # is there then), then the breakpoint; each on its own (R5, S6 review A M2).
+            self._zero_slot(slot)
             try:
                 self.link.one('bp', 'clear', word(bp_id))
-                if slot:
-                    self.link.write(slot, struct.pack('<I', 0))
             except Exception:  # noqa: BLE001 - the original error is the one to report
                 pass
             raise
@@ -214,13 +214,13 @@ class FlowTools:
                 self.link.write(slot, struct.pack('<I', 0))
             raise ConvError('NOT_CALLED', '%s was not called within %d s, so nothing was traced; the breakpoint is '
                             'cleared. Next: make the game call it, then trace again.' % (fn['name'], arm_wait))
-        packed = ''.join(struct.pack('<II', lo, hi).hex() for lo, hi, _ in callees) or '-'
-        ranged = self.link.one('trace', 'ranges', packed)
-        if callees and not ranged.get('ok'):
-            callees = []        # an older companion: depth 0 only
-        args = ['trace', word(steps_limit), word(fn['addr']), word(end)] + ([log_hex] if log_hex else [])
         ended = {}
         try:
+            packed = ''.join(struct.pack('<II', lo, hi).hex() for lo, hi, _ in callees) or '-'
+            ranged = self.link.one('trace', 'ranges', packed)
+            if callees and not ranged.get('ok'):
+                callees = []        # an older companion: depth 0 only
+            args = ['trace', word(steps_limit), word(fn['addr']), word(end)] + ([log_hex] if log_hex else [])
             result = self.link.one('resume', word(stop['seq']), *args)
             if not result.get('ok'):
                 raise ConvError('COMPANION_REFUSED', 'The companion refused the trace (%s).' % result.get('error'),
@@ -228,7 +228,9 @@ class FlowTools:
             entries, reason, done = self._read_trace(stop['seq'], ended)
         except BaseException:
             # Nothing may stay parked: the bp stop when the trace was refused, the stop the trace ended in when its
-            # entries could not be read. (A stop that is already gone answers no_stop; that is ignored.)
+            # entries could not be read. (A stop that is already gone answers no_stop; that is ignored.) The call
+            # slot is zeroed too: the bp may have been hit by another caller first (S6 review A M2).
+            self._zero_slot(slot)
             self._release_quietly(stop['seq'], ended.get('end'))
             raise
         if done:
@@ -254,6 +256,14 @@ class FlowTools:
                        note or 'The trace is complete.', function=fn['name'], address='0x%08X' % fn['addr'],
                        endedBy=reason, done=done, lines=rows, steps=summary, locals=[x['name'] for x in locals_],
                        localsNotTraced=skipped, when=when or None, depth=1 if callees else 0, call=called)
+
+    def _zero_slot(self, slot):
+        if not slot:
+            return
+        try:
+            self.link.write(slot, struct.pack('<I', 0))
+        except Exception:  # noqa: BLE001 - best effort while another error is reported
+            pass
 
     def _callee_ranges(self, db, fn, limit=16):
         """(lo, hi, name) of the direct callees of fn that have source lines (engine map call table)."""
