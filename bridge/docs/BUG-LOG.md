@@ -1385,7 +1385,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | G5 | medium | fixed | fnv_wait_for seconds with clock=game says "met" while the game clock is paused | `geck_mcp/fnv_time.py` |
 | G9 | medium | fixed | fnv_globals rounds short/long globals that hold fractions (GameHour), and its undo restores the rounded value | `geck_mcp fnv_globals read and set` |
 | R5 | medium | fixed | `fnv_flow call` leaves its breakpoint armed (and its predicate slot freed) when the call cannot be armed (E4 incomplete; new path from the B10 fix) | `geck_mcp/fnv_flow.py:171-191 arms the breakpoint` |
-| R6 | medium | open | `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite) | `geck_mcp/fnv_inspect.py:671-681` |
+| R6 | medium | fixed | `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite) | `geck_mcp/fnv_inspect.py:671-681` |
 | R7 | medium | fixed | After a server restart the camera journal entry still undoes with a blind `tfc`, so fnv_revert_all turns the fly camera ON (D2 incomplete) | `geck_mcp/fnv_eyes.py:271-292` |
 | R8 | medium | fixed | Journal: `mark_undone`'s `os.replace` fails while any other handle has `journal.jsonl` open, so an undo that already ran is not recorded and undo/revert_all stops (A1 fix, A7 again) | `geck_mcp/fnv_live.py:104-115` |
 | R9 | medium | fixed | C5 is only partly fixed: some form-id references are still skipped as text (C5) | `geck_mcp/fnv_records.py:96` |
@@ -1593,7 +1593,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - **Confidence:** confirmed by repro (`regress\subtitle\repro_subtitles_skip.py`: 8 subtitles shown, 4 caught, lines 1, 3, 5 and 7).
 - **What happens:** After reading record N, the next poll asks for records above N+1, so record N+1 is never read. When subtitles arrive one per poll (0.15 s), every second line is lost. Lines that arrive within one poll are all kept, apart from the one after the last of each batch.
 - **Fix idea:** Use `seen = max(seen, rec[0])`, or use the sequence number that `records()` returns (as `fnv_blame` does).
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: the subtitle poll keeps seen = the last record's seq (records() takes since as exclusive), so lines arriving one per poll are all caught (S6.17, test_stab_s6c).
 
 ### R7. After a server restart the camera journal entry still undoes with a blind `tfc`, so fnv_revert_all turns the fly camera ON (D2 incomplete)
 

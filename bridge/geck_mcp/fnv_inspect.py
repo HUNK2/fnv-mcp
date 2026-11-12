@@ -675,7 +675,7 @@ class AudioTools:
                 while True:
                     _, got, _ = self.deep.records(hook, since=seen)
                     for rec in got:
-                        seen = max(seen, rec[0] + 1)
+                        seen = max(seen, rec[0])          # records() takes since as exclusive (R6)
                         text = _text(self.live.reads([(rec[12], 260)])[0]) if rec[12] else None
                         rows.append({'frame': rec[22], 'text': text, 'soundId': rec[13]})
                     if time.monotonic() >= end:
