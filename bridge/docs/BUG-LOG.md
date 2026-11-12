@@ -1384,7 +1384,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | G4 | medium | fixed | fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit) | `geck_mcp/fnv_live.py:1419` |
 | G5 | medium | fixed | fnv_wait_for seconds with clock=game says "met" while the game clock is paused | `geck_mcp/fnv_time.py` |
 | G9 | medium | fixed | fnv_globals rounds short/long globals that hold fractions (GameHour), and its undo restores the rounded value | `geck_mcp fnv_globals read and set` |
-| R5 | medium | open | `fnv_flow call` leaves its breakpoint armed (and its predicate slot freed) when the call cannot be armed (E4 incomplete; new path from the B10 fix) | `geck_mcp/fnv_flow.py:171-191 arms the breakpoint` |
+| R5 | medium | fixed | `fnv_flow call` leaves its breakpoint armed (and its predicate slot freed) when the call cannot be armed (E4 incomplete; new path from the B10 fix) | `geck_mcp/fnv_flow.py:171-191 arms the breakpoint` |
 | R6 | medium | open | `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite) | `geck_mcp/fnv_inspect.py:671-681` |
 | R7 | medium | fixed | After a server restart the camera journal entry still undoes with a blind `tfc`, so fnv_revert_all turns the fly camera ON (D2 incomplete) | `geck_mcp/fnv_eyes.py:271-292` |
 | R8 | medium | fixed | Journal: `mark_undone`'s `os.replace` fails while any other handle has `journal.jsonl` open, so an undo that already ran is not recorded and undo/revert_all stops (A1 fix, A7 again) | `geck_mcp/fnv_live.py:104-115` |
@@ -1583,7 +1583,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - The freed slot can then be claimed by another break, and the stale breakpoint would then use that break's condition.
   - The OLD_MODULE message says "fnv_native unload ..., then call again", which arms a second breakpoint on a new id.
 - **Fix idea:** Call `_arm_call` before the breakpoint is armed, or wrap everything after `_set_bp` in try/except that sends `bp clear <id>` (and zeroes the call slot) before re-raising. Run the argument checks (12 words, resolving names, `_slot_has_edx`) before anything is armed.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: every call check (12 words, argument names, the module's edx slot) runs before the breakpoint is armed (_prepare_call); anything that fails after arming clears the bp and zeroes the call slot (S6.1, test_stab_s6a).
 
 ### R6. `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite)
 

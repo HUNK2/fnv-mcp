@@ -167,6 +167,9 @@ class FlowTools:
         locals_, skipped = self._trace_locals(db, fn['addr'])
         log_hex = ''.join(compile_predicate(load_text(local, local['code']))['hex'] for local in locals_)
         end = fn['addr'] + max(fn['size'] or 1, 1)
+        # Every check of the call (12 words, argument names, the module's edx slot) runs before the breakpoint is
+        # armed: a refusal after arming left a FLAG_ONCE breakpoint that parked the next caller (R5).
+        prepared = self._prepare_call(fn, call) if call is not None else None
         pred_slot = None
         try:
             # One lock with fnv_debug: two calls must not pick the same bp id or predicate slot.
@@ -183,16 +186,28 @@ class FlowTools:
                     if mechanism != 'hw':
                         raise
                     armed = self.dbg._set_bp(bp_id, fn['addr'], 'int3', pred, FLAG_ONCE, None)
-            return self._trace_armed(db, fn, bp_id, end, when, depth, steps_limit, arm_wait, call, locals_, skipped,
-                                     log_hex)
+            return self._trace_armed(db, fn, bp_id, end, when, depth, steps_limit, arm_wait, prepared, locals_,
+                                     skipped, log_hex)
         finally:
             if pred_slot is not None:
                 self.dbg.release_pred_slot(pred_slot)
 
-    def _trace_armed(self, db, fn, bp_id, end, when, depth, steps_limit, arm_wait, call, locals_, skipped, log_hex):
-        callees = self._callee_ranges(db, fn) if depth == 1 else []
-        slot = self._arm_call(fn, call) if call is not None else None
-        stop = self._await_bp(bp_id, arm_wait)
+    def _trace_armed(self, db, fn, bp_id, end, when, depth, steps_limit, arm_wait, prepared, locals_, skipped,
+                     log_hex):
+        slot = None
+        try:
+            callees = self._callee_ranges(db, fn) if depth == 1 else []
+            slot = self._write_call(prepared) if prepared is not None else None
+            stop = self._await_bp(bp_id, arm_wait)
+        except BaseException:
+            # Nothing armed may outlive the call: the breakpoint, and the module's slot (R5).
+            try:
+                self.link.one('bp', 'clear', word(bp_id))
+                if slot:
+                    self.link.write(slot, struct.pack('<I', 0))
+            except Exception:  # noqa: BLE001 - the original error is the one to report
+                pass
+            raise
         if stop is None:
             self.link.one('bp', 'clear', word(bp_id))
             if slot:                        # the module must not make the call later, into another tool's break
@@ -258,6 +273,10 @@ class FlowTools:
 
     def _arm_call(self, fn, call):
         """Fill the flow-call module's slot so the next frame calls fn (the breakpoint is already armed)."""
+        return self._write_call(self._prepare_call(fn, call))
+
+    def _prepare_call(self, fn, call):
+        """Everything the call needs, checked and resolved, nothing written: (slot, body, edx, write_edx)."""
         if self.native is None:
             raise ConvError('NOT_AVAILABLE', 'call needs the native module tools.')
         slot = self.native.flow_slot()
@@ -284,8 +303,12 @@ class FlowTools:
             words = regs[2:]
         body = struct.pack('<III', fn['addr'], this_ptr, len(words)) + struct.pack(
             '<12I', *(words + [0] * (12 - len(words))))
+        return slot, body, edx, self._slot_has_edx(required=bool(edx))
+
+    def _write_call(self, prepared):
+        slot, body, edx, write_edx = prepared
         self.link.write(slot + 4, body + struct.pack('<II', 0, 0))
-        if self._slot_has_edx(required=bool(edx)):  # a stale edx from an earlier fastcall call is cleared too
+        if write_edx:                       # a stale edx from an earlier fastcall call is cleared too
             self.link.write(slot + 4 * 18, struct.pack('<I', edx))
         self.link.write(slot, struct.pack('<I', 1))
         return slot
