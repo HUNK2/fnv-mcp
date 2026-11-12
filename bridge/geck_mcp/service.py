@@ -457,7 +457,8 @@ class Service:
                         prior = db.execute('SELECT * FROM operations WHERE id=? AND project=? AND name=?',
                                            (resume_id, self.project.project_id, name)).fetchone()
                         if prior is None:
-                            raise ValueError('Not a compile operation in this project')
+                            raise BridgeError('OPERATION_NOT_FOUND', 'No compile operation %s in this project (unknown, or '
+                                              'from another project). Next: geck_compile_start.' % resume_id)
                         db.execute("UPDATE operations SET state='running' WHERE id=?", (resume_id,))
                     else:
                         db.execute('INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,?,?)',

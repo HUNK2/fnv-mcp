@@ -1421,7 +1421,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | T6 | low | fixed | Short form ids (no leading zeros / no load-order prefix) not accepted consistently | `fnv_live.py resolve()` |
 | T7 | low | fixed | fnv_asset_check accepts arbitrary paths and surfaces a raw parse error | `fnv_asset_check registration` |
 | T8 | low | open | Parameters documented/required but ignored | `several fnv_* registrations` |
-| T9 | low | open | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
+| T9 | low | fixed | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
 | P3 | low | fixed | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
 | P4 | low | fixed | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
 | P6 | low | not a bug | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
@@ -2087,7 +2087,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: likely
 - What happens: the same unknown/finished-operation condition gives different error codes in status and resume.
 - Fix idea: share one code.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: geck_compile_status and geck_compile_resume answer one code, OPERATION_NOT_FOUND, for an unknown operation (Compilation.read and the resume lookup in service.py) (S6.24, test_stab_s6c).
 
 ### P3. Corrupt input raises raw exceptions rather than FormatError
 

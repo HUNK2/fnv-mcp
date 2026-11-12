@@ -65,8 +65,9 @@ class Compilation:
     def read(self, operation_id):
         with closing(self.s.db()) as db:
             row = db.execute('SELECT data FROM compile_checkpoints WHERE id=?', (operation_id,)).fetchone()
-        if row is None:
-            raise ValueError('No compile checkpoint in this project')
+        if row is None:     # one code for status and resume (T9)
+            raise BridgeError('OPERATION_NOT_FOUND', 'No compile operation %s in this project (unknown, or from another '
+                              'project). Next: geck_compile_start.' % operation_id)
         return json.loads(row[0])
 
     def write(self, cp, phase=None):
