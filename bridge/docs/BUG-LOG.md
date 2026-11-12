@@ -2264,7 +2264,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | N22 | medium | fixed | fnv_procmem / fnv_perf bind msvcrt and ctypes.WinDLL at import: the server cannot import on macOS/Linux (the upstream Wine path); posix CI red since fnv-mcp began | `geck_mcp/fnv_procmem.py:8, fnv_perf.py:27` |
 | N23 | low | open | test_supervisor BusyReloadTests fail under heavy CPU load (cancel reaches in_flight late); pass alone | `tests/test_supervisor.py:207` |
 | U1 | high | fixed | Out-of-order undo is guarded only for place_adjust, time fixed/speed and hot swaps: memory writes, patches, settings, AVs, positions on one target end with the wrong value | `audit3/state.md H1` |
-| U2 | medium | open | Undoing a clock pause made by another server is marked undone while the clock stays paused | `audit3/state.md M1` |
+| U2 | medium | fixed | Undoing a clock pause made by another server is marked undone while the clock stays paused | `audit3/state.md M1` |
 | U3 | medium | open | A hot-swap undo whose reply times out after the swap landed stays open; a retry swaps the code back | `audit3/state.md M2` |
 | U4 | low | open | An undo between a change and its confirm is reopened by the confirm | `audit3/state.md L1` |
 | U5 | low | open | fnv_undo (count) is stuck on a newest pending entry with a non-repeatable op | `audit3/state.md L2` |
@@ -2385,5 +2385,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: medium
 - Found by: round-3 audit (docs/audit3/parsers.md M2): geck_plugin_install writes Data\<plugin>, fnv_install writes mods\<stem>\<plugin>; both copies kept their rows under one owner name, and unfiltered lookups (_form, refs `known`, record_users, conflicts, the save namer) served the other copy.
 - Fix: indexing a path deletes, in the same transaction, the files, records and refs rows of any other path with the same plugin name (only one copy is loaded); switching copies re-indexes the one now in use. Tests: tests/test_s7_round3.py StaleCopyTests.
+- Status: fixed
+
+### U2. Undoing a clock pause from another server was marked undone while the clock stayed paused
+
+- Where: geck_mcp/fnv_time.py (TimeControl.require_game), with fnv_live.py _undo_time_restore
+- Severity: medium
+- Found by: round-3 audit (docs/audit3/state.md M1)
+- Fix: require_game re-reads the shared pause flag (the state file) on every call, not only when the game process changes; a flag that another server set is taken as restored (the counter is checked before Enable), and one another server cleared ends this server's own. So the undo from server B resumes A's pause, and A's next resume does not Enable a second time. Tests: tests/test_s7_round3.py TwoServerPauseTests.
 - Status: fixed
 

@@ -345,5 +345,40 @@ class StaleCopyTests(unittest.TestCase):
             db.close()
 
 
+class TwoServerPauseTests(unittest.TestCase):
+    """U2: a pause undone from another server process was marked undone while the clock stayed paused."""
+
+    def test_the_other_servers_undo_resumes_and_the_pauser_sees_it(self):
+        import struct
+        from fakes import FakeLive
+        from geck_mcp import fnv_time
+        from geck_mcp.fnv_time import TimeControl
+        with FakeLive() as fake:
+            fake.link.put(fnv_time.TIME_GLOBAL, struct.pack('<If', 0, 0.0))
+            counter = {'n': 0}
+            original = fake.link._op
+
+            def op(name, args):          # Disable/Enable move the clock counter like the engine does
+                if name == 'call' and int(args[0], 16) in (0x00AA0000, 0x00AA0010):
+                    counter['n'] += 1 if int(args[0], 16) == 0x00AA0000 else -1
+                    fake.link.put(fnv_time.TIME_GLOBAL, struct.pack('<I', counter['n']))
+                return original(name, args)
+            fake.link._op = op
+            fns = {'disable': 0x00AA0000, 'enable': 0x00AA0010, 'clamp': 0x00AA0020}
+            server_a, server_b = TimeControl(fake.live), TimeControl(fake.live)
+            server_a.functions = server_b.functions = lambda: fns
+            server_b.require_game()                                  # B caches "not paused" for this game
+            server_a.pause()
+            self.assertEqual(counter['n'], 1)
+            fake.live.time_control = server_b                       # B runs the undo
+            pause = [e for e in fake.live.journal.entries() if (e.get('undo') or {}).get('what') == 'pause'][0]
+            result = fake.live.undo(journal_id=pause['id'])['results'][0]
+            self.assertEqual(counter['n'], 0, 'the clock runs again')
+            self.assertTrue(result['undone'])
+            out = server_a.resume()                                 # A must not Enable a second time
+            self.assertFalse(out.get('changed'))
+            self.assertEqual(counter['n'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()

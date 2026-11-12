@@ -149,8 +149,13 @@ class TimeControl:
         start = proc[1] if len(proc) > 1 else None
         if proc[0] != self.pid or start != self.start:
             self.pid, self.start, self.configured = proc[0], start, False
-            self.paused_by_us = bool(self.state.load('time_pause', self.pid, self.start))
-            self.restored = self.paused_by_us
+            self.paused_by_us = self.restored = False
+        # The pause flag is shared by every server process (the state file): another one may have paused, or
+        # resumed (an undo), since this one last looked (U2). A flag read from the file is checked against the
+        # counter before an Enable (restored).
+        saved = bool(self.state.load('time_pause', self.pid, self.start))
+        if self.state._path() is not None and saved != self.paused_by_us:   # no state folder: nothing shared
+            self.paused_by_us = self.restored = saved
         return proc[0]
 
     def functions(self):
