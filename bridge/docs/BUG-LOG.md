@@ -1419,7 +1419,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | T4 | low | fixed | Inconsistent error codes for "game not running" | `fnv_live.py ready()/in_game(), fnv_link.py EngineLink.connect, fnv_game.game_pro` |
 | T5 | low | fixed | Raw int(...,16) ValueError text in fnv_probe and fnv_events arguments | `fnv_live_tools.py` |
 | T6 | low | fixed | Short form ids (no leading zeros / no load-order prefix) not accepted consistently | `fnv_live.py resolve()` |
-| T7 | low | open | fnv_asset_check accepts arbitrary paths and surfaces a raw parse error | `fnv_asset_check registration` |
+| T7 | low | fixed | fnv_asset_check accepts arbitrary paths and surfaces a raw parse error | `fnv_asset_check registration` |
 | T8 | low | open | Parameters documented/required but ignored | `several fnv_* registrations` |
 | T9 | low | open | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
 | P3 | low | fixed | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
@@ -2068,7 +2068,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed by a call (malformed/non-asset path)
 - What happens: the path is not restricted to the game Data directory, and a malformed file returns a parser exception string rather than a structured BAD_ASSET code.
 - Fix idea: confine to Data/, catch parse errors into a named code.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: a plugin path outside the load order must be under the game Data folder or the dev profile's mods (else BAD_PATH with the allowed roots); a file that does not read as a plugin is BAD_ASSET (S6.22, test_stab_s6c).
 
 ### T8. Parameters documented/required but ignored
 

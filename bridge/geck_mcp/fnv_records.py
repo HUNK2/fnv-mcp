@@ -392,11 +392,24 @@ class RecordsTools:
             path = Path(plugin)
             if not path.is_file():
                 raise DataError('PLUGIN_NOT_FOUND', '%s is neither in the load order nor a file' % plugin)
+            # a file outside the load order: only under the game Data folder or the dev profile's mods (T7)
+            allowed = [Path(project.game_root) / 'Data']
+            fnv = getattr(project, 'fnv', None)
+            if fnv is not None and getattr(fnv, 'mo2_root', None):
+                allowed.append(Path(fnv.mo2_root) / 'mods')
+            real = path.resolve()
+            if not any(real.is_relative_to(root.resolve()) for root in allowed):
+                raise DataError('BAD_PATH', '%s is outside the game Data folder and the dev profile\'s mods. Next: '
+                                'install the plugin (fnv_install) or name a plugin of the load order.' % plugin,
+                                {'allowed': [str(r) for r in allowed]})
             target = {'name': path.name, 'path': str(path), 'mod': None}
         if not target.get('path'):
             raise DataError('PLUGIN_NOT_FOUND', '%s: file not found' % plugin)
         index, roots = self._asset_index(entries)
-        names = _plugin_assets(target['path'])
+        try:
+            names = _plugin_assets(target['path'])
+        except (ValueError, struct.error, OSError) as e:      # FormatError is a ValueError
+            raise DataError('BAD_ASSET', '%s cannot be read as a plugin: %s' % (target['name'], e)) from None
         missing, found, nif_missing = [], 0, []
         checked_nifs = set()
         for rel, users in sorted(names.items()):
