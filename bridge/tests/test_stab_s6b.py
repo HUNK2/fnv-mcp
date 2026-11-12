@@ -409,5 +409,28 @@ class SpecCheckTests(unittest.TestCase):
         records.text('two\nlines', 'records.X.name')
 
 
+class SaveRotationTests(unittest.TestCase):
+    """P10: the FLT_MAX rotation sentinel (bytes ff ff 7f 7f) showed as rotation.x = 3.4e38."""
+
+    def initial(self, rotation):
+        from types import SimpleNamespace
+        from geck_mcp.fnv_save import Save
+        block = b'\x01\x00\x00' + struct.pack('<6f', 1.0, 2.0, 3.0, *rotation)
+        save = Save.__new__(Save)
+        return save._initial(4, block, SimpleNamespace(resolve=lambda raw: 0x0000003C))
+
+    def test_flt_max_rotation_flagged(self):
+        flt_max = struct.unpack('<f', b'\xff\xff\x7f\x7f')[0]
+        info = self.initial((flt_max, 0.0, 0.0))
+        self.assertIsNone(info['rotation'])
+        self.assertTrue(info['rotationUnset'])
+        self.assertEqual(info['position'], {'x': 1.0, 'y': 2.0, 'z': 3.0})
+
+    def test_real_rotation_kept(self):
+        info = self.initial((0.5, 0.0, 1.25))
+        self.assertEqual(info['rotation'], {'x': 0.5, 'y': 0.0, 'z': 1.25})
+        self.assertNotIn('rotationUnset', info)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1428,7 +1428,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | P7 | low | fixed | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
 | P8 | low | fixed | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
 | P9 | low | fixed | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
-| P10 | low | open | Save parser: FLT_MAX rotation sentinel passed through | `fnv_save.py ACHR/ACRE initial block decode` |
+| P10 | low | fixed | Save parser: FLT_MAX rotation sentinel passed through | `fnv_save.py ACHR/ACRE initial block decode` |
 | N1 | medium | fixed | An unknown undo op is marked undone without running | `geck_mcp/fnv_live.py:1347-1382` |
 | N2 | medium | fixed | A console undo is marked undone even when the game rejected the line | `geck_mcp/fnv_live.py:1356-1357, 1380-1381` |
 | N3 | medium | fixed | After an undo the camera keeps its saved state, so later camera changes are not journaled | `geck_mcp/fnv_eyes.py:273-274` |
@@ -2154,7 +2154,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: likely
 - What happens: 25,228 occurrences across all saves of `rotation.x = 3.4028234663852886e+38` (bytes ffff7f7f), e.g. autosave.fos ACHR 0200CFF3 and 0011253F. It appears unflagged and shows in save diffs as noise.
 - Fix idea: map the sentinel to None or flag it as "unset". Also theoretical: `global_variables`/`inspect` with a namer would hit `int(None, 16)` if a global form were unresolved (never occurred in the data).
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: a reference location whose rotation holds the FLT_MAX sentinel (bytes ff ff 7f 7f) reads rotation: null, rotationUnset: true (S6.16, test_stab_s6b).
 
 ### N4. `form_delete` does not supersede `form_create`, so export keeps deleted forms
 

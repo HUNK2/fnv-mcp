@@ -63,6 +63,9 @@ INITIAL_KINDS = {1: 'exterior cell (char)', 2: 'exterior cell (short)', 3: 'inte
                  4: 'reference location', 5: 'created reference', 6: 'moved reference'}
 
 
+FLT_MAX = struct.unpack("<f", bytes.fromhex("ffff7f7f"))[0]     # the engine's "unset" float
+
+
 class SaveFormatError(ValueError):
     code = 'SAVE_FORMAT'
 
@@ -342,7 +345,10 @@ class Save:
             info['cell'] = fid(r.resolve(block[0:3]))
             px, py, pz, ax, ay, az = struct.unpack_from('<6f', block, 3)
             info['position'] = {'x': round(px, 2), 'y': round(py, 2), 'z': round(pz, 2)}
-            info['rotation'] = {'x': round(ax, 4), 'y': round(ay, 4), 'z': round(az, 4)}
+            if FLT_MAX in (ax, ay, az):     # the engine's "no rotation" sentinel (bytes ff ff 7f 7f; P10)
+                info['rotation'], info['rotationUnset'] = None, True
+            else:
+                info['rotation'] = {'x': round(ax, 4), 'y': round(ay, 4), 'z': round(az, 4)}
             if kind == 5:
                 info['base'] = fid(r.resolve(block[27:30]))
                 info['createdFlags'] = block[30]
