@@ -2261,7 +2261,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 
 | ID | Severity | Status | Bug | Where |
 |---|---|---|---|---|
-| N22 | medium | open | fnv_procmem / fnv_perf bind msvcrt and ctypes.WinDLL at import: the server cannot import on macOS/Linux (the upstream Wine path); posix CI red since fnv-mcp began | `geck_mcp/fnv_procmem.py:8, fnv_perf.py:27` |
+| N22 | medium | fixed | fnv_procmem / fnv_perf bind msvcrt and ctypes.WinDLL at import: the server cannot import on macOS/Linux (the upstream Wine path); posix CI red since fnv-mcp began | `geck_mcp/fnv_procmem.py:8, fnv_perf.py:27` |
 | N23 | low | open | test_supervisor BusyReloadTests fail under heavy CPU load (cancel reaches in_flight late); pass alone | `tests/test_supervisor.py:207` |
 | U1 | high | open | Out-of-order undo is guarded only for place_adjust, time fixed/speed and hot swaps: memory writes, patches, settings, AVs, positions on one target end with the wrong value | `audit3/state.md H1` |
 | U2 | medium | open | Undoing a clock pause made by another server is marked undone while the clock stays paused | `audit3/state.md M1` |
@@ -2306,3 +2306,12 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | X10 | low | open | fnv_profile_set writes unchecked plugin names into plugins.txt | `audit3/parsers.md L7` |
 
 ### Round 3 details
+
+### N22. The server could not import on macOS or Linux: Windows libraries bound at import
+
+- Where: geck_mcp/fnv_procmem.py (import msvcrt, ctypes.WinDLL kernel32/psapi/dbghelp and their argtypes at module level), fnv_perf.py (ntdll), fnv_state.py (lock choice by os.name)
+- Severity: medium
+- Found by: the S7 gate's CI check: every fnv-mcp push failed on macOS (ModuleNotFoundError: msvcrt via fnv_procmem, imported by nearly every fnv module and so by server.py), and fail-fast cancelled the Windows job.
+- Fix: the Windows bindings are made only when msvcrt imports (else None; the fnv tools still need Windows to run); fnv_state picks msvcrt locking or flock by the same rule. The CI matrix no longer fails fast. Test: tests/test_posix_import.py imports every geck_mcp module with msvcrt and ctypes.WinDLL/windll hidden.
+- Status: fixed
+

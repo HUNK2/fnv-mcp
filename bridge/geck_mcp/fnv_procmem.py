@@ -5,14 +5,20 @@ fnv_hang_doctor (thread stacks) and fnv_patch_map (code bytes). Nothing here wri
 threads are suspended only for the moment their context is read.
 """
 import ctypes
-import msvcrt
 import os
 import struct
 from ctypes import wintypes
 
-kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-psapi = ctypes.WinDLL('psapi', use_last_error=True)
-dbghelp = ctypes.WinDLL('dbghelp', use_last_error=True)
+try:
+    import msvcrt
+except ImportError:     # macOS/Linux
+    msvcrt = None
+if msvcrt is not None:
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    psapi = ctypes.WinDLL('psapi', use_last_error=True)
+    dbghelp = ctypes.WinDLL('dbghelp', use_last_error=True)
+else:   # macOS/Linux (the GECK tools under Wine): the fnv tools need Windows, but the server must still import (N22)
+    kernel32 = psapi = dbghelp = None
 
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
@@ -34,35 +40,37 @@ CONTEXT_OFFSETS = {'dr0': 0x04, 'dr1': 0x08, 'dr2': 0x0C, 'dr3': 0x10, 'dr6': 0x
 # MiniDumpWithDataSegs | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo: no full heap copy.
 MINIDUMP_DEFAULT = 0x4 | 0x40 | 0x1000
 
-kernel32.OpenProcess.restype = wintypes.HANDLE
-kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-kernel32.OpenThread.restype = wintypes.HANDLE
-kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-kernel32.ReadProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
-                                       ctypes.POINTER(ctypes.c_size_t)]
-kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-kernel32.Wow64SuspendThread.argtypes = [wintypes.HANDLE]
-kernel32.Wow64SuspendThread.restype = wintypes.DWORD
-kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
-kernel32.ResumeThread.restype = wintypes.DWORD
-kernel32.Wow64GetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-kernel32.Wow64SetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-kernel32.Wow64SetThreadContext.restype = wintypes.BOOL
-dbghelp.MiniDumpWriteDump.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.HANDLE, wintypes.DWORD,
-                                      ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
-dbghelp.MiniDumpWriteDump.restype = wintypes.BOOL
-psapi.EnumProcessModulesEx.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.HMODULE), wintypes.DWORD,
-                                       ctypes.POINTER(wintypes.DWORD), wintypes.DWORD]
-psapi.GetModuleFileNameExW.argtypes = [wintypes.HANDLE, wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+if kernel32 is not None:
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenThread.restype = wintypes.HANDLE
+    kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.ReadProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+                                           ctypes.POINTER(ctypes.c_size_t)]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.Wow64SuspendThread.argtypes = [wintypes.HANDLE]
+    kernel32.Wow64SuspendThread.restype = wintypes.DWORD
+    kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+    kernel32.ResumeThread.restype = wintypes.DWORD
+    kernel32.Wow64GetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.Wow64SetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.Wow64SetThreadContext.restype = wintypes.BOOL
+    dbghelp.MiniDumpWriteDump.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.HANDLE, wintypes.DWORD,
+                                          ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    dbghelp.MiniDumpWriteDump.restype = wintypes.BOOL
+    psapi.EnumProcessModulesEx.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.HMODULE), wintypes.DWORD,
+                                           ctypes.POINTER(wintypes.DWORD), wintypes.DWORD]
+    psapi.GetModuleFileNameExW.argtypes = [wintypes.HANDLE, wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
 
 
 class MODULEINFO(ctypes.Structure):
     _fields_ = [('lpBaseOfDll', ctypes.c_void_p), ('SizeOfImage', wintypes.DWORD), ('EntryPoint', ctypes.c_void_p)]
 
 
-psapi.GetModuleInformation.argtypes = [wintypes.HANDLE, wintypes.HMODULE, ctypes.POINTER(MODULEINFO), wintypes.DWORD]
+if psapi is not None:
+    psapi.GetModuleInformation.argtypes = [wintypes.HANDLE, wintypes.HMODULE, ctypes.POINTER(MODULEINFO), wintypes.DWORD]
 
 
 class THREADENTRY32(ctypes.Structure):
@@ -71,8 +79,9 @@ class THREADENTRY32(ctypes.Structure):
                 ('dwFlags', wintypes.DWORD)]
 
 
-kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(THREADENTRY32)]
-kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(THREADENTRY32)]
+if kernel32 is not None:
+    kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(THREADENTRY32)]
+    kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(THREADENTRY32)]
 
 
 class MEMORY_BASIC_INFORMATION(ctypes.Structure):
@@ -85,8 +94,9 @@ class MEMORY_BASIC_INFORMATION(ctypes.Structure):
 MEM_COMMIT, PAGE_GUARD = 0x1000, 0x100
 WRITABLE_PROTECT = (0x04, 0x08, 0x40, 0x80)            # RW, WRITECOPY, EXECUTE_RW, EXECUTE_WRITECOPY
 READABLE_PROTECT = WRITABLE_PROTECT + (0x02, 0x20)      # + READONLY, EXECUTE_READ
-kernel32.VirtualQueryEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-kernel32.VirtualQueryEx.restype = ctypes.c_size_t
+if kernel32 is not None:
+    kernel32.VirtualQueryEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+    kernel32.VirtualQueryEx.restype = ctypes.c_size_t
 
 
 class ProcMemError(Exception):

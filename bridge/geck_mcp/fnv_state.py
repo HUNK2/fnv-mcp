@@ -24,9 +24,10 @@ from typing import NamedTuple, Optional
 
 log = logging.getLogger(__name__)
 
-if os.name == 'nt':
+try:                       # Windows: byte-range locks; macOS/Linux: flock (N22: picked by what imports)
     import msvcrt
-else:  # pragma: no cover - CI on Linux
+except ImportError:  # pragma: no cover - CI on Linux/macOS
+    msvcrt = None
     import fcntl
 
 
@@ -49,7 +50,7 @@ def _thread_lock(key):
 
 def _try_lock(fd):
     try:
-        if os.name == 'nt':
+        if msvcrt is not None:
             os.lseek(fd, 0, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         else:  # pragma: no cover
@@ -61,7 +62,7 @@ def _try_lock(fd):
 
 def _unlock(fd):
     try:
-        if os.name == 'nt':
+        if msvcrt is not None:
             os.lseek(fd, 0, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         else:  # pragma: no cover

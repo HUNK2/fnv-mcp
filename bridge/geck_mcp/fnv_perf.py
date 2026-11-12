@@ -12,6 +12,7 @@ on the allocator). fnv_object: what a pointer is (pool or heap block, class from
 object of a class (a scan of the pools for its vtable).
 """
 import ctypes
+import os
 import json
 import struct
 import time
@@ -24,9 +25,10 @@ from .fnv_conv import ConvError, verdict
 from .fnv_link import hexs, word
 
 kernel32 = fnv_procmem.kernel32
-ntdll = ctypes.WinDLL('ntdll')
-ntdll.NtQueryInformationThread.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG,
-                                           ctypes.POINTER(wintypes.ULONG)]
+ntdll = ctypes.WinDLL('ntdll') if fnv_procmem.kernel32 is not None else None     # the server imports off Windows too (N22)
+if ntdll is not None:
+    ntdll.NtQueryInformationThread.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG,
+                                               ctypes.POINTER(wintypes.ULONG)]
 THREAD_QUERY = 0x0040
 THREAD_SAMPLE = 0x0002 | 0x0008 | 0x0040        # suspend/resume, get context, query
 MAX_FRAMES = 32
