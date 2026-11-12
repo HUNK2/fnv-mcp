@@ -392,6 +392,9 @@ class ProbeTools:
             index = {p[0]: k for k, p in enumerate(keep)}
             sites = [(index[probes[i][0]], kind, at) for i, kind, at in sites if probes[i][0] in index]
             probes = keep
+        # Intent first (S3.2): a failure in add/site/arm leaves patched probes that undo must still see.
+        entry = self.live.journal.add({'kind': 'probe', 'state': 'pending', 'probes': len(probes), 'sites': len(sites),
+                                       'undo': {'op': 'probe_disarm'}})
         r = self.link.one('probe', 'init', word(len(probes)), word(samples), word(exit_samples), word(every))
         if not r.get('ok'):
             raise ProbeError('PROBE_INIT_FAILED', 'probe init failed: %s' % r.get('error'), r)
@@ -424,8 +427,7 @@ class ProbeTools:
         session['code'], session['codeSize'] = info.get('code'), info.get('codeSize')
         session['armed'] = True
         self._save('probe_session.json', session)
-        entry = self.live.journal.add({'kind': 'probe', 'probes': len(probes), 'sites': len(sites),
-                                       'undo': {'op': 'probe_disarm'}})
+        self.live.journal.confirm(entry['id'])
         out.update({'armed': info.get('armed'), 'staged': info.get('staged'), 'changed': info.get('changed'),
                     'arm': arms, 'journalId': entry['id'],
                     'config': {'samples': samples, 'exitSamples': exit_samples, 'every': every}})

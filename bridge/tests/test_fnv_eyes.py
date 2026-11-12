@@ -173,6 +173,9 @@ class SimpleJournal:
     def entries(self):
         return list(self.entries_)
 
+    def confirm(self, entry_id, after=None):
+        pass
+
 
 SG, CAM, OSG, PLAYER, HUD = 0x1000, 0x2000, 0x3000, 0x4000, 0x6000
 

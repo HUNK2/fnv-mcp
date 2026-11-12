@@ -350,35 +350,52 @@ class WorldTools:
             out['before'] = {'position': [_r(v, 2) for v in pos], 'rotationDegrees': [_r(math.degrees(v), 2) for v in rot],
                              'scale': _r(old_scale, 3)}
             self.live.changing('world edit %s' % action)
-            if action in ('move', 'transform') and position:
-                for axis, v in zip('XYZ', position):
-                    if v is not None:
-                        self._call(0x005C0740, 0, p, ord(axis), _fw(v))  # Script::SetPosBase(ref, axis, value)
-                undo_lines += ['SetPos %s %f' % (a, v) for a, v in zip('XYZ', pos)]
-            if action in ('rotate', 'transform') and rotation:
-                for axis, v in zip('XYZ', rotation):
-                    if v is not None:
-                        self._call(0x005C0B10, 0, p, ord(axis), _fw(v))  # Script::SetAngleBase(ref, axis, degrees)
-                undo_lines += ['SetAngle %s %f' % (a, math.degrees(v)) for a, v in zip('XYZ', rot)]
-            if action in ('scale', 'transform') and scale is not None:
-                self._call(0x005C1C10, 0, p, _fw(scale))  # Script::SetReferenceScale(ref, scale)
-                undo_lines.append('SetScale %f' % old_scale)
+            moving = action in ('move', 'transform') and position
+            turning = action in ('rotate', 'transform') and rotation
+            scaling = action in ('scale', 'transform') and scale is not None
             was_disabled = bool(struct.unpack_from('<I', raw, 0x08)[0] & 0x800)    # form flags: 0x800 disabled
+            if moving:
+                undo_lines += ['SetPos %s %f' % (a, v) for a, v in zip('XYZ', pos)]
+            if turning:
+                undo_lines += ['SetAngle %s %f' % (a, math.degrees(v)) for a, v in zip('XYZ', rot)]
+            if scaling:
+                undo_lines.append('SetScale %f' % old_scale)
             if action == 'enable':
-                self._call(0x005AA580, 0, p)  # AddPendingEnabledReference: applied by the next frame's delayed pass
                 if was_disabled:                # undo only a change this call made
                     undo_lines.append('Disable')
                 else:
                     out['note'] = 'The reference was already enabled: nothing to undo.'
             elif action == 'disable':
-                self._call(0x005AA500, 0, p, 1 if fade else 0)  # AddPendingDisabledReference(ref, fade)
                 if not was_disabled:
                     undo_lines.append('Enable')
                 else:
                     out['note'] = 'The reference was already disabled: nothing to undo.'
+            elif action == 'delete' and p == self.live.u32s([PLAYER])[0]:
+                raise ValueError('The player cannot be deleted')
+            entry = None
+            if undo_lines or action == 'delete':
+                # The intent before the first write (S3.2): a failure on axis 2 or 3 still leaves an entry whose
+                # undo sets every axis back. A delete has no undo but is in the history.
+                entry = self.live.journal.add({'kind': 'world_edit', 'state': 'pending', 'action': action,
+                                               'ref': r['formId'],
+                                               'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': undo_lines}
+                                               if undo_lines else None})
+                out['journalId'] = entry['id']
+            if moving:
+                for axis, v in zip('XYZ', position):
+                    if v is not None:
+                        self._call(0x005C0740, 0, p, ord(axis), _fw(v))  # Script::SetPosBase(ref, axis, value)
+            if turning:
+                for axis, v in zip('XYZ', rotation):
+                    if v is not None:
+                        self._call(0x005C0B10, 0, p, ord(axis), _fw(v))  # Script::SetAngleBase(ref, axis, degrees)
+            if scaling:
+                self._call(0x005C1C10, 0, p, _fw(scale))  # Script::SetReferenceScale(ref, scale)
+            if action == 'enable':
+                self._call(0x005AA580, 0, p)  # AddPendingEnabledReference: applied by the next frame's delayed pass
+            elif action == 'disable':
+                self._call(0x005AA500, 0, p, 1 if fade else 0)  # AddPendingDisabledReference(ref, fade)
             elif action == 'delete':
-                if p == self.live.u32s([PLAYER])[0]:
-                    raise ValueError('The player cannot be deleted')
                 self.live.console('MarkForDelete', p)  # handler 0x005D8E20 -> TESObjectREFR::SetDelete (vtbl 0x49)
                 out['note'] = 'Marked for deletion (not undoable: the game frees created refs).'
             elif action == 'duplicate':
@@ -386,19 +403,17 @@ class WorldTools:
                 made = []
                 for _ in range(max(1, min(int(count), 20))):
                     new = self._eax(0x005C4B30, 0, p, base, 1, int(distance), 0, _fw(1.0))  # PlaceAtMe
-                    if new:
-                        made.append(new)
-                descr = self._describe(made)
-                out['created'] = [descr.get(m) for m in made]
-                for m in made:
-                    fid = (descr.get(m) or {}).get('formId')
-                    if fid:
+                    if not new:
+                        continue
+                    made.append(new)
+                    fid = (self._describe([new]).get(new) or {}).get('formId')
+                    if fid:    # each copy journaled as soon as it exists
                         self.live.journal.add({'kind': 'world_edit', 'action': 'duplicate', 'ref': fid,
                                                'undo': {'op': 'console_ref', 'ref': fid, 'lines': ['Disable', 'MarkForDelete']}})
-            if undo_lines:
-                entry = self.live.journal.add({'kind': 'world_edit', 'action': action, 'ref': r['formId'],
-                                               'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': undo_lines}})
-                out['journalId'] = entry['id']
+                descr = self._describe(made)
+                out['created'] = [descr.get(m) for m in made]
+            if entry:
+                self.live.journal.confirm(entry['id'])
             if action in ('move', 'rotate', 'scale', 'transform'):
                 after = self.live.reads([(p, 0x40)])[0]
                 if after:

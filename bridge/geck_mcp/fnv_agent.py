@@ -822,8 +822,8 @@ class AgentTools:
                 raise LiveError('SPAWN_FAILED', 'PlaceAtMe did not return a reference',
                                 {'result': result, 'made': made})
             # Journaled at once: a later failure must not leave refs that fnv_undo cannot remove.
-            entry = self.live.journal.add({'kind': 'spawn', 'base': base.get('formId'), 'ref': element.get('formId'),
-                                           'near': anchor['formId'],
+            entry = self.live.journal.add({'kind': 'spawn', 'state': 'pending', 'base': base.get('formId'),
+                                           'ref': element.get('formId'), 'near': anchor['formId'],
                                            'undo': {'op': 'console_ref', 'ref': element.get('formId'),
                                                     'lines': ['Disable', 'MarkForDelete']}})
             made.append({'ptr': int(element['ptr'], 16), 'formId': element.get('formId'), 'journalId': entry['id']})
@@ -847,6 +847,7 @@ class AgentTools:
                 if moved:
                     row['movedAfterPlacing'] = True
             refs.append(row)
+            self.live.journal.confirm(m['journalId'], {'position': row['position']})
         return {'base': base.get('formId'), 'near': anchor['formId'], 'refs': refs, 'count': len(refs),
                 'note': 'fnv_undo or fnv_revert_all disables and deletes the spawned refs.'}
 

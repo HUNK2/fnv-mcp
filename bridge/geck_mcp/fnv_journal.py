@@ -23,6 +23,7 @@ UNDONE, CONFIRM = '_undone', '_confirm'
 # companion request), so a change that already landed in the game always gets its entry (S2 review I3).
 ADD_TIMEOUT = 60.0
 EVENTS = (UNDONE, CONFIRM)
+PROTECTED = ('id', 'seq', 'pid', 'started', 'orphan', 'undone', 'kind', 'state', 'time')   # a confirm never changes these
 _ASK = object()
 
 
@@ -81,11 +82,16 @@ class Journal:
                             by_id[i]['undone'] = True
                             by_id[i].setdefault('undoneAt', record.get('time'))
                 elif kind == CONFIRM:
-                    if record.get('id') in by_id:
-                        by_id[record['id']]['confirmed'] = record.get('after')
+                    e = by_id.get(record.get('id'))
+                    if e is not None:
+                        e['state'] = 'confirmed'
+                        after = record.get('after')
+                        if isinstance(after, dict):     # what the change turned out to be (S3.2)
+                            e.update({k: v for k, v in after.items() if k not in PROTECTED})
                 elif record.get('id'):
                     entry = dict(record)
                     entry.setdefault('undone', False)
+                    entry.setdefault('state', 'confirmed')   # only an intent written before its change is pending
                     entry.setdefault('seq', 0)        # entries from before seq numbers
                     if entry['id'] not in by_id:
                         order.append(entry['id'])
@@ -178,8 +184,10 @@ class Journal:
         with self.locked(ADD_TIMEOUT):
             self._append({'kind': UNDONE, 'ids': ids, 'time': time.time()})
 
-    def confirm(self, entry_id, after):
-        with self.locked():
+    def confirm(self, entry_id, after=None):
+        """The change of a pending entry (added with state 'pending' before the game was touched) landed; `after`
+        updates the entry's fields (the old bytes actually replaced, the pose reached...). PLAN-3 S3.2."""
+        with self.locked(ADD_TIMEOUT):
             self._append({'kind': CONFIRM, 'id': entry_id, 'after': after, 'time': time.time()})
 
     # ------------------------------------------------------------------ compaction

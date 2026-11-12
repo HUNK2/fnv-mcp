@@ -1007,13 +1007,15 @@ class PlaceTools:
         if not result.get('ok') or element.get('type') != 'form' or not element.get('ptr'):
             raise LiveError('PLACE_FAILED', 'PlaceAtMe returned no reference', result)
         ptr = int(element['ptr'], 16)
+        # Journaled as soon as the ref exists (G3): a failing SetPos/SetAngle must not leave a ref undo cannot see.
+        entry = self.live.journal.add({'kind': 'place', 'state': 'pending', 'ref': element.get('formId'),
+                                       'base': base['formId'],
+                                       'undo': {'op': 'console_ref', 'ref': element.get('formId'),
+                                                'lines': ['Disable', 'MarkForDelete']}})
         self._set(ptr, position, rotation or [0, 0, 0], scale)
         pose = self._pose(ptr)
         cell = value_of(self.link.eval('GetParentCell', ptr))
-        entry = self.live.journal.add({'kind': 'place', 'ref': element.get('formId'), 'base': base['formId'],
-                                       'cell': cell, **pose,
-                                       'undo': {'op': 'console_ref', 'ref': element.get('formId'),
-                                                'lines': ['Disable', 'MarkForDelete']}})
+        self.live.journal.confirm(entry['id'], {'cell': cell, **pose})
         return {'ref': element.get('formId'), 'base': base['formId'], **pose, 'journalId': entry['id']}
 
     def _ground(self, x, y, z, ignore=0):
@@ -1099,13 +1101,14 @@ class PlaceTools:
         if rotate:
             rotation = [(before['rotation'][i] + rotate[i]) % 360 for i in range(3)]
         self.live.changing('place adjust')
-        self._set(r['ptr'], position, rotation, scale)
-        after = self._pose(r['ptr'])
         undo = ['SetPos %s %.3f' % (a, v) for a, v in zip('XYZ', before['position'])] + \
                ['SetAngle %s %.3f' % (a, v) for a, v in zip('XYZ', before['rotation'])] + \
                ['SetScale %.4f' % before['scale']]
-        entry = self.live.journal.add({'kind': 'place_adjust', 'ref': r['formId'], 'before': before, 'after': after,
+        entry = self.live.journal.add({'kind': 'place_adjust', 'state': 'pending', 'ref': r['formId'], 'before': before,
                                        'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': undo}})
+        self._set(r['ptr'], position, rotation, scale)
+        after = self._pose(r['ptr'])
+        self.live.journal.confirm(entry['id'], {'after': after})
         self._update_placed(r['formId'], after)
         return {'ref': r['formId'], 'before': before, 'after': after, 'journalId': entry['id']}
 

@@ -941,11 +941,14 @@ class LiveService:
             kind = {1: 'u8', 2: 'u16', 4: 'u32'}[span]
         data = self._encode(kind, value)
         self.changing('memory write')
+        # Intent first (S3.2): a timeout on the write still leaves an entry whose undo puts the old bytes back.
+        seen = self.link.read(address, len(data))
+        entry = self.journal.add({'kind': 'memory', 'state': 'pending', 'address': '0x%08X' % address, 'type': kind,
+                                  'old': seen.hex(), 'new': data.hex(), 'target': target, 'path': path, 'note': note,
+                                  'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': seen.hex()}})
         old = self.link.write(address, data)
-        entry = self.journal.add({'kind': 'memory', 'address': '0x%08X' % address, 'type': kind, 'old': old.hex(),
-                                  'new': data.hex(), 'target': target, 'path': path, 'note': note,
-                                  'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': old.hex()},
-                                  })
+        self.journal.confirm(entry['id'], {'old': old.hex(),
+                                           'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': old.hex()}})
         return {'address': '0x%08X' % address, 'type': kind, 'old': old.hex(), 'new': data.hex(), 'path': steps,
                 'journalId': entry['id'], 'changed': old != data}
 
@@ -1322,6 +1325,11 @@ class LiveService:
         if op is None:   # never mark a change undone that nothing reverted (N1)
             return {'id': entry['id'], 'undone': False, 'kind': entry.get('kind'),
                     'error': {'code': 'UNKNOWN_UNDO_OP', 'message': 'No undo op %r in this bridge' % undo.get('op')}}
+        if entry.get('state') == 'pending' and not op.repeatable:
+            # The tool failed between its intent and its confirm: the change may or may not be in the game, and
+            # this op is only right when it is (S3.2).
+            return {'id': entry['id'], 'undone': False, 'kind': entry.get('kind'),
+                    'reason': 'outcome unknown: the change may not have happened'}
         out = {'id': entry['id'], 'undone': True, 'kind': entry.get('kind')}
         out.update(op(self, entry, undo) or {})
         return out
@@ -1406,7 +1414,7 @@ def _undo_console(live, entry, undo):
     return _console_undo(live, undo['line'])
 
 
-@undo_op('console_ref')
+@undo_op('console_ref', repeatable=True)    # its lines set absolute values (or Disable/MarkForDelete)
 def _undo_console_ref(live, entry, undo):
     try:
         ref = live.resolve(undo['ref'])

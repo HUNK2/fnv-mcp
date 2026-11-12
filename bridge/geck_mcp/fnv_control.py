@@ -224,6 +224,11 @@ class ControlTools:
         word_value = self._value_word(value, val_kind or 'int') if action != 'script' else 0
         fsel, fval, fdesc = self.agent._filter(sig, layout, filter) if filter else (0, 0, None)
         self.live.changing('behaviour hook on %s' % (record.get('name') or function))
+        # Intent first (S3.2): unhook-by-label is harmless when the install never landed.
+        entry = self.live.journal.add({'kind': 'hook_set', 'state': 'pending', 'function': record.get('name') or function,
+                                       'address': '0x%08X' % address, 'action': action, 'value': value,
+                                       'arg': arg, 'filter': fdesc, 'limit': limit, 'script': script,
+                                       'undo': {'op': 'unhook', 'label': label}})
         h = self._install(address, label, HF_RECORD | HF_EXIT, nargs, fsel, fval, (ACT_PREFIX, TRACE_PREFIX, TP_PREFIX))
         result = self.link.one('hookact', word(h['id']), word(mode), word(word_value), word(aux), word(int(limit or 0)),
                                hexs(script) if script else '-')
@@ -232,10 +237,7 @@ class ControlTools:
             raise HookError('HOOK_REFUSED', 'The companion refused the action: %s' % result.get('error'), result)
         seq = self.live.u32s([int(h['seqAddress'], 16)])[0] or 0
         self.agent._traces[address] = {'since': seq, 'callsAtStart': h['calls'], 'filter': fdesc, 'started': time.time()}
-        entry = self.live.journal.add({'kind': 'hook_set', 'function': record.get('name') or function,
-                                       'address': '0x%08X' % address, 'action': action, 'value': value,
-                                       'arg': arg, 'filter': fdesc, 'limit': limit, 'script': script,
-                                       'undo': {'op': 'unhook', 'label': label}})
+        self.live.journal.confirm(entry['id'], {'hookId': h['id']})
         return {'installed': True, 'function': record, 'signature': signature, 'action': ACT_NAMES[mode],
                 'value': value, 'valueWord': '0x%08X' % word_value, 'popBytes': aux if mode in (1, 2) else None,
                 'argument': {'index': arg, 'in': layout[int(arg)]['where'] if action == 'arg' else None} if action == 'arg' else None,
@@ -287,10 +289,12 @@ class ControlTools:
         engine = self.live.engine()
         sym = engine.symbolize(at) if EXE_TEXT[0] <= at < EXE_TEXT[1] else {}
         self.live.changing('code patch at 0x%08X' % at)
+        entry = self.live.journal.add({'kind': 'patch', 'state': 'pending', 'address': '0x%08X' % at, 'old': current.hex(),
+                                       'new': data.hex(), 'function': sym.get('name'),
+                                       'undo': {'op': 'write', 'address': '0x%08X' % at, 'hex': current.hex()}})
         old = self.link.write(at, data)
-        entry = self.live.journal.add({'kind': 'patch', 'address': '0x%08X' % at, 'old': old.hex(), 'new': data.hex(),
-                                       'function': sym.get('name'),
-                                       'undo': {'op': 'write', 'address': '0x%08X' % at, 'hex': old.hex()}})
+        self.live.journal.confirm(entry['id'], {'old': old.hex(),
+                                                'undo': {'op': 'write', 'address': '0x%08X' % at, 'hex': old.hex()}})
         return {'address': '0x%08X' % at, 'in': {'function': sym.get('name'), 'offset': sym.get('offset'),
                                                   'status': sym.get('status')} if sym else None,
                 'old': old.hex(' '), 'new': data.hex(' '), 'overwroteForeignPatch': foreign,

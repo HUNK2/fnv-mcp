@@ -297,7 +297,7 @@ class FakeSpawnLive:
     def __init__(self, honours_distance, fail_on=None):
         self.honours = honours_distance
         self.fail_on = fail_on
-        self.journal = SimpleNamespace(entries=[], add=self._add)
+        self.journal = SimpleNamespace(entries=[], add=self._add, confirm=lambda i, after=None: None)
         self.pos = {1: (100.0, 200.0, 10.0)}
         self.heading = 90.0
         self.n = 0
