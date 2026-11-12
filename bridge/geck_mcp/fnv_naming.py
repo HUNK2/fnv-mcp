@@ -541,10 +541,13 @@ class NamingTools:
                'exported': time.strftime('%Y-%m-%d %H:%M:%S'), 'engineMap': engine.identity(),
                'methods': calibration_summary(self.live.project.state_dir), 'runs': runs, 'harvests': harvests,
                'functions': functions}
+        if not functions:      # nothing recorded: no empty trace file in the decomp tree (T3)
+            return {'changed': False, 'exported': 0, 'path': None, 'functions': 0,
+                    'note': 'Nothing to export: no harvested calls, oracle results, experiments or field watches yet.'}
         path = Path(path) if path else FNVSYM / 'traces' / ('fnvmcp-%s.json' % time.strftime('%Y%m%d'))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(out, indent=1, default=str), encoding='utf-8')
-        return {'path': str(path), 'functions': len(functions),
+        return {'changed': True, 'exported': len(functions), 'path': str(path), 'functions': len(functions),
                 'withOracle': sum(1 for f in functions.values() if 'oracle' in f),
                 'withExperiments': sum(1 for f in functions.values() if 'experiments' in f),
                 'withFieldWatch': sum(1 for f in functions.values() if 'fieldWatch' in f),

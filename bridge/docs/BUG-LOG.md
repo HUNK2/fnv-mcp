@@ -1415,7 +1415,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R18 | low | fixed | The new "terminated from outside" note in `fnv_status` is wrong with an older companion and when the bridge itself force-quit (S4 diagnosis) | `geck_mcp/fnv_game.py:305-313` |
 | R19 | low | fixed | Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix) | `geck_mcp/fnv_live.py:89-96` |
 | R20 | low | fixed | E6 state file: one save with a different `start` drops every other section (ProcState) | `geck_mcp/fnv_pred.py:400-421` |
-| T3 | low | open | fnv_name_export writes a trace file even when it has nothing to export | `fnv naming export tool` |
+| T3 | low | fixed | fnv_name_export writes a trace file even when it has nothing to export | `fnv naming export tool` |
 | T4 | low | fixed | Inconsistent error codes for "game not running" | `fnv_live.py ready()/in_game(), fnv_link.py EngineLink.connect, fnv_game.game_pro` |
 | T5 | low | fixed | Raw int(...,16) ValueError text in fnv_probe and fnv_events arguments | `fnv_live_tools.py` |
 | T6 | low | fixed | Short form ids (no leading zeros / no load-order prefix) not accepted consistently | `fnv_live.py resolve()` |
@@ -2028,7 +2028,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed by a call (offline call created fnvsym/traces/fnvmcp-<date>.json with an empty payload)
 - What happens: a read-looking export tool creates a file in the decomp tree with zero entries, and does not report that nothing was exported; repeated calls overwrite.
 - Fix idea: return changed:false / NO_DATA without writing when there are no entries.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: fnv_name_export with nothing recorded writes no file and returns changed: false, exported: 0; an export reports changed: true and exported (S6.21, test_stab_s6c).
 
 ### T4. Inconsistent error codes for "game not running"
 
