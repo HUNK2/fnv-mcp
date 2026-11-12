@@ -204,12 +204,13 @@ def fly_on(live):
     """The fly camera flag (OSGlobals +6), read now."""
     osg = live.u32s([OS_GLOBALS])[0]
     flag = live.reads([(osg + FLY_FLAG, 1)])[0] if osg else None
-    return bool(flag and flag[0])
+    return bool(flag[0]) if flag else None      # None: unreadable, not "off"
 
 
 def hud_hidden(live):
     """HUD and menus hidden by tm, read now."""
-    return bool((live.reads([(MENUS_HIDDEN_FLAG, 1)])[0] or b'\x00')[0])
+    flag = live.reads([(MENUS_HIDDEN_FLAG, 1)])[0]
+    return bool(flag[0]) if flag else None      # None: unreadable
 
 
 class EyesTools:
@@ -311,7 +312,8 @@ class EyesTools:
         self.live.changing('camera')
         # The undo sets the fly camera off; it reads the flag first, so it never toggles blind (R7).
         entry = self.live.journal.add({'kind': 'camera', 'saved': self.saved,
-                                       'undo': {'op': 'fly_set', 'on': False} if not state['fly'] else None})
+                                       'undo': {'op': 'fly_set', 'on': state['fly'],
+                                                'fov': round(self.saved['fov'], 2) if self.saved['fov'] else None}})
         self.saved['journalId'] = (entry or {}).get('id')
 
     def _mark_camera_undone(self, saved):
@@ -785,7 +787,7 @@ class EyesTools:
         self._frames(2)
 
         def back():
-            if hud_hidden(self.live):      # the hud_set undo's rule: toggle only when it is still hidden
+            if hud_hidden(self.live) is not False:   # the hud_set rule: toggle only while hidden (blind if unreadable)
                 self.live.console('tm')
         return back
 

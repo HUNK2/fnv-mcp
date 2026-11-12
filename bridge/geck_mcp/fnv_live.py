@@ -988,7 +988,12 @@ class LiveService:
         entry = self.journal.add({'kind': 'memory', 'state': 'pending', 'address': '0x%08X' % address, 'type': kind,
                                   'old': seen.hex(), 'new': data.hex(), 'target': target, 'path': path, 'note': note,
                                   'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': seen.hex()}})
-        old = self.link.write(address, data)
+        try:
+            old = self.link.write(address, data)
+        except LinkError as e:
+            if e.code == 'MEMORY_UNWRITABLE':     # refused: nothing landed, nothing to undo (S3 review I2)
+                self.journal.mark_undone([entry['id']])
+            raise
         self.journal.confirm(entry['id'], {'old': old.hex(),
                                            'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': old.hex()}})
         return {'address': '0x%08X' % address, 'type': kind, 'old': old.hex(), 'new': data.hex(), 'path': steps,
@@ -1562,20 +1567,27 @@ def _undo_unreadable(what):
 def _undo_fly_set(live, entry, undo):
     from .fnv_eyes import fly_on
     want = bool(undo['on'])
-    if fly_on(live) == want:
-        return None
-    bad = _console_undo(live, 'tfc')
-    if bad:
-        return bad
-    if fly_on(live) != want:
-        return {'undone': False, 'reason': 'the fly camera did not turn %s' % ('on' if want else 'off')}
+    now = fly_on(live)
+    if now is None:
+        return _undo_unreadable('the fly camera flag')
+    if now != want:
+        bad = _console_undo(live, 'tfc')
+        if bad:
+            return bad
+        if fly_on(live) != want:
+            return {'undone': False, 'reason': 'the fly camera did not turn %s' % ('on' if want else 'off')}
+    if undo.get('fov') and 10 <= float(undo['fov']) <= 150:     # the camera entry's field of view (S3 review I3)
+        return _console_undo(live, 'fov %s' % round(float(undo['fov']), 2))
     return None
 
 
 @undo_op('hud_set', repeatable=True)
 def _undo_hud_set(live, entry, undo):
     from .fnv_eyes import hud_hidden
-    if hud_hidden(live) != bool(undo['on']):      # shown == on: nothing to do
+    hidden = hud_hidden(live)
+    if hidden is None:
+        return _undo_unreadable('the HUD hidden flag')
+    if hidden != bool(undo['on']):      # shown == on: nothing to do
         return None
     return _console_undo(live, 'tm')
 

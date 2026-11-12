@@ -84,6 +84,10 @@ class Journal:
                 elif kind == CONFIRM:
                     e = by_id.get(record.get('id'))
                     if e is not None:
+                        if e.get('state') == 'pending' and e.get('undone'):
+                            # another server undid the intent before the change landed (S3 review I1)
+                            e['undone'] = False
+                            e.pop('undoneAt', None)
                         e['state'] = 'confirmed'
                         after = record.get('after')
                         if isinstance(after, dict):     # what the change turned out to be (S3.2)

@@ -19,7 +19,7 @@ from collections import Counter
 
 from .fnv_agent import TRACE_PREFIX, clean_type, decode_word, layout_args, param_kind, parse_signature
 from .fnv_deep import HF_EXIT, HF_RECORD, HookError, decode_prologue
-from .fnv_link import hexs, word
+from .fnv_link import LinkError, hexs, word
 from .fnv_live import LiveError
 
 HF_STACK = 8
@@ -229,12 +229,17 @@ class ControlTools:
                                        'address': '0x%08X' % address, 'action': action, 'value': value,
                                        'arg': arg, 'filter': fdesc, 'limit': limit, 'script': script,
                                        'undo': {'op': 'unhook', 'label': label}})
-        h = self._install(address, label, HF_RECORD | HF_EXIT, nargs, fsel, fval, (ACT_PREFIX, TRACE_PREFIX, TP_PREFIX))
-        result = self.link.one('hookact', word(h['id']), word(mode), word(word_value), word(aux), word(int(limit or 0)),
-                               hexs(script) if script else '-')
-        if not result.get('ok'):
-            self.deep.remove(h['id'])
-            raise HookError('HOOK_REFUSED', 'The companion refused the action: %s' % result.get('error'), result)
+        try:
+            h = self._install(address, label, HF_RECORD | HF_EXIT, nargs, fsel, fval, (ACT_PREFIX, TRACE_PREFIX, TP_PREFIX))
+            result = self.link.one('hookact', word(h['id']), word(mode), word(word_value), word(aux),
+                                   word(int(limit or 0)), hexs(script) if script else '-')
+            if not result.get('ok'):
+                self.deep.remove(h['id'])
+                raise HookError('HOOK_REFUSED', 'The companion refused the action: %s' % result.get('error'), result)
+        except HookError as e:
+            if e.code in ('HOOK_REFUSED', 'ALREADY_HOOKED', 'PATCHED_ELSEWHERE', 'UNREADABLE'):
+                self.live.journal.mark_undone([entry['id']])     # refused: no hook stays (S3 review I2)
+            raise
         seq = self.live.u32s([int(h['seqAddress'], 16)])[0] or 0
         self.agent._traces[address] = {'since': seq, 'callsAtStart': h['calls'], 'filter': fdesc, 'started': time.time()}
         self.live.journal.confirm(entry['id'], {'hookId': h['id']})
@@ -292,7 +297,12 @@ class ControlTools:
         entry = self.live.journal.add({'kind': 'patch', 'state': 'pending', 'address': '0x%08X' % at, 'old': current.hex(),
                                        'new': data.hex(), 'function': sym.get('name'),
                                        'undo': {'op': 'write', 'address': '0x%08X' % at, 'hex': current.hex()}})
-        old = self.link.write(at, data)
+        try:
+            old = self.link.write(at, data)
+        except LinkError as e:
+            if e.code == 'MEMORY_UNWRITABLE':
+                self.live.journal.mark_undone([entry['id']])     # refused: nothing landed (S3 review I2)
+            raise
         self.live.journal.confirm(entry['id'], {'old': old.hex(),
                                                 'undo': {'op': 'write', 'address': '0x%08X' % at, 'hex': old.hex()}})
         return {'address': '0x%08X' % at, 'in': {'function': sym.get('name'), 'offset': sym.get('offset'),

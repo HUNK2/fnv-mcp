@@ -1266,6 +1266,11 @@ class PlaceTools:
                 latest[e['ref']].update({k: e[k] for k in ('position', 'rotation', 'scale') if k in e})
         out = []
         for e in latest.values():
+            if e.get('position') is None:    # pending: the tool failed after PlaceAtMe (S3 review I4)
+                try:
+                    e.update(self._pose_exact(self.live.resolve(e['ref'])['ptr']))
+                except Exception:  # noqa: BLE001 - the ref is gone or the game does not answer: listed without a pose
+                    pass
             row = {k: e.get(k) for k in ('ref', 'base', 'cell', 'position', 'rotation', 'scale', 'id')}
             if not exact:
                 row.update(self._rounded(row))

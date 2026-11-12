@@ -56,7 +56,9 @@ class RenderTools:
         state = None if after is None else bool(after)
         if name == 'menus' and state is not None:
             state = not state                  # the flag is "menus hidden"
-        self.live.journal.add({'kind': 'render_toggle', 'toggle': name, 'undo': None})
+        # menus: the HUD back to how it was (hud_set reads the flag; S3 review I3); other toggles stay "run again"
+        undo = {'op': 'hud_set', 'on': not before} if name == 'menus' and before is not None else None
+        self.live.journal.add({'kind': 'render_toggle', 'toggle': name, 'undo': undo})
         return verdict('%s: %s%s' % (command, 'accepted' if out.get('accepted') else 'refused',
                                      '' if state is None else ' (now %s)' % ('on' if state else 'off')),
                        'The game\'s own console toggle (%s). Run the same toggle again to undo it.' % what,
