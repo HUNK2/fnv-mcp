@@ -6,6 +6,7 @@ timeouts with overlapped pipe I/O, and reconnects when the game restarts.
 """
 import hashlib
 import json
+from contextlib import contextmanager
 import os
 import re
 import struct
@@ -52,7 +53,14 @@ def word(value):
 
 
 class EngineLink:
-    """Synchronous client: one request at a time, guarded by a lock. Reconnects on demand."""
+    """Synchronous client: one request at a time, guarded by a lock. Reconnects on demand.
+
+    The game's pipe takes one client at a time. After idle_release_seconds without a request the link closes its
+    handle, so another client (the live regression runner, a second server) can attach; the next request reconnects
+    (PLAN-3 S4.1). It stays open while a request runs, while pinned (pin()), and while the companion last said the
+    frame gate is held or a thread is parked at a stop. 0 never releases."""
+
+    idle_release_seconds = 20.0
 
     def __init__(self, pipe=None, timeout=15.0):
         self.pipe = r'\\.\pipe\%s' % (pipe or os.environ.get('FNVMCP_PIPE') or DEFAULT_PIPE)
@@ -61,6 +69,10 @@ class EngineLink:
         self.lock = threading.RLock()
         self.hello = None
         self.last_frame = None      # frame of the last reply on this connection (identity without a ping)
+        self._last_use = time.monotonic()
+        self._pins = 0
+        self._holding = False       # the companion's last word: gate held or a stop parked
+        self._idle_thread = None
 
     # ------------------------------------------------------------------ connection
     def connect(self, wait=0.0):
@@ -82,7 +94,45 @@ class EngineLink:
                 else:
                     time.sleep(0.25)
         self.hello = None
+        self._last_use = time.monotonic()
+        if self._idle_thread is None or not self._idle_thread.is_alive():
+            self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True, name='fnvmcp-link-idle')
+            self._idle_thread.start()
         return self
+
+    @contextmanager
+    def pin(self):
+        """Keep the pipe open while the block runs (a sequence of calls another client must not interleave with)."""
+        with self.lock:
+            self._pins += 1
+        try:
+            yield self
+        finally:
+            with self.lock:
+                self._pins -= 1
+                self._last_use = time.monotonic()
+
+    def _idle_loop(self):
+        while self.handle is not None:
+            limit = self.idle_release_seconds
+            time.sleep(min(1.0, limit / 4) if limit and limit > 0 else 1.0)
+            if not limit or limit <= 0 or self._pins or self._holding:
+                continue
+            if time.monotonic() - self._last_use < limit:
+                continue
+            if self.lock.acquire(blocking=False):      # never while a request runs
+                try:
+                    if (self.handle is not None and not self._pins and not self._holding
+                            and time.monotonic() - self._last_use >= limit):
+                        self.close()
+                finally:
+                    self.lock.release()
+
+    def _note(self, results):
+        """Track whether the companion holds the gate or parks a stop (then the pipe is not released when idle)."""
+        for r in results:
+            if isinstance(r, dict) and 'held' in r:
+                self._holding = bool(r.get('held')) or bool(r.get('parked'))
 
     def close(self):
         import _winapi
@@ -141,6 +191,7 @@ class EngineLink:
                     self.connect(wait=2.0 if attempt else 0.5)
                 try:
                     reply = self._io(line.encode('ascii') + b'\n', timeout)
+                    self._last_use = time.monotonic()
                     return json.loads(reply.decode('utf-8', errors='replace'))
                 except LinkError as e:
                     self.close()
@@ -157,6 +208,7 @@ class EngineLink:
     def ping(self, timeout=3.0):
         reply = self._exchange('%s\tping' % uuid.uuid4().hex[:12], timeout)
         self.hello = reply
+        self._note([reply])
         return reply
 
     def batch(self, ops, timeout=None):
@@ -182,6 +234,7 @@ class EngineLink:
             raise LinkError('COMPANION_PROTOCOL', 'Expected %d results, got %d' % (len(ops), len(results)))
         for result in results:
             result.setdefault('frame', reply.get('frame'))
+        self._note(results)
         return results
 
     def one(self, *op, timeout=None):
