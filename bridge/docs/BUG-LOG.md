@@ -1423,7 +1423,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | T8 | low | open | Parameters documented/required but ignored | `several fnv_* registrations` |
 | T9 | low | open | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
 | P3 | low | fixed | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
-| P4 | low | open | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
+| P4 | low | fixed | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
 | P6 | low | open | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
 | P7 | low | open | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
 | P8 | low | open | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
@@ -2099,7 +2099,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed (synthetic; no real plugin triggers it)
 - What happens: a subrecord preceded by XXXX but with size <= 0xFFFF (even XXXX=0) is re-encoded without the XXXX, so write(parse(b)) != b despite the docstring claiming exactness.
 - Fix idea: remember that the XXXX was present, or document the normalisation.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: a subrecord read with a preceding XXXX keeps that fact (Subrecord.xxxx, not part of equality) and is written back with it, so write(parse(b)) == b; data over 0xFFFF still always gets XXXX (S6.10, test_stab_s6b).
 
 ### P6. `_form` off-by-one
 

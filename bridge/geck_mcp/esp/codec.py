@@ -45,6 +45,7 @@ class FormatError(ValueError):
 class Subrecord:
     tag: str
     data: bytes
+    xxxx: bool = field(default=False, compare=False)   # read with a preceding XXXX: written back with it (P4)
 
     def __repr__(self):
         return 'Subrecord(%s, %d bytes)' % (self.tag, len(self.data))
@@ -215,6 +216,7 @@ def parse_subrecords(data, base=0):
             raise FormatError('truncated subrecord header', base + pos)
         tag, size = SUB_HEADER.unpack_from(data, pos)
         pos += 6
+        big = pending is not None
         if pending is not None:
             if size != 0:
                 raise FormatError('subrecord after XXXX must declare size 0', base + pos - 6)
@@ -231,7 +233,7 @@ def parse_subrecords(data, base=0):
             name = _tag(tag, pos)
         except UnicodeDecodeError:
             raise FormatError('non-ASCII subrecord tag', base + pos - 6)
-        subs.append(Subrecord(name, bytes(data[pos:pos + size])))
+        subs.append(Subrecord(name, bytes(data[pos:pos + size]), big))
         pos += size
     if pending is not None:
         raise FormatError('XXXX at end of record', base + pos)
@@ -332,7 +334,7 @@ def encode_subrecords(subs):
         tag = sub.tag.encode('ascii')
         if len(tag) != 4:
             raise ValueError('subrecord tag must be 4 ASCII characters: %r' % sub.tag)
-        if len(sub.data) > MAX_SUBRECORD:
+        if len(sub.data) > MAX_SUBRECORD or getattr(sub, 'xxxx', False):
             out += SUB_HEADER.pack(b'XXXX', 4) + struct.pack('<I', len(sub.data))
             out += SUB_HEADER.pack(tag, 0)
         else:

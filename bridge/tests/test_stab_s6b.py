@@ -219,5 +219,27 @@ class FuzzTests(unittest.TestCase):
         self.assertEqual(wrong[:10], [], '%d raw exceptions' % len(wrong))
 
 
+class XxxxTests(unittest.TestCase):
+    """P4: a subrecord read with XXXX but small enough without it was written back without the XXXX."""
+
+    def test_xxxx_round_trip_exact(self):
+        from geck_mcp.esp import codec
+        small = b'abcdefghij'
+        body = (sub(b'EDID', b'Big\0') + b'XXXX' + struct.pack('<HI', 4, len(small)) + b'DATA' + struct.pack('<H', 0)
+                + small)
+        data = plugin(record(b'MISC', 0x01000800, body))
+        self.assertEqual(codec.write(codec.parse(data, lazy=False)), data)
+
+    def test_large_subrecord_still_gets_xxxx(self):
+        from geck_mcp.esp import codec
+        rec = codec.Record('MISC', 0x01000800)
+        rec.subrecords = [codec.Subrecord('DATA', b'x' * 0x10000)]
+        self.assertIn(b'XXXX', codec.encode_subrecords(rec.subrecords))
+
+    def test_xxxx_flag_does_not_change_equality(self):
+        from geck_mcp.esp import codec
+        self.assertEqual(codec.Subrecord('DATA', b'1'), codec.Subrecord('DATA', b'1', xxxx=True))
+
+
 if __name__ == '__main__':
     unittest.main()
