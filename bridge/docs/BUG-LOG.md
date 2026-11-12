@@ -2265,7 +2265,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | N23 | low | open | test_supervisor BusyReloadTests fail under heavy CPU load (cancel reaches in_flight late); pass alone | `tests/test_supervisor.py:207` |
 | U1 | high | fixed | Out-of-order undo is guarded only for place_adjust, time fixed/speed and hot swaps: memory writes, patches, settings, AVs, positions on one target end with the wrong value | `audit3/state.md H1` |
 | U2 | medium | fixed | Undoing a clock pause made by another server is marked undone while the clock stays paused | `audit3/state.md M1` |
-| U3 | medium | open | A hot-swap undo whose reply times out after the swap landed stays open; a retry swaps the code back | `audit3/state.md M2` |
+| U3 | medium | fixed | A hot-swap undo whose reply times out after the swap landed stays open; a retry swaps the code back | `audit3/state.md M2` |
 | U4 | low | open | An undo between a change and its confirm is reopened by the confirm | `audit3/state.md L1` |
 | U5 | low | open | fnv_undo (count) is stuck on a newest pending entry with a non-repeatable op | `audit3/state.md L2` |
 | U6 | low | open | Compaction fallback rewrites journal.jsonl in place (not atomic) | `audit3/state.md L3` |
@@ -2393,5 +2393,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: medium
 - Found by: round-3 audit (docs/audit3/state.md M1)
 - Fix: require_game re-reads the shared pause flag (the state file) on every call, not only when the game process changes; a flag that another server set is taken as restored (the counter is checked before Enable), and one another server cleared ends this server's own. So the undo from server B resumes A's pause, and A's next resume does not Enable a second time. Tests: tests/test_s7_round3.py TwoServerPauseTests.
+- Status: fixed
+
+### U3. A hot-swap undo whose reply was lost after it landed swapped the code back on the retry
+
+- Where: geck_mcp/fnv_data.py (script hot swap journal entry), fnv_live.py (_undo_swap_script)
+- Severity: medium
+- Found by: round-3 audit (docs/audit3/state.md M2)
+- Fix: the hot-swap entry records the target script's code pointer from before the swap (undo.data); the undo reads the target first and, when it already holds that code, reports the change undone without swapping again. Entries from before the fix swap as before. Tests: tests/test_s7_round3.py SwapUndoTests.
 - Status: fixed
 

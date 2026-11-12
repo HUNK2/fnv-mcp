@@ -723,10 +723,15 @@ class DataTools:
                             'variables in the same order (append new ones at the end) or pass force=true',
                             {'moved': moved, 'dropped': dropped, 'added': added})
         live.changing('script hot swap')
+        # the target's code pointer before the swap: the undo checks it, so a retry after a lost reply does not swap
+        # the code back again (U3)
+        before = live.reads([(target + SCRIPT_DATA, 4)])[0]
+        old_data = struct.unpack('<I', before)[0] if before else 0
         swapped = swap_script_code(live, target, fresh)
         entry = live.journal.add({'kind': 'script_hot_swap', 'script': target_info.get('formId'), 'target': '0x%08X' % target,
                                   'holder': '0x%08X' % fresh,
-                                  'undo': {'op': 'swap_script', 'target': '0x%08X' % target, 'holder': '0x%08X' % fresh}})
+                                  'undo': {'op': 'swap_script', 'target': '0x%08X' % target, 'holder': '0x%08X' % fresh,
+                                           'data': '0x%08X' % old_data}})
         return {'script': target_info, 'owner': owner, 'swapped': swapped, 'variablesAdded': added,
                 'variablesMoved': moved or None, 'variablesDropped': dropped or None,
                 'statements': len(compiled.get('statements') or []), 'journalId': entry['id'],

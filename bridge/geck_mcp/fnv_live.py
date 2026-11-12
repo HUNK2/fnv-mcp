@@ -1881,4 +1881,9 @@ def _undo_swap_script(live, entry, undo):
              and (e.get('undo') or {}).get('target') == undo['target'] and (e.get('seq') or 0) > (entry.get('seq') or 0)]
     if later:
         return {'undone': False, 'reason': 'undo the later swap first', 'later': [e['id'] for e in later]}
+    if undo.get('data'):     # the target already holds its code from before the swap: an earlier undo landed (U3)
+        from .fnv_data import SCRIPT_DATA
+        now = live.reads([(int(undo['target'], 16) + SCRIPT_DATA, 4)])[0]
+        if now is not None and struct.unpack('<I', now)[0] == int(undo['data'], 16) and int(undo['data'], 16):
+            return {'note': 'the script already runs its code from before the swap (an earlier undo landed)'}
     swap_script_code(live, int(undo['target'], 16), int(undo['holder'], 16))

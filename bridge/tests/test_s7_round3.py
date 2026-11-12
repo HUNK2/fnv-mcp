@@ -380,5 +380,51 @@ class TwoServerPauseTests(unittest.TestCase):
             self.assertEqual(counter['n'], 0)
 
 
+class SwapUndoTests(unittest.TestCase):
+    """U3: a hot-swap undo whose reply was lost after it landed swapped the code back again on the retry."""
+
+    def setup(self, fake):
+        import struct
+        from geck_mcp.fnv_data import SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
+        target, holder = 0x9000, 0x9800
+        for base, data in ((target, 0x1111), (holder, 0x2222)):
+            fake.link.put(base + SCRIPT_HEADER, bytes(0x10))
+            fake.link.put(base + SCRIPT_DATA, struct.pack('<I', data))
+            fake.link.put(base + SCRIPT_REFS, bytes(8))
+            fake.link.put(base + SCRIPT_VARS, bytes(8))
+        return target, holder, SCRIPT_DATA
+
+    def test_an_undo_that_already_landed_is_not_swapped_back(self):
+        import struct
+        from fakes import FakeLive
+        with FakeLive() as fake:
+            target, holder, data_off = self.setup(fake)
+            # the state after a swap and a landed undo: the target holds its original code 0x1111 again
+            entry = fake.live.journal.add({'kind': 'script_hot_swap', 'undo': {
+                'op': 'swap_script', 'target': '0x%08X' % target, 'holder': '0x%08X' % holder,
+                'data': '0x00001111'}})
+            r = fake.live.undo(journal_id=entry['id'])['results'][0]
+            self.assertTrue(r['undone'])
+            self.assertEqual(struct.unpack('<I', fake.link.get(target + data_off, 4))[0], 0x1111)
+
+    def test_a_swap_is_undone(self):
+        import struct
+        from fakes import FakeLive
+        with FakeLive() as fake:
+            target, holder, data_off = self.setup(fake)
+            entry = fake.live.journal.add({'kind': 'script_hot_swap', 'undo': {
+                'op': 'swap_script', 'target': '0x%08X' % target, 'holder': '0x%08X' % holder,
+                'data': '0x00002222'}})     # before the swap the target held 0x2222; now it holds 0x1111
+            r = fake.live.undo(journal_id=entry['id'])['results'][0]
+            self.assertTrue(r['undone'])
+            self.assertEqual(struct.unpack('<I', fake.link.get(target + data_off, 4))[0], 0x2222)
+
+    def test_the_hot_swap_records_the_targets_code(self):
+        import inspect
+        from geck_mcp import fnv_data
+        source = inspect.getsource(fnv_data)
+        self.assertIn("'data': '0x%08X' % old_data", source)
+
+
 if __name__ == '__main__':
     unittest.main()
