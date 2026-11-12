@@ -44,6 +44,7 @@ from pathlib import Path
 from .fnv_conv import ConvError, verdict
 from .fnv_link import word
 from .fnv_native import c_name
+from .fnv_state import GameIdentity, read_json, update_json
 
 REL32, DIR32, DIR32NB = 0x14, 0x06, 0x07
 WRITABLE = 0x80000000
@@ -72,26 +73,25 @@ class CodeTools:
         if game != self._swaps_game:
             self._swaps_game = game
             self._swaps = {}
-            try:
-                data = json.loads((self.work / 'swaps.json').read_text(encoding='utf-8'))
-                if game and data.get('game') == game:
-                    self._swaps = {int(k, 16): v for k, v in data.get('swaps', {}).items()}
-            except (OSError, ValueError):
-                pass
+            data = read_json(self.work / 'swaps.json', {})
+            stored = GameIdentity.parse(data.get('game'))
+            if game and stored and stored.same_game(GameIdentity.parse(game)):
+                try:
+                    self._swaps = {int(k, 16): v for k, v in (data.get('swaps') or {}).items()}
+                except (TypeError, ValueError):
+                    self._swaps = {}
         return self._swaps
 
     def _save_swaps(self):
-        self.work.mkdir(parents=True, exist_ok=True)
-        (self.work / 'swaps.json').write_text(json.dumps(
-            {'game': self._swaps_game, 'swaps': {'0x%08X' % k: v for k, v in self._swaps.items()}}, indent=1),
-            encoding='utf-8')
+        update_json(self.work / 'swaps.json', lambda old: {
+            'game': self._swaps_game, 'swaps': {'0x%08X' % k: v for k, v in self._swaps.items()}}, {}, indent=1)
 
     def _game_id(self):
         try:
             proc = self.live.game.process()
         except Exception:  # noqa: BLE001 - no game (or several): nothing is swapped in it
             return None
-        return '%d:%s' % proc if proc else None
+        return GameIdentity(*proc).key() if proc else None
 
     # ------------------------------------------------------------------ decomp access
     @property

@@ -25,6 +25,7 @@ import threading
 from pathlib import Path
 
 from .fnv_conv import ConvError
+from .fnv_state import GameIdentity, StateError, read_json, update_json
 
 MAX_OPS = 64
 MAX_DEPTH = 16
@@ -382,42 +383,46 @@ class ProcState:
         folder = getattr(getattr(self.live, 'project', None), 'state_dir', None)
         return Path(folder) / self.name if folder else None
 
-    def _read(self, path):
-        try:
-            data = json.loads(path.read_text(encoding='utf-8'))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
+    @staticmethod
+    def _ident(rec):
+        return GameIdentity.parse(rec) if isinstance(rec, dict) else None
 
     def load(self, section, pid, start):
-        """The stored value of a section for this game process, or None."""
+        """The stored value of a section for this game process, or None. A start time that could not be read on
+        either side still matches the pid (R20)."""
         path = self._path()
-        if path is None:
+        if path is None or not pid:
             return None
         with _STATE_LOCK:
-            rec = self._read(path).get(section)
-        if not isinstance(rec, dict) or rec.get('pid') != pid or rec.get('start') != start:
+            rec = read_json(path, {}).get(section)
+        ident = self._ident(rec)
+        if not ident or not ident.same_game(GameIdentity(int(pid), start)):
             return None
         return rec.get('value')
 
     def save(self, section, pid, start, value):
-        """Store a section (None, an empty list or an empty dict removes it). Records of other processes are dropped on the way."""
+        """Store a section (None, an empty list or an empty dict removes it). Records of other game processes are
+        dropped on the way; records of this one are kept even when one side's start time is unknown (R20)."""
         path = self._path()
-        if path is None:
+        if path is None or not pid:
             return
-        with _STATE_LOCK:
-            data = self._read(path)
-            data = {k: v for k, v in data.items() if isinstance(v, dict) and v.get('pid') == pid
-                    and v.get('start') == start}
+        me = GameIdentity(int(pid), start)
+
+        def change(data):
+            kept = {}
+            for k, v in data.items():
+                ident = self._ident(v)
+                if ident and ident.same_game(me):
+                    kept[k] = v
             if value is None or (isinstance(value, (list, dict)) and not value):
-                data.pop(section, None)
+                kept.pop(section, None)
             else:
-                data[section] = {'pid': pid, 'start': start, 'value': value}
+                old = self._ident(kept.get(section))
+                known = start if start is not None else (old.start if old else None)
+                kept[section] = {'pid': me.pid, 'start': known, 'value': value}
+            return kept
+        with _STATE_LOCK:
             try:
-                if data:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(json.dumps(data), encoding='utf-8')
-                elif path.exists():
-                    path.unlink()
-            except OSError:
+                update_json(path, change, {})
+            except (OSError, StateError):   # best effort: no persistence, never an error
                 pass

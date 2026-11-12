@@ -209,6 +209,7 @@ class Game:
         self.state.mkdir(parents=True, exist_ok=True)
         self.link = EngineLink(getattr(fnv, 'engine_pipe', None))
         self._session = None
+        self._proc_cache = None    # (monotonic time, process()) - tasklist costs ~100 ms and tools ask often (N11)
 
     # ------------------------------------------------------------ paths
     @property
@@ -253,11 +254,23 @@ class Game:
         return session
 
     # ------------------------------------------------------------ status
-    def process(self):
+    PROCESS_CACHE_SECONDS = 1.0
+
+    def process(self, fresh=False):
+        """(pid, start) of the one running game, or None. The answer is reused for a second (N11); launch and quit
+        forget it, and `fresh=True` asks again."""
+        cached = getattr(self, '_proc_cache', None)
+        if not fresh and cached and time.monotonic() - cached[0] < self.PROCESS_CACHE_SECONDS:
+            return cached[1]
         running = game_processes()
         if len(running) > 1:
             raise GameError('SEVERAL_GAMES', 'More than one FalloutNV.exe is running', {'pids': [p for p, _ in running]})
-        return running[0] if running else None
+        found = running[0] if running else None
+        self._proc_cache = (time.monotonic(), found)
+        return found
+
+    def forget_process(self):
+        self._proc_cache = None
 
     def ping(self, timeout=3.0):
         try:
@@ -384,6 +397,7 @@ class Game:
         leftover = self.close_stale_mo2()
         stale = self.clear_stale_mo2_state()
         launched = time.time()
+        self.forget_process()
         method = self.shell_launch(mo2)
         self.save_session(pid=None, launchedAt=launched, start=start, ready=False, journal=None)
         timeline = [{'t': 0, 'event': 'mo2_run', 'method': method,
@@ -678,6 +692,7 @@ class Game:
             pass
 
     def _quit_result(self, pid, steps, how):
+        self.forget_process()
         self.link.close()
         self.save_session(pid=None, ready=False)
         return {'wasRunning': True, 'pid': pid, 'how': how, 'steps': steps}

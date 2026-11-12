@@ -19,6 +19,7 @@ from . import fnv_engine, fnv_facts, fnv_link
 from .fnv_facts import FACTS
 from .fnv_game import Game, GameError
 from .fnv_link import LinkError, element_value, hexs, word
+from .fnv_state import GameIdentity
 
 FORM_ID = re.compile(r'^(?:0x)?([0-9A-Fa-f]{1,8})$')
 PLUGIN_LOCAL = re.compile(r'^([A-Za-z0-9_. \'-]{1,80}\.es[mp]):(?:0x)?([0-9A-Fa-f]{1,6})$', re.I)
@@ -145,9 +146,8 @@ class LiveService:
     def same_process(entry, ident):
         """True when a journal entry was made in the game process `ident`. Entries without a pid come from an
         unknown process (older journals, or no game connected) and never match."""
-        if not entry.get('pid') or not ident or entry['pid'] != ident.get('pid'):
-            return False
-        return not entry.get('started') or not ident.get('started') or entry['started'] == ident['started']
+        mine, theirs = GameIdentity.parse(entry), GameIdentity.parse(ident)
+        return bool(mine and theirs and mine.same_game(theirs))
 
     @property
     def link(self):
