@@ -116,22 +116,36 @@ class WinCaptureSmoke(unittest.TestCase):
 
 class ScenarioRunnerSmoke(ContractCase):
     def test_prepare_failure_is_reported(self):
+        # The game runs; a start that names no valid cell is refused before any console line is sent (N15).
         from geck_mcp.fnv_scenario import ScenarioRunner
         report = ScenarioRunner(self.live).run(data={'name': 'x', 'start': {'coc': 'bad;cell'}, 'steps': [{'wait': 1}]})
         self.assertFalse(report['passed'])
-        self.assertTrue(report['failures'])
+        self.assertEqual([(f['phase'], f.get('code')) for f in report['failures']], [('prepare', 'BAD_CELL')])
+        sent = [bytes.fromhex(a[-1]).decode('cp1252', 'replace') for name, a in self.fake.link.ops if name == 'sched']
+        self.assertFalse([line for line in sent if 'bad;cell' in line], sent)
 
     def test_crash_path_is_reported(self):
-        from geck_mcp import fnv_link
+        # The game dies during a step: the report marks the crash (run phase), not a prepare failure.
+        from unittest import mock
+        from geck_mcp import fnv_game, fnv_link, fnv_scenario
         from geck_mcp.fnv_scenario import ScenarioRunner
+        link, gone = self.fake.link, []
+        real = link._op
 
-        def gone(*a, **k):
-            raise fnv_link.LinkError('COMPANION_DISCONNECTED', 'the game went away')
-        self.fake.link.batch = gone
-        report = ScenarioRunner(self.live).run(data={'name': 'x', 'relaunch_on_crash': False,
-                                                     'steps': [{'run': 'player.GetAV Luck'}]})
+        def op(name, args):
+            if name in ('run', 'con') and 'GetAV Luck' in bytes.fromhex(args[0]).decode('cp1252', 'replace'):
+                gone.append(1)
+                self.live._game.process = lambda: None
+                raise fnv_link.LinkError('COMPANION_DISCONNECTED', 'the game went away')
+            return real(name, args)
+        link._op = op
+        procs = lambda: [] if gone else [(4242, 1)]  # noqa: E731
+        with mock.patch.object(fnv_scenario, 'game_processes', procs), mock.patch.object(fnv_game, 'game_processes', procs):
+            report = ScenarioRunner(self.live).run(data={'name': 'x', 'relaunch_on_crash': False,
+                                                         'steps': [{'run': 'player.GetAV Luck'}]})
+        self.assertTrue(gone, 'the step never ran: %s' % report['failures'])
         self.assertFalse(report['passed'])
-        self.assertTrue(report['failures'])
+        self.assertTrue(report.get('crash'), report['failures'])
 
     def test_run_all(self):
         from geck_mcp.fnv_scenario import ScenarioRunner

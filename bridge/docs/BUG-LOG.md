@@ -1369,7 +1369,7 @@ A second hunt the same day, after the fix pass was committed (133ed0e). Nothing 
 
 The parser sweep ran 16 plugins (about 630,000 records), the record index (866,000 references), 3,719 scripts, 58 saves (1.4 million change forms), 21 BSAs and the engine map; everything not listed here checked clean. Findings that did not hold up when checked were dropped (fnv_window persist writes the dev profile's Fallout.ini, as designed, with a backup; fnv_hook_set is gated). R entries that name an earlier ID are fixes from the first pass that are incomplete or wrong.
 
-Totals: 68 bugs, 6 high, 19 medium, 43 low (N13 found by the S4.3 race tests, N14 by the S4.5 smoke tests). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
+Totals: 69 bugs, 6 high, 19 medium, 44 low (N13 found by the S4.3 race tests, N14 and N15 by the S4.5 smoke tests). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
 
 Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m unittest discover -s tests` from `bridge`, ran 1,011 tests: all passed, 4 skipped, 0 failures. That includes the 54 engine companion tests, which now find Zig from the project files instead of being skipped without `GECK_MCP_ZIG`. Before S0 the same run with `GECK_MCP_ZIG` set was 1,002 tests, 4 skipped. No C test failed, so no N13.
 
@@ -1443,6 +1443,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | N12 | low | open | Nothing under `state/fnv` is pruned, and none of it has a cross-process lock | `state/fnv/*` |
 | N13 | high | fixed | Two threads passing one int3 breakpoint at once crash the game (access violation in the trap handler) | `native/engine/w2_bp.c:84 byte_set` |
 | N14 | low | fixed | fnv_name_oracle with no record index fails with a raw SQLite error (FNV_ERROR, no next step) | `geck_mcp/fnv_oracle.py forms` |
+| N15 | low | fixed | A scenario's coc or save start is sent to the console unchecked when the game already runs | `geck_mcp/fnv_scenario.py prepare` |
 
 ## Round 2: High
 
@@ -2147,3 +2148,12 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: in a project whose record index was never built, `forms` opened `state/fnv/records.sqlite` with sqlite3 (which creates an empty file) and its query failed with `OperationalError: no such table: records`; the agent got FNV_ERROR with no next step.
 - Fix: a missing file, a missing table or no FalloutNV.esm rows raise `RECORDS_INDEX_MISSING` naming fnv_record_find as the way to build the index.
 - Status: fixed (S4.5)
+
+### N15. A scenario's coc or save start is sent to the console unchecked when the game already runs
+
+- Where: geck_mcp/fnv_scenario.py `ScenarioRunner.prepare`.
+- Severity: low
+- Confidence: confirmed (tests/test_untested_smoke.py `test_prepare_failure_is_reported`)
+- What happens: `parse_start` checks cell and save names only on the launch path. With the game running, `start: {coc: "bad;cell"}` became the console line `coc bad;cell` (scheduled as is), so any text reached the console, and the run then waited for a cell that never loads.
+- Fix: `prepare` runs `parse_start` on the start before anything else: BAD_CELL, BAD_SAVE or SAVE_MISSING, and nothing is sent.
+- Status: fixed (S4 review pass)

@@ -499,6 +499,11 @@ class ScenarioRunner:
 
     def prepare(self, scenario):
         start = self._start(scenario)
+        # Checked before anything happens: with the game already running, the start becomes a console line (coc,
+        # load), so a cell or save name must be a plain name, never console text (N15).
+        from .fnv_game import parse_start
+        if start not in ('menu', 'continue', None):
+            parse_start(start, self.game.saves_dir)
         proc = self.game.process()
         if scenario.get('restart') and proc:
             self.game.quit()
