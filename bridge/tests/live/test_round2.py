@@ -9,7 +9,6 @@ from .base import CAPS, LiveCase
 
 
 class Round2Tests(LiveCase):
-    @unittest.expectedFailure                     # G1: open
     def test_g1_nudge_undo_export_pose(self):
         # The export (fnv_author) reads the pose fnv_place list shows. After nudge + undo it must be the pose from
         # before the nudge. (The live position is not compared: a placed item settles under physics.)
@@ -42,7 +41,6 @@ class Round2Tests(LiveCase):
         finally:
             self.ok('fnv_time_control', action='resume')
 
-    @unittest.expectedFailure                     # G9: open
     def test_g9_gamehour_fraction(self):
         before = self.ok('fnv_globals', query='GameHour')
         try:
