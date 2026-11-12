@@ -118,6 +118,7 @@ static int isite_add(uint32_t addr, int bp, DWORD owner, uint32_t purpose) {
         }
     }
     if (slot < 0) return -1;
+    if (!shared && cov_in_flight(addr, 1)) return -2; /* a coverage hit there would erase the new 0xCC: busy */
     if (!shared) cov_release_range(addr, 1); /* an armed coverage byte is put back first, never saved as orig */
     if (!shared && !read_bytes(addr, &orig, 1)) return -1;
     isites[slot].live = true;
@@ -493,7 +494,7 @@ static const char *bp_resume_prepare(const Stop *s, uint32_t mode, uint32_t arg,
         probe_suspend();
         site = isite_add(arg, -1, s->thread, SITE_TO);
         probe_resume();
-        return site < 0 ? "unreadable" : NULL;
+        return site == -2 ? "busy" : site < 0 ? "unreadable" : NULL;
     }
     if (mode == RESUME_TRACE) {
         uint32_t max = 0, lo = 0, hi = 0;
@@ -605,7 +606,7 @@ static void op_bp_set(int argc, char **argv) {
         probe_suspend();
         site = isite_add(addr, (int)id, 0, SITE_BP);
         probe_resume();
-        if (site < 0) return fail("unreadable");
+        if (site < 0) return fail(site == -2 ? "busy" : "unreadable");
     }
     Bp *b = &bps[id];
     b->used = true;

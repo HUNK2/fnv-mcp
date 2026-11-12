@@ -130,7 +130,8 @@ class CoverageRaceTests(StopTestCase):
     def test_release_with_threads_suspended_while_a_hit_is_in_flight(self):
         # A breakpoint is written with every other thread suspended (isite_add). If a thread is suspended while it
         # owns a coverage line (state 3, 0xCC still there), the release must not wait for it, or the main thread
-        # waits forever; and the breakpoint must still save the real original byte, not 0xCC.
+        # waits forever. The owner would put the original byte back later, over the new 0xCC, so the breakpoint is
+        # refused as busy until the hit is done; then it is set with the real original byte.
         poke(self.host.process, self.t['seam'], 1)
         self.start_race(1, 1)
         poke(self.host.process, self.t['raceGo'], 1)
@@ -146,13 +147,43 @@ class CoverageRaceTests(StopTestCase):
         self.release_seam()
         caller.join(5)
         self.assertTrue(returned, 'bp set did not return while a coverage hit was in flight (deadlock)')
-        self.assertTrue(result.get('bp', {}).get('ok'), result)
-        self.assertEqual(self.host.link.one('bp', 'clear', hexint(1)).get('cleared'), 1)
+        self.assertEqual(result.get('bp', {}).get('error'), 'busy', result)
         self.wait_done(1)
+        again = self.host.link.one('bp', 'set', hexint(1), hexint(self.t['bpTarget']), 'int3', 'ff', '0')
+        self.assertTrue(again.get('ok'), again)
+        self.assertEqual(self.host.link.one('rd', hexint(self.t['bpTarget']), '1')['hex'], 'cc')
+        self.assertEqual(self.host.link.one('bp', 'clear', hexint(1)).get('cleared'), 1)
         self.assertIsNone(self.host.process.poll(), 'the host died (exit 0x%08X)' % ((self.host.process.poll() or 0) & 0xFFFFFFFF))
         self.assertEqual(self.read32('raceDone'), 1)
         self.assertEqual(self.read32('raceBad'), 0)
         self.assertEqual(self.host.link.one('rd', hexint(self.t['bpTarget']), '1')['hex'], self.original)
+
+    def test_a_hit_in_flight_never_writes_over_a_new_patch(self):
+        # Seam 5 parks the hit's owner after it saw the 0xCC and before it writes the original byte back. A hook
+        # written meanwhile would be overwritten by that late write (its jump's first byte replaced): the code
+        # write is refused as busy until the hit is done.
+        poke(self.host.process, self.t['seam'], 5)
+        self.start_race(1, 1)
+        poke(self.host.process, self.t['raceGo'], 1)
+        time.sleep(0.5)
+        link = self.host.link
+        args = (hexint(self.t['bpTarget']), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0), hexint(1),
+                '0', '0', hexint(0), hexint(0), fnv_link.hexs('race'))
+        first = link.one('hook', *args)
+        self.release_seam()
+        self.wait_done(1)
+        self.assertEqual(self.read32('raceDone'), 1)
+        if first.get('ok'):                               # the old behaviour: the late restore broke the jump
+            self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '1')['hex'], 'e9', 'hook jump overwritten')
+            link.one('unhook', hexint(first['hook']['id']))
+        self.assertEqual(first.get('error'), 'busy', first)
+        hook = link.one('hook', *args)
+        self.assertTrue(hook.get('ok'), hook)
+        self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '1')['hex'], 'e9')
+        link.schedule(0, 'bpcall 1')
+        self.assertTrue(self.wait_line('bpcall 12'))
+        self.assertTrue(link.one('unhook', hexint(hook['hook']['id'])).get('ok'))
+        self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '1')['hex'], self.original)
 
     def test_rows_do_not_move_while_a_hit_is_in_flight(self):
         # cov add re-sorts the rows and cov reset empties them; a hit in flight still writes its row by index.

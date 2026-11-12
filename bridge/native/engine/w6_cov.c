@@ -33,9 +33,12 @@ static int cov_find(uint32_t address) {
  * line and a release that does not wait for it): WriteProcessMemory changes the page protection itself and fails
  * rather than faulting, where a VirtualProtect + store could fault if the other thread put the protection back in
  * between. Writing the same original byte twice is harmless. */
-static void cov_restore(int i) {
+static void cov_restore(int i, bool owner) {
     unsigned char *at = (unsigned char *)(uintptr_t)cov_addr[i];
     for (int tries = 0; tries < 64 && *at == 0xCC; tries++) {
+        if (owner) {
+            SEAM(5); /* tests: the owner saw the 0xCC and has not written yet */
+        }
         SIZE_T done = 0;
         if (WriteProcessMemory(GetCurrentProcess(), at, &cov_orig[i], 1, &done) && done == 1) break;
         SwitchToThread();
@@ -49,11 +52,22 @@ static void cov_release_line(int i) {
     LONG state = InterlockedCompareExchange(&cov_state[i], 3, 1);
     if (state == 1) {
         SEAM(2);
-        cov_restore(i);
+        cov_restore(i, false);
         InterlockedExchange(&cov_state[i], 0);
     } else if (state == 3) {
-        cov_restore(i);
+        cov_restore(i, false);
     }
+}
+/* True when a coverage line in [addr, addr+len) is in state 3: a hit's owner may still write the original byte
+ * back. A tool that writes code there (with the other threads suspended) must refuse as busy instead, or that late
+ * write lands on top of its new bytes (a hook's jump, a breakpoint's 0xCC). */
+static bool cov_in_flight(uint32_t addr, uint32_t len) {
+    if (!cov_count || !cov_addr) return false;
+    for (uint32_t i = 0; i < (uint32_t)cov_count; i++) {
+        uint32_t a = cov_addr[i];
+        if (a - addr < len && cov_state[i] == 3) return true;
+    }
+    return false;
 }
 /* Wait until no line is being restored (a hit in flight), before rows move or the table empties. False after 2 s. */
 static bool cov_quiesce(void) {
@@ -76,7 +90,7 @@ static bool cov_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result) {
     LONG state = InterlockedCompareExchange(&cov_state[i], 3, 1);
     if (state == 1) {
         SEAM(1);
-        cov_restore(i);
+        cov_restore(i, true);
         LONG n = InterlockedIncrement(&cov_hits);
         cov_order[(uint32_t)(n - 1) % COV_MAX] = address;
         InterlockedExchange(&cov_state[i], 2);

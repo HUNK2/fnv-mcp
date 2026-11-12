@@ -706,6 +706,7 @@ static Hook *hook_find(uint32_t id) {
 }
 static int code_write_frozen(uint32_t address, const void *bytes, size_t length); /* after probe_suspend */
 static void cov_release_range(uint32_t addr, uint32_t len);                       /* w6_cov.c */
+static bool cov_in_flight(uint32_t addr, uint32_t len);                           /* w6_cov.c */
 static bool code_write(uint32_t address, const void *bytes, size_t length) {
     DWORD old;
     if (!VirtualProtect((void *)(uintptr_t)address, length, PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -1409,7 +1410,8 @@ static bool probe_thread_inside(uint32_t start, uint32_t end) {
  * allocates or emits. */
 static int code_write_frozen(uint32_t address, const void *bytes, size_t length) {
     probe_suspend();
-    bool busy = probe_thread_inside(address, address + (uint32_t)length);
+    bool busy = probe_thread_inside(address, address + (uint32_t)length) ||
+                cov_in_flight(address, (uint32_t)length); /* a coverage hit would write over the new bytes */
     bool written = !busy && code_write(address, bytes, length);
     probe_resume();
     return busy ? 1 : written ? 0 : 2;
