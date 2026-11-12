@@ -468,7 +468,7 @@ class LiveService:
         """A reference/form spec -> {'ptr', 'formId', 'expr'}.
 
         Accepts: player | crosshair | form id hex (0x00000014, 14, 000A3E7C) | Plugin.esp:LOCALID |
-        an EditorID the running game knows (persistent references, quests, globals...)."""
+        an EditorID from the record index (looked up, never evaluated: W2)."""
         ref = (ref or '').strip()
         if not ref:
             raise ValueError('ref is required')
@@ -483,18 +483,13 @@ class LiveService:
             value = form_id(ref)
             expr = '(BuildRef %d %d)' % (value >> 24, value & 0xFFFFFF)
         elif EDITOR_ID.match(ref):
-            # A bare name goes to the EditorID index first; it is evaluated as an expression only when it is not a
-            # script command (W2: eval "QuitGame" ran QuitGame from a read tool), and never without the command list.
+            # A bare name is looked up in the EditorID index, never evaluated: eval "QuitGame" ran QuitGame from a read
+            # tool (W2), and plugin commands are not in the engine map to refuse them by name (review I4).
             found = self.editor_id(ref)
-            if found:
-                expr = self.form_expr(found['formId'])
-            else:
-                commands = self._commands()
-                if commands is None or ref.lower() in commands:
-                    raise LiveError('REF_NOT_FOUND', 'No form for %r: %s' % (ref, 'it is a script command, not a form'
-                                    if commands is not None else 'not in the EditorID index (and the command list '
-                                    'is not readable, so the name is not evaluated)'), {'spec': ref})
-                expr = ref
+            if not found:
+                raise LiveError('REF_NOT_FOUND', 'No form named %r in the EditorID index. Next: pass its form id '
+                                '(fnv_record_find finds it by name), or a Plugin.esp:LOCALID.' % ref, {'spec': ref})
+            expr = self.form_expr(found['formId'])
         else:
             raise ValueError('Not a reference: %r (use player, crosshair, a form id or an EditorID)' % ref)
         result = self.link.eval(expr)

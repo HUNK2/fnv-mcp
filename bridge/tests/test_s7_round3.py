@@ -139,10 +139,21 @@ class BareIdentifierTests(unittest.TestCase):
             live.resolve('QuitGame')
         self.assertEqual(self.evals(fake), [])
 
-    def test_an_editor_id_still_resolves(self):
+    def test_a_plugin_command_is_not_evaluated_either(self):
+        # S7 batch-1 review I4: plugin commands (JIP LN...) are not in the engine map's command list
+        from geck_mcp.fnv_live import LiveError
         fake, live = self.live([{'name': 'QuitGame', 'short': 'qqq'}])
-        fake.link.expressions['DocMitchellRef'] = {'type': 'form', 'ptr': '0x12345678', 'formId': '00104C0C'}
+        fake.link.expressions['GetJIPVersion'] = {'type': 'number', 'value': 57}
+        with self.assertRaises(LiveError):
+            live.resolve('GetJIPVersion')
+        self.assertEqual(self.evals(fake), [])
+
+    def test_an_editor_id_resolves_through_the_index(self):
+        fake, live = self.live([{'name': 'QuitGame', 'short': 'qqq'}])
+        live.editor_id = lambda edid: {'formId': '00104C0C'} if edid == 'DocMitchellRef' else None
+        fake.link.expressions[live.form_expr('00104C0C')] = {'type': 'form', 'ptr': '0x12345678', 'formId': '00104C0C'}
         self.assertEqual(live.resolve('DocMitchellRef')['formId'], '00104C0C')
+        self.assertEqual(self.evals(fake), [live.form_expr('00104C0C')])
 
 
 class ExpressionToolsAreActTests(unittest.TestCase):

@@ -2328,7 +2328,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Where: geck_mcp/fnv_live.py (resolve; reached from every tool that takes a ref, quest or form)
 - Severity: high
 - Found by: round-3 audit (docs/audit3/contract.md H2)
-- Fix: a bare name is looked up in the EditorID index first (form_expr of the indexed form id); it is evaluated as an expression only when the script command list is readable and the name is not a command or short name. Otherwise REF_NOT_FOUND, with no eval sent. The command list is built in one place (_commands, also used by substitute_editor_ids). Tests: tests/test_s7_round3.py BareIdentifierTests.
+- Fix (review I4, S7 batch 1: plugin commands such as JIP LN's are not in the engine map, so refusing by name was incomplete): a bare name is only looked up in the EditorID index, never evaluated; not found is REF_NOT_FOUND naming fnv_record_find and form ids. Ruling: names that exist only at runtime need a form id; cost: one extra step for those. First fix: a bare name is looked up in the EditorID index first (form_expr of the indexed form id); it is evaluated as an expression only when the script command list is readable and the name is not a command or short name. Otherwise REF_NOT_FOUND, with no eval sent. The command list is built in one place (_commands, also used by substitute_editor_ids). Tests: tests/test_s7_round3.py BareIdentifierTests.
 - Status: fixed
 
 ### W1. fnv_snapshot, fnv_diff and fnv_watch ran caller console lines and expressions as kind read
