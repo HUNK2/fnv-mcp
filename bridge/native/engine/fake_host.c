@@ -423,7 +423,7 @@ int main(int argc, char **argv) {
            "\"osPtr\":\"0x%08x\",\"osGlobals\":\"0x%08x\",\"faulter\":\"0x%08x\",\"ud2\":\"0x%08x\","
            "\"hookme\":\"0x%08x\",\"hookLast\":\"0x%08x\",\"hookThreadResult\":\"0x%08x\",\"hookThreadDone\":\"0x%08x\","
            "\"crashDone\":\"0x%08x\",\"crashThreadDone\":\"0x%08x\",\"bpTarget\":\"0x%08x\",\"bpCall\":\"0x%08x\","
-           "\"bpAfter\":\"0x%08x\",\"bpRet\":\"0x%08x\",\"bpCallee\":\"0x%08x\",\"bpResult\":\"0x%08x\"}\n",
+           "\"bpAfter\":\"0x%08x\",\"bpRet\":\"0x%08x\",\"bpCallee\":\"0x%08x\",\"bpResult\":\"0x%08x\",\"seam\":\"0x%08x\"}\n",
            (unsigned)(uintptr_t)memory, (unsigned)(uintptr_t)&chain_a, (unsigned)(uintptr_t)chain_b,
            (unsigned)(uintptr_t)add3, (unsigned)(uintptr_t)sub2, (unsigned)(uintptr_t)member,
            (unsigned)(uintptr_t)&self_value, (unsigned)(uintptr_t)fast, (unsigned)(uintptr_t)halfsum,
@@ -441,7 +441,8 @@ int main(int argc, char **argv) {
            (unsigned)(uintptr_t)hookme, (unsigned)hook_last, (unsigned)hook_thread_result,
            (unsigned)hook_thread_done, (unsigned)crash_done, (unsigned)crash_thread_done,
            (unsigned)(uintptr_t)bp_target, (unsigned)(uintptr_t)bp_call_site, (unsigned)(uintptr_t)bp_after_site,
-           (unsigned)(uintptr_t)bp_ret_site, (unsigned)(uintptr_t)bp_callee, (unsigned)bp_result);
+           (unsigned)(uintptr_t)bp_ret_site, (unsigned)(uintptr_t)bp_callee, (unsigned)bp_result,
+           (unsigned)(uintptr_t)(void *)GetProcAddress(dll, "fnvmcp_seam")); /* 0 unless a seam build */
     fflush(stdout);
     send(18, NULL);  /* DeferredInit */
     send(14, NULL);  /* NewGame */

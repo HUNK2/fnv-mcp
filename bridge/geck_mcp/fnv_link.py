@@ -267,26 +267,44 @@ def find_zig(project=None):
                     'file or the GECK_MCP_ZIG environment variable')
 
 
-def build(state_dir, zig, with_fake_host=False):
-    """Compile the companion (and optionally its fake xNVSE host for tests) into state/engine/builds/<id>."""
+COMPILE_FLAGS = ('cc', '-target', 'x86-windows-gnu', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror')
+
+
+def compile_target(zig, native, source, output, extra, defines=()):
+    """One zig cc run with the companion's flags: native/<source> -> output. Raises BUILD_FAILED with the stderr."""
+    command = [str(zig), *COMPILE_FLAGS, *['-D' + d for d in defines], *extra, str(Path(native) / source),
+               '-ladvapi32', '-o', str(output)]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    if result.returncode:
+        raise LinkError('BUILD_FAILED', 'zig cc failed for %s' % source, {'stderr': result.stderr[-4000:]})
+
+
+def build(state_dir, zig, with_fake_host=False, defines=()):
+    """Compile the companion (and optionally its fake xNVSE host for tests) into state/engine/builds/<id>.
+
+    defines are preprocessor names passed as -D<name> (tests use FNVMCP_TEST_SEAM for the race seams). They are part
+    of the build identity, so a seam build gets its own folder; with none, the identity (and build id) is unchanged.
+    A seam build must never be installed: install() refuses a receipt that has defines."""
     zig = Path(zig).resolve(strict=True)
     version = subprocess.run([str(zig), 'version'], capture_output=True, text=True, check=True, timeout=30).stdout.strip()
     if version != '0.14.1':
         raise LinkError('ZIG_VERSION', 'The engine companion is validated with Zig 0.14.1 only (found %s)' % version)
+    defines = sorted(set(defines))
+    for name in defines:
+        if not name.replace('_', 'A').isalnum() or name[0].isdigit():
+            raise LinkError('BAD_DEFINE', 'A build define must be a C identifier (got %r)' % name)
     identity = {'source': source_hashes(), 'wire': WIRE, 'compiler': version}
+    if defines:
+        identity['defines'] = defines
     build_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
     folder = Path(state_dir) / 'engine/builds' / build_id
     folder.mkdir(parents=True, exist_ok=True)
-    common = [str(zig), 'cc', '-target', 'x86-windows-gnu', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror']
     targets = [('engine/fnvmcp_engine.c', DLL_NAME, ['-shared'])]
     if with_fake_host:
         targets.append(('engine/fake_host.c', 'fnvmcp_fake_host.exe', []))
     for source, output, extra in targets:
         if not (folder / output).exists():
-            result = subprocess.run(common + extra + [str(NATIVE / source), '-ladvapi32', '-o', str(folder / output)],
-                                    capture_output=True, text=True, timeout=300)
-            if result.returncode:
-                raise LinkError('BUILD_FAILED', 'zig cc failed for %s' % source, {'stderr': result.stderr[-4000:]})
+            compile_target(zig, NATIVE, source, folder / output, extra, defines)
     receipt = {**identity, 'schema_version': 1, 'build_id': build_id, 'dll': str(folder / DLL_NAME),
                'sha256': file_digest(folder / DLL_NAME)}
     (folder / 'build.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
@@ -299,6 +317,8 @@ def install(mo2_root, profile, receipt, state_dir):
     target_dir = mo2_root / 'mods' / MOD_NAME / 'NVSE/Plugins'
     target = target_dir / DLL_NAME
     source = Path(receipt['dll'])
+    if receipt.get('defines'):
+        raise LinkError('TEST_BUILD', 'A build with defines %s is a test build and is never installed' % receipt['defines'])
     if file_digest(source) != receipt['sha256']:
         raise LinkError('BUILD_CHANGED', 'The built DLL changed after its build receipt was written')
     backup = None

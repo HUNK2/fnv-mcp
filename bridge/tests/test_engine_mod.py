@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from geck_mcp import fnv_link  # noqa: E402
 from test_engine_stops import PROLOGUE_LEN, StopHost, StopTestCase, build, hexint  # noqa: E402
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 SDK = Path(__file__).resolve().parents[1] / 'native' / 'sdk'
 MODULE = r'''
@@ -43,7 +44,7 @@ FNVMCP_EXPORT void fnvmcp_module_exit(void) { api->log("exit after %d frames", f
 '''
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class ModuleTests(StopTestCase):
     @classmethod
     def setUpClass(cls):
@@ -60,7 +61,7 @@ class ModuleTests(StopTestCase):
         src = Path(self.tmp.name) / (name + '.c')
         src.write_text(MODULE, encoding='utf-8')
         out = Path(self.tmp.name) / (name + '.dll')
-        subprocess.run([os.environ['GECK_MCP_ZIG'], 'cc', '-target', 'x86-windows-gnu', '-shared', '-O2',
+        subprocess.run([zig_path(), 'cc', '-target', 'x86-windows-gnu', '-shared', '-O2',
                         '-I', str(SDK), '-DHOOKME=0x%xu' % self.host.t['hookme'], '-DSCRATCH=0x%xu' % scratch,
                         '-o', str(out), str(src)], check=True, capture_output=True, timeout=120)
         return out
@@ -110,7 +111,7 @@ class ModuleTests(StopTestCase):
         src = Path(self.tmp.name) / 'bad.c'
         src.write_text('__declspec(dllexport) int other(void) { return 1; }\n', encoding='utf-8')
         out = Path(self.tmp.name) / 'bad.dll'
-        subprocess.run([os.environ['GECK_MCP_ZIG'], 'cc', '-target', 'x86-windows-gnu', '-shared', '-o', str(out),
+        subprocess.run([zig_path(), 'cc', '-target', 'x86-windows-gnu', '-shared', '-o', str(out),
                         str(src)], check=True, capture_output=True, timeout=120)
         self.assertEqual(self.host.link.one('mod', 'load', fnv_link.hexs(str(out))).get('error'), 'no_init_export')
 
@@ -119,7 +120,7 @@ if __name__ == '__main__':
     unittest.main()
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class CoverageTests(StopTestCase):
     """W6 line coverage: one-shot int3 sites that restore themselves on the first hit."""
 

@@ -1,5 +1,5 @@
 """Engine companion: trap breakpoints (int3 and hardware), the step, to, ret and trace resumes, and the log flag, over the
-real DLL and a fake xNVSE host. Skipped unless GECK_MCP_ZIG is set (the companion is built with Zig). Numbers on the
+real DLL and a fake xNVSE host. Skipped when no Zig is found (GECK_MCP_ZIG, or fnv.zig in a projects/*.json file). Numbers on the
 wire are hex. The target is the fake host's bp_target: its layout (contract 8.2, 8.4) is
   +0 push ebp, +1 mov ebp,esp, +3 mov eax,[ebp+8], +6 call bp_callee, +11 add eax,[ebp+12], +14 pop ebp, +15 ret."""
 import os
@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_engine_stops import StopHost, StopTestCase, build, hexint  # noqa: E402
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 TRACE_OFFSETS = (0, 1, 3, 6, 11, 14, 15)  # the instructions of bp_target that the trace visits
 PRED_FALSE = '01' + struct.pack('<I', 0).hex()  # push 0: never passes
@@ -24,7 +25,7 @@ def address(text):
     return int(text, 16)
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class BreakpointTests(StopTestCase):
     """One host serves the class. Every test clears its breakpoints and releases its stops in tearDown."""
 

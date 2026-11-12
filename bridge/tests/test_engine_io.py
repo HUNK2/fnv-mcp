@@ -1,5 +1,5 @@
 """Engine companion, wire version 2: sampler, event sinks, guarded call and input injector, over the real DLL and the
-fake xNVSE host. Skipped unless GECK_MCP_ZIG is set (the companion is built with Zig). Numbers on the wire are hex."""
+fake xNVSE host. Skipped when no Zig is found (GECK_MCP_ZIG, or fnv.zig in a projects/*.json file). Numbers on the wire are hex."""
 import os
 import struct
 import subprocess
@@ -13,6 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from geck_mcp import fnv_link  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 EXE_BASE_ALIAS = 0  # the fake host image is not the game image; addresses come from its JSON line
 
@@ -37,7 +39,7 @@ def hx(text):
     return int(text, 16)
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class IoCompanionTests(unittest.TestCase):
     """The real DLL over its pipe. The fake host pumps the main-loop message every 5 ms; its input poll runs only
     when a test asks for it ("poll <n>"), so the tests count polls exactly."""
@@ -45,7 +47,7 @@ class IoCompanionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        receipt = fnv_link.build(cls.tmp.name, os.environ['GECK_MCP_ZIG'], with_fake_host=True)
+        receipt = fnv_link.build(cls.tmp.name, zig_path(), with_fake_host=True)
         folder = Path(receipt['dll']).parent
         cls.pipe = 'fnvmcp-io-' + uuid.uuid4().hex[:8]
         env = dict(os.environ, FNVMCP_PIPE=cls.pipe, FNVMCP_CONSOLE_LOG=str(Path(cls.tmp.name) / 'console.log'))

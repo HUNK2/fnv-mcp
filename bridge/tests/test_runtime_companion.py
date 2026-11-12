@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -12,6 +13,8 @@ from unittest.mock import patch
 from geck_mcp import runtime_companion as c
 from geck_mcp.service import Service
 from geck_mcp.transport import BridgeError
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 
 class CompanionTests(unittest.TestCase):
@@ -173,9 +176,9 @@ class CompanionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'changed'):c.compare(before,after)
         self.assertIn('save_context',after)
 
-    @unittest.skipUnless(os.name=='nt' and os.environ.get('GECK_MCP_ZIG'),'requires Windows and GECK_MCP_ZIG compiler path')
+    @unittest.skipUnless(os.name == 'nt' and zig_path(), 'requires Windows and Zig')
     def test_native_generated_dll_six_failure_modes_and_load_lifecycle(self):
-        receipt=c.build(self.p,self.profile,os.environ['GECK_MCP_ZIG'])
+        receipt=c.build(self.p,self.profile,zig_path())
         dll=Path(receipt['dll']);host=dll.parent/'fake_host.exe'
         for mode,status in [(0,'sampled'),(1,'plugin_unavailable'),(2,'variable_unavailable'),
                             (3,'variable_unavailable'),(4,'compile_error'),(5,'variable_unavailable')]:

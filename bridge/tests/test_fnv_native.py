@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from geck_mcp import fnv_native  # noqa: E402
 from geck_mcp.fnv_conv import ConvError  # noqa: E402
 from geck_mcp.fnv_native import NativeTools, c_name, c_type  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 
 class FakeDb:
@@ -76,7 +78,7 @@ class HeaderAndBuildTests(unittest.TestCase):
     def tools(self, tmp):
         engine = SimpleNamespace(resolve=lambda n: {'Calendar::GetGameTime': 0x00867DA0, 'Helper': 0x00401000}[n])
         live = SimpleNamespace(project=SimpleNamespace(state_dir=tmp), engine=lambda: engine)
-        t = NativeTools(live, zig=os.environ.get('GECK_MCP_ZIG'))
+        t = NativeTools(live, zig=zig_path())
         return t
 
     def test_headers_and_a_module_that_uses_them_builds(self):
@@ -101,8 +103,8 @@ class HeaderAndBuildTests(unittest.TestCase):
             self.assertIn('typedef float (__attribute__((thiscall)) *FnvFn_Calendar_GetGameTime)(void *self);',
                           header)
             self.assertIn('#define FNV_ADDR_Helper 0x00401000u', header)
-            if not os.environ.get('GECK_MCP_ZIG'):
-                self.skipTest('set GECK_MCP_ZIG to build')
+            if not zig_path():
+                self.skipTest('no Zig')
             src = ('#include "fnvmcp_module.h"\n#include "fnv_engine.h"\n'
                    'static const FnvmcpApi *api;\n'
                    'FNVMCP_EXPORT int fnvmcp_module_init(const FnvmcpApi *a) { api = a; return 0; }\n'
@@ -113,8 +115,8 @@ class HeaderAndBuildTests(unittest.TestCase):
             self.assertEqual(t._newest('uses headers'), Path(built['dll']))
 
     def test_compiler_errors_come_back(self):
-        if not os.environ.get('GECK_MCP_ZIG'):
-            self.skipTest('set GECK_MCP_ZIG to build')
+        if not zig_path():
+            self.skipTest('no Zig')
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ConvError) as cm:
                 self.tools(tmp).build('int fnvmcp_module_init(void) { return undefined_thing; }', 'bad')

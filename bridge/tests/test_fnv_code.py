@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from geck_mcp.fnv_code import DIR32, REL32, CodeTools  # noqa: E402
 from geck_mcp.fnv_conv import ConvError  # noqa: E402
 from geck_mcp.fnv_plugin_build import PluginTools  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 DECOMP = Path(r'C:\DecompModGithub\fnv_decomp')
 SOURCE = '''// header
@@ -79,11 +81,11 @@ class OfflineBuildTests(unittest.TestCase):
             self.assertIn('float result = base;', (DECOMP / 'src/fallout_shared/aiformulas.cpp').read_text())
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build')
+@needs_zig
 class PluginBuildTests(unittest.TestCase):
     def test_scaffold_builds_as_a_standalone_plugin(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tools = PluginTools(live_for(tmp, lambda n: 0x00401000), zig=os.environ['GECK_MCP_ZIG'])
+            tools = PluginTools(live_for(tmp, lambda n: 0x00401000), zig=zig_path())
             tools.scaffold('my plugin')
             out = tools.build('my plugin')
             self.assertTrue(Path(out['dll']).is_file())

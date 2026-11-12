@@ -1,5 +1,5 @@
 """Engine companion, wire version 2: hook holds, skip stubs, crash holds and the stop ops, over the real DLL and a fake
-xNVSE host. Skipped unless GECK_MCP_ZIG is set (the companion is built with Zig). Numbers on the wire are hex."""
+xNVSE host. Skipped when no Zig is found (GECK_MCP_ZIG, or fnv.zig in a projects/*.json file). Numbers on the wire are hex."""
 import json
 import os
 import subprocess
@@ -17,70 +17,12 @@ from geck_mcp import fnv_link  # noqa: E402
 PROLOGUE_LEN = 6  # hookme starts with 55 89 e5 83 ec 08: no relative jump, so no relocations
 
 
-def hexint(value):
-    return fnv_link.word(value)
+# The shared helpers live in engine_host; re-exported here so old imports keep working.
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
+from engine_host import StopHost, StopTestCase, build, hexint, needs_zig, zig_path  # noqa: E402,F401
 
 
-class StopHost:
-    """One fake host process and its pipe. The host is started per test class (or per test when it is expected to exit)."""
-
-    def __init__(self, receipt, folder, tmp, seconds):
-        self.pipe = 'fnvmcp-stops-' + uuid.uuid4().hex[:8]
-        self.log = Path(tmp) / 'console.log'
-        env = dict(os.environ, FNVMCP_PIPE=self.pipe, FNVMCP_CONSOLE_LOG=str(self.log),
-                   LOCALAPPDATA=str(Path(tmp) / 'localappdata'))
-        self.process = subprocess.Popen([str(folder / 'fnvmcp_fake_host.exe'), receipt['dll'], str(seconds)],
-                                        stdout=subprocess.PIPE, env=env, text=True)
-        self.t = {k: int(v, 16) for k, v in json.loads(self.process.stdout.readline()).items()}
-        self.link = fnv_link.EngineLink(self.pipe).connect(wait=10)
-        self.link.one('gatecfg', hexint(self.t['timerDisable']), hexint(self.t['timerEnable']),
-                      hexint(self.t['timerGlobal']))
-
-    def close(self):
-        self.link.close()
-        if self.process.poll() is None:
-            self.process.kill()
-        self.process.wait()
-        self.process.stdout.close()
-
-    def lines(self):
-        if not self.log.exists():
-            return []
-        return self.log.read_text(encoding='utf-8', errors='replace').splitlines()
-
-
-def build(tmp):
-    return fnv_link.build(tmp, os.environ['GECK_MCP_ZIG'], with_fake_host=True)
-
-
-class StopTestCase(unittest.TestCase):
-    """Shared helpers: wait for a stop, wait for a console line, and arm or disarm the hook hold."""
-
-    def wait_stops(self, count=1, timeout=6.0):
-        end = time.time() + timeout
-        while True:
-            stops = self.host.link.one('stops')['stops']
-            if len(stops) >= count or time.time() > end:
-                return stops
-            time.sleep(0.02)
-
-    def wait_line(self, text, timeout=6.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            if text in self.host.lines():
-                return True
-            time.sleep(0.02)
-        return False
-
-    def hold(self, hook_id):
-        result = self.host.link.one('hookact', hexint(hook_id), 'hold', 'ff')
-        self.assertTrue(result.get('ok'), result)
-
-    def disarm(self, hook_id):
-        self.host.link.one('hookact', hexint(hook_id), '0', '0', '0', '0', '-')
-
-
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class HookStopTests(StopTestCase):
     """Hook holds on the main thread (through the scheduler, so the call is not inside a served request) and on a
     worker thread. One host serves the whole class; each test leaves the hook disarmed and every stop released."""
@@ -173,7 +115,7 @@ class HookStopTests(StopTestCase):
         self.assertEqual(self.host.link.one('faulthold', 'maybe').get('error'), 'bad_arguments')
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class StopDeadManTests(StopTestCase):
     """A parked stop is released by the dead-man switch when no request or ping arrives for the gate timeout."""
 
@@ -210,7 +152,7 @@ class StopDeadManTests(StopTestCase):
         self.assertTrue(self.wait_line('hookme 1003'))
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class FaultStopTests(StopTestCase):
     """A crash on the main thread or a worker. The fake host ends the process with exit code 77 when a fault is not
     handled, so each test starts its own host."""

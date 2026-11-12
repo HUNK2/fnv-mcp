@@ -1,5 +1,5 @@
 """Live fnv_* tools without the game: YAML scenarios, game control helpers, the live service on a fake
-companion link, and (with GECK_MCP_ZIG) the real engine companion DLL over its pipe under a fake xNVSE host."""
+companion link, and (when Zig is found) the real engine companion DLL over its pipe under a fake xNVSE host."""
 import json
 import os
 from pathlib import Path
@@ -19,6 +19,8 @@ from geck_mcp import fnv_deep, fnv_game, fnv_link, fnv_scenario  # noqa: E402
 from geck_mcp.config import Project  # noqa: E402
 from geck_mcp.fnv_facts import FACTS  # noqa: E402
 from geck_mcp.fnv_live import LiveService  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 EXAMPLES = Path(__file__).resolve().parents[1] / 'examples/fnv-tests'
 
@@ -441,14 +443,14 @@ class DataToolTests(unittest.TestCase):
         self.assertEqual((frame['module'], frame['absolute'], frame['kind']), ('FalloutNV.exe', '0x00AA55A6', 'game'))
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class CompanionPipeTests(unittest.TestCase):
     """The real DLL over its pipe, loaded by a fake xNVSE host (never the game)."""
 
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        receipt = fnv_link.build(cls.tmp.name, os.environ['GECK_MCP_ZIG'], with_fake_host=True)
+        receipt = fnv_link.build(cls.tmp.name, zig_path(), with_fake_host=True)
         folder = Path(receipt['dll']).parent
         cls.pipe = 'fnvmcp-test-' + uuid.uuid4().hex[:8]
         cls.log = Path(cls.tmp.name) / 'console.log'

@@ -1,5 +1,5 @@
 """Engine companion, wire version 2: predicates and the frame gate, over the real DLL and a fake xNVSE host.
-Skipped unless GECK_MCP_ZIG is set (the companion is built with Zig). Numbers on the wire are hex."""
+Skipped when no Zig is found (GECK_MCP_ZIG, or fnv.zig in a projects/*.json file). Numbers on the wire are hex."""
 import json
 import os
 import struct
@@ -14,6 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from geck_mcp import fnv_link  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 
 def hexint(value):
@@ -28,14 +30,14 @@ def u32(value):
     return struct.pack('<I', value).hex()
 
 
-@unittest.skipUnless(os.environ.get('GECK_MCP_ZIG'), 'set GECK_MCP_ZIG to build the engine companion')
+@needs_zig
 class GateCompanionTests(unittest.TestCase):
     """The real DLL over its pipe. The fake host pumps the main-loop message from its main thread every 5 ms."""
 
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        receipt = fnv_link.build(cls.tmp.name, os.environ['GECK_MCP_ZIG'], with_fake_host=True)
+        receipt = fnv_link.build(cls.tmp.name, zig_path(), with_fake_host=True)
         folder = Path(receipt['dll']).parent
         cls.pipe = 'fnvmcp-gate-' + uuid.uuid4().hex[:8]
         env = dict(os.environ, FNVMCP_PIPE=cls.pipe, FNVMCP_CONSOLE_LOG=str(Path(cls.tmp.name) / 'console.log'))

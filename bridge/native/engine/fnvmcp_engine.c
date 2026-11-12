@@ -32,6 +32,16 @@
 #include <math.h>
 #include "../runtime/nvse_abi.h"
 
+/* Race seams for the offline tests (PLAN-3 S0.2). Only a build with -DFNVMCP_TEST_SEAM has them; there SEAM(n)
+ * parks the thread that reaches it while fnvmcp_seam == n, so a test can line up two threads at a known point.
+ * In the product build SEAM(n) is nothing: the code and data are the same as from a source without the seam lines. */
+#ifdef FNVMCP_TEST_SEAM
+__declspec(dllexport) volatile LONG fnvmcp_seam = 0;
+#define SEAM(n) do { while (fnvmcp_seam == (n)) SwitchToThread(); } while (0)
+#else
+#define SEAM(n) ((void)0)
+#endif /* FNVMCP_TEST_SEAM */
+
 #define COMPANION_VERSION 2
 #define WIRE_VERSION 2
 #define EVENT_DEADMAN 0x3E9 /* event record type: the gate's dead-man switch opened a held gate */

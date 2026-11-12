@@ -17,6 +17,8 @@ from geck_mcp.config import Project
 from geck_mcp.runtime import file_digest
 from geck_mcp.service import Service
 from geck_mcp.esp import codec
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
+from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
 
 class ConsoleTests(unittest.TestCase):
@@ -297,7 +299,7 @@ class ConsoleTests(unittest.TestCase):
         self.assertTrue(self.execute()['replayed'])
 
 
-@unittest.skipUnless(os.name == 'nt' and os.environ.get('GECK_MCP_ZIG'), 'requires Windows and GECK_MCP_ZIG')
+@unittest.skipUnless(os.name == 'nt' and zig_path(), 'requires Windows and Zig')
 class NativeConsoleTests(unittest.TestCase):
     def test_actual_console_dll_identity_replay_acceptance_and_delayed_effect(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -307,7 +309,7 @@ class NativeConsoleTests(unittest.TestCase):
                               records=[{'editor_id': 'Fixture', 'form_id': '01000800'}])
             project.plugin_path.parent.mkdir(parents=True)
             project.plugin_path.write_bytes(b'console fixture plugin')
-            receipt = c.build(project, os.environ['GECK_MCP_ZIG'], file_digest(project.plugin_path))
+            receipt = c.build(project, zig_path(), file_digest(project.plugin_path))
             dll = Path(receipt['dll']);host = dll.parent / 'console_fake_host.exe'
             for mode in range(30):
                 with self.subTest(mode=mode):

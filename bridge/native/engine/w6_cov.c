@@ -35,6 +35,7 @@ static bool cov_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result) {
     if (i < 0) return false;
     unsigned char *at = (unsigned char *)(uintptr_t)address;
     if (InterlockedCompareExchange(&cov_state[i], 2, 1) == 1) {
+        SEAM(1);
         DWORD old;
         if (VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old)) {
             if (*at == 0xCC) *at = cov_orig[i];
@@ -67,6 +68,7 @@ static void cov_release_range(uint32_t addr, uint32_t len) {
         uint32_t a = cov_addr[i];
         if (a < addr || a - addr >= len) continue;
         if (InterlockedCompareExchange(&cov_state[i], 0, 1) != 1) continue;
+        SEAM(2);
         unsigned char *at = (unsigned char *)(uintptr_t)a;
         DWORD old;
         if (VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old)) {
