@@ -723,10 +723,16 @@ class EyesTools:
         does not move under it: every capture would be the same picture of the menu (seen live). Refuse instead."""
         if self.agent is None:
             return
-        try:
-            menus = self.agent.menus()
-        except Exception:  # noqa: BLE001 - no menu reader: capture anyway
-            return
+        # A menu that is closing (DialogMenu right after a dialogue ends) stays on the stack for a moment: give it
+        # up to 2 s before refusing.
+        for _ in range(10):
+            try:
+                menus = self.agent.menus()
+            except Exception:  # noqa: BLE001 - no menu reader: capture anyway
+                return
+            if not (menus.get('inMenuMode') or menus.get('menuStack')):
+                return
+            self.sleep(0.2)
         if menus.get('inMenuMode') or menus.get('menuStack'):
             names = [m.get('name') for m in menus.get('menuStack') or []] or ['(menu mode)']
             raise LiveError('MENU_OPEN', 'A menu is open (%s): the capture would show its backdrop, not the world. '

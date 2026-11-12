@@ -203,3 +203,64 @@ class ClickTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GotoArrivalTests(unittest.TestCase):
+    """N16: goto to a reference arrives within the activation reach in 3D, not just within 135 units across."""
+
+    def test_a_raised_target_needs_a_closer_stand(self):
+        from geck_mcp.fnv_hands import ref_arrive_radius, ref_arrived
+        player, token = (0.0, 0.0, 0.0), (135.0, 0.0, 115.0)        # the s1-play token on a raised spot
+        self.assertFalse(ref_arrived(player, token), 'horizontal 135 but 177 in 3D: activate cannot reach it')
+        radius = ref_arrive_radius(player, token)
+        self.assertLess(radius, 90.0)
+        stand = (token[0] - radius, 0.0, 0.0)
+        self.assertTrue(ref_arrived(stand, token))
+
+    def test_a_target_on_the_floor_keeps_the_usual_radius(self):
+        from geck_mcp.fnv_hands import ARRIVE, ref_arrive_radius, ref_arrived
+        self.assertEqual(ref_arrive_radius((0.0, 0.0, 0.0), (500.0, 0.0, 10.0)), ARRIVE)
+        self.assertTrue(ref_arrived((0.0, 0.0, 0.0), (90.0, 0.0, 10.0)))
+
+    def test_an_unreachable_height_still_walks_close(self):
+        from geck_mcp.fnv_hands import ref_arrive_radius
+        self.assertGreaterEqual(ref_arrive_radius((0.0, 0.0, 0.0), (300.0, 0.0, 400.0)), 30.0)
+
+
+class GotoSettleTests(unittest.TestCase):
+    """goto must not return while its queued forward holds still move the player (s1-play: the player slid past
+    the token while activate aimed at it)."""
+
+    def test_settle_clears_queued_input_and_waits_for_the_player_to_stop(self):
+        from geck_mcp import fnv_hands
+        h = HandsTools(live=None, sleep=lambda s: None)
+        positions = iter([(0, 0, 0), (10, 0, 0), (18, 0, 0), (20, 0, 0), (20.2, 0, 0), (20.2, 0, 0)] + [(20.2, 0, 0)] * 20)
+        cleared, waited = [], []
+        h._player = lambda: 1
+        h._pos = lambda ptr: next(positions)
+        h._frames = lambda n: waited.append(n)
+        h._clear_input = lambda: cleared.append(1)
+        final = h._settle()
+        self.assertEqual(cleared, [1])
+        self.assertEqual(final, (20.2, 0, 0))
+        self.assertLess(len(waited), 12)
+
+    def test_settle_gives_up_on_a_player_that_keeps_moving(self):
+        h = HandsTools(live=None, sleep=lambda s: None)
+        n = iter(range(1000))
+        h._player = lambda: 1
+        h._pos = lambda ptr: (next(n) * 5.0, 0, 0)
+        h._frames = lambda k: None
+        h._clear_input = lambda: None
+        h._settle(max_rounds=10)       # returns, never loops forever
+
+
+class PickupNoteTests(unittest.TestCase):
+    """A taken item's reference is marked deleted (form flag 0x20), not disabled: activate must say it was taken."""
+
+    def test_taken_item_is_reported(self):
+        from geck_mcp.fnv_hands import pickup_note
+        self.assertIsNone(pickup_note(0x00000400, 0x00000400))
+        self.assertIn('taken', pickup_note(0x00000400, 0x00000420))
+        self.assertIsNone(pickup_note(0x00000420, 0x00000420), 'already deleted before: not this press')
+        self.assertIsNone(pickup_note(None, 0x20))

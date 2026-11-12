@@ -40,6 +40,8 @@ KNEE = 45.0                  # ray height above the floor
 HALF_WIDTH = 28.0            # the player's half width for route checks
 MAX_STEP = 40.0              # most a floor may rise or fall between grid points (stairs yes, counters no)
 ARRIVE = 90.0
+ACTIVATE_REACH = 150.0       # how far (3D, feet to the reference) the player can activate something
+REACH_MARGIN = 25.0          # goto to a reference stops this much inside the reach (N16)
 DOOR_REACH = 140.0        # a closed door this close and ahead of a blocked walk is opened
 MAX_REPLANS = 4
 MENU_IDS = {'message': 1001, 'inventory': 1002, 'container': 1008, 'dialog': 1009, 'sleepwait': 1012,
@@ -72,6 +74,31 @@ def scan_code(name):
         raise ValueError('Unknown key name %r; use letters, digits, F1-F12, Space, Enter, Escape, Tab, Shift, Ctrl, '
                          'Alt, Up, Down, Left, Right, PageUp, PageDown, Home, End, Insert, Delete, Backspace' % name)
     return code
+
+
+def ref_arrive_radius(player, floor):
+    """How close across the floor goto must come to a reference so it is inside the activation reach in 3D (N16):
+    a target raised above the player's feet needs a closer stand. At least 30 units, at most ARRIVE."""
+    dz = abs(float(floor[2]) - float(player[2]))
+    want = ACTIVATE_REACH - REACH_MARGIN
+    if dz >= want:
+        return 30.0
+    return max(30.0, min(ARRIVE, math.sqrt(want * want - dz * dz)))
+
+
+def pickup_note(flags_before, flags_after):
+    """What a press did to the reference's form flags: a taken item's reference is marked deleted (0x20) and points
+    at its new holder; it is not disabled."""
+    if flags_before is None or flags_after is None:
+        return None
+    if not flags_before & 0x20 and flags_after & 0x20:
+        return 'the item was taken (its reference is now deleted from the world)'
+    return None
+
+
+def ref_arrived(player, floor):
+    """goto reached a reference: inside the activation reach (3D) with a little margin."""
+    return math.dist(player, floor) <= ACTIVATE_REACH - REACH_MARGIN / 2
 
 
 class Rays:
@@ -298,6 +325,7 @@ class HandsTools:
         before_menus = {m['id'] for m in self._menus().get('visible', [])}
         before_hud = self._hud()
         before_pos = self._pos(self._player())
+        flags_before = (self.live.form_ids([r['ptr']])[0] or {}).get('flags')
         refusals, btype = self._refusals(r)
         self.live.changing('play activate')
         if direct:
@@ -346,6 +374,9 @@ class HandsTools:
         exists = self.live.values(['GetDisabled'], r['ptr'])[0]
         if exists:
             happened.append('the reference is now disabled (picked up or removed)')
+        taken = pickup_note(flags_before, (self.live.form_ids([r['ptr']])[0] or {}).get('flags'))
+        if taken:
+            happened.append(taken)
         self.live.journal.add({'kind': 'play_activate', 'target': r['formId'], 'direct': direct, 'undo': None})
         out = {'target': r['formId'], 'pressed': not direct, 'how': how, 'happened': happened or ['nothing visible '
                'changed (an OnActivate block may have swallowed it)'], 'menusOpened': opened, 'hudMessage': new_msg,
@@ -505,7 +536,11 @@ class HandsTools:
             goal = self._pos(r['ptr'])
             goal_ref = r
         start = self._pos(player)
+        floor_point = goal if goal_ref else None
         goal = (goal[0], goal[1], start[2])  # stand on the player's floor next to it (targets on tables count)
+
+        def arrive_radius(at):
+            return ref_arrive_radius(at, floor_point) if floor_point else ARRIVE
         menus = self._menus()
         if menus.get('inMenuMode'):
             raise LiveError('MENU_OPEN', 'A menu is open; close it first (fnv_ui_do close)')
@@ -524,7 +559,7 @@ class HandsTools:
         menus_waited = 0
         for attempt in range(MAX_REPLANS + 1):
             here = self._pos(player)
-            if math.dist(here[:2], goal[:2]) <= ARRIVE:
+            if math.dist(here[:2], goal[:2]) <= arrive_radius(here):
                 break
             if via is not None:
                 # Through the doorway's centre first (the door frame catches a route that is off centre), then on.
@@ -555,11 +590,17 @@ class HandsTools:
                         break
                     pos = self._pos(player)
                     dist = math.dist(pos[:2], wp[:2])
-                    if dist <= (ARRIVE if last_wp else 40.0):
+                    if dist <= (arrive_radius(pos) if last_wp else 40.0):
                         break
                     self._face((wp[0], wp[1], pos[2] + 110.0), pitch=False)
-                    frames = max(4, min(30, int(dist / (12.0 if run else 4.0))))
+                    # Hold only for the way to the stop point (inside the arrival radius, not the goal itself): a
+                    # step held for the whole distance walked into the item at the goal and kicked it away (s1-play).
+                    stop_at = arrive_radius(pos) * 0.7 if last_wp else 20.0
+                    frames = max(3, min(30, int((dist - stop_at) / (12.0 if run else 4.0))))
                     self.live.input('hold', control='forward', frames=frames)
+                    # Let this hold run out before measuring: holds queued on top of each other carried the player
+                    # past the goal and into small items, kicking them away (s1-play).
+                    self._frames(frames)
                     now = self._pos(player)
                     travelled += math.dist(pos[:2], now[:2])
                     gained = best - math.dist(now[:2], wp[:2])
@@ -602,9 +643,11 @@ class HandsTools:
                 break
         if stop_reason in ('door_opened', 'menu_closed'):
             stop_reason = None
-        final = self._pos(player)
+        final = self._settle()          # the walk's queued holds would carry the player on past the goal
         left = math.dist(final[:2], goal[:2])
-        arrived = left <= ARRIVE * 1.5
+        # A reference: inside the activation reach in 3D, so the next activate can pick it (N16). A point: close
+        # across the floor.
+        arrived = ref_arrived(final, floor_point) if floor_point else left <= ARRIVE * 1.5
         return {'arrived': arrived, 'distanceLeft': round(left), 'travelled': round(travelled),
                 'seconds': round(self.clock() - started, 1), 'routes': routes, 'replans': max(0, len(plans) - 1), 'menusWaited': menus_waited,
                 'doorsUsed': used_doors, 'stopped': stop_reason if not arrived else None, 'plans': plans,
@@ -661,13 +704,31 @@ class HandsTools:
             out['next'] = 'fnv_dialogue shows the lines; fnv_dialogue_choose picks a response.'
         return out
 
-    def stop(self):
-        self.live.ready()
+    def _clear_input(self):
         try:
             from .fnv_inject import Injector
             Injector.of(self.live).clear()
         except Exception:  # noqa: BLE001 - nothing queued
             pass
+
+    def _settle(self, max_rounds=20):
+        """Drop the input still queued (goto queues forward holds and does not wait for them) and wait until the
+        player stands still: moved under 1 unit over two checks of 3 frames. Returns the position."""
+        self._clear_input()
+        player = self._player()
+        last, still = self._pos(player), 0
+        for _ in range(max_rounds):
+            self._frames(3)
+            now = self._pos(player)
+            still = still + 1 if math.dist(now, last) < 1.0 else 0
+            last = now
+            if still >= 2:
+                break
+        return last
+
+    def stop(self):
+        self.live.ready()
+        self._clear_input()
         return {'released': True}
 
     def play(self, action, ref=None, position=None, direct=False, max_seconds=90.0, run=False):

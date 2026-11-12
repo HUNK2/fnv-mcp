@@ -294,6 +294,20 @@ class PhotoMenuTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 'MENU_OPEN')
         self.assertIn('StartMenu', str(cm.exception))
 
+    def test_a_menu_that_is_closing_is_waited_for(self):
+        # s1-play: the dialogue had ended, but DialogMenu stayed on the menu stack for a moment while it closed
+        calls = []
+
+        class Agent:
+            def menus(self):
+                calls.append(1)
+                if len(calls) < 4:
+                    return {'inMenuMode': True, 'menuStack': [{'id': 1009, 'name': 'DialogMenu'}], 'visible': []}
+                return {'inMenuMode': False, 'menuStack': [], 'visible': []}
+        eyes = EyesTools(world(), agent=Agent(), sleep=lambda s: None)
+        eyes._no_menu()
+        self.assertEqual(len(calls), 4)
+
 
 if __name__ == '__main__':
     unittest.main()
