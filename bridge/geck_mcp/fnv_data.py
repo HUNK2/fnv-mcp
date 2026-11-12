@@ -29,6 +29,7 @@ from .fnv_facts import ACTOR_VALUES, SCRIPT_BLOCKS
 from .fnv_state import sqlite_connect, write_txn
 
 KNOWN_NAMES = {v.lower() for v in ACTOR_VALUES} | {'x', 'y', 'z', 'player', 'playerref'}  # AVs, axes, the player
+VARIADIC_COMMANDS = {'showmessage'}   # the message's %g values follow it (ShowMessage Msg rank; P8)
 BLOCK_ALIASES = {'onpackageend'}  # short names in g_scriptBlocks (OnPackageDone = OnPackageEnd)
 
 INDEX_VERSION = 2   # 2: EditorIDs of PGRE, PMIS and NAVM are indexed (P7)
@@ -897,6 +898,11 @@ def lint_script(source, engine, edid_lookup=None):
         text = raw.split(';', 1)[0].strip()
         if not text:
             continue
+        if not re.search(r'\w', text):
+            # a line of ====, ---- or `` (vanilla scripts have them; the compiler skips them) (P8)
+            add(n, 'warning', 'NOT_A_STATEMENT', 'This line has no statement (the compiler skips it)')
+            continue
+        text = re.sub(r'^([A-Za-z_]\w*)\.\s+(?=[A-Za-z_])', r'\1.', text)    # `Ref. Cmd` compiles as Ref.Cmd (P8)
         head = re.match(r'([A-Za-z_][\w.]*)(.*)', text)
         words = ([head.group(1)] + head.group(2).split()) if head else text.split()
         first = words[0].lower()
@@ -905,8 +911,10 @@ def lint_script(source, engine, edid_lookup=None):
                 add(n, 'error', 'NO_SCRIPTNAME', 'The first statement must be "scn <ScriptName>"')
             seen_scn = True
             if first in ('scn', 'scriptname'):
-                if len(words) != 2:
+                if len(words) < 2:
                     add(n, 'error', 'BAD_SCRIPTNAME', 'scn takes one name')
+                elif len(words) > 2:     # the compiler takes the first word (188TradingPostBehavior "... Script") (P8)
+                    add(n, 'warning', 'BAD_SCRIPTNAME', 'scn takes one name; the words after %s are ignored' % words[1])
                 continue
         if first in DECLARATIONS:
             if in_block:
@@ -1013,7 +1021,7 @@ def _check_call(n, text, commands, variables, lookup, add, statement=False):
         if statement and commands:
             add(n, 'error', 'UNKNOWN_COMMAND', 'Unknown command %r (not in the vanilla, xNVSE or JIP LN tables)' % name)
         return
-    if ref and ref.lower() not in variables and lookup and not lookup(ref):
+    if ref and ref.lower() not in variables and ref.lower() not in KNOWN_NAMES and lookup and not lookup(ref):
         add(n, 'warning', 'UNKNOWN_REFERENCE', '%s is not a variable or an EditorID in the active plugins' % ref)
     params = command.get('params') or []
     args = words[1:]
@@ -1021,7 +1029,8 @@ def _check_call(n, text, commands, variables, lookup, add, statement=False):
     if not command.get('paramsUnresolved') and params is not None and command.get('source') == 'vanilla':
         if len(args) < required:
             add(n, 'error', 'TOO_FEW_ARGUMENTS', '%s needs %d argument(s), got %d' % (command['name'], required, len(args)))
-        elif len(args) > len(params):
+        elif len(args) > len(params) and params and command['name'].lower() not in VARIADIC_COMMANDS:
+            # the engine ignores tokens after a command with no parameters (RemoveScriptPackage, StopCombat...) (P8)
             add(n, 'warning', 'TOO_MANY_ARGUMENTS', '%s takes %d argument(s), got %d' % (command['name'], len(params), len(args)))
     for arg, param in zip(args, params):
         types = FORM_TYPES_FOR_PARAM.get(param.get('type'))

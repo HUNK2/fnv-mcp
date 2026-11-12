@@ -1426,7 +1426,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | P4 | low | fixed | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
 | P6 | low | fixed | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
 | P7 | low | fixed | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
-| P8 | low | open | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
+| P8 | low | fixed | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
 | P9 | low | open | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
 | P10 | low | open | Save parser: FLT_MAX rotation sentinel passed through | `fnv_save.py ACHR/ACRE initial block decode` |
 | N1 | medium | fixed | An unknown undo op is marked undone without running | `geck_mcp/fnv_live.py:1347-1382` |
@@ -2134,7 +2134,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - TOO_MANY_ARGUMENTS 237 warnings: ShowMessage is variadic (66 false positives, e.g. `ShowMessage Msg rank` in ChallengeBugSCRIPT); the game ignores trailing tokens on zero-parameter commands (RemoveScriptPackage 89, StopCombat 62, StopLook 11, EvaluatePackage 5).
   - DUPLICATE_VARIABLE / VARIABLE_SHADOWS_COMMAND on declarations followed by prose (weak; possibly stale source).
 - Fix idea: trim whitespace after `.`; consult KNOWN_NAMES in `_check_call`; mark ShowMessage variadic; downgrade extra args on zero-parameter commands to info.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: lint takes 'Ref. Cmd' as Ref.Cmd, knows PlayerREF (KNOWN_NAMES in _check_call), treats ShowMessage as variadic, does not warn on extra tokens after zero-parameter commands (the engine ignores them), and makes decoration lines and extra words after scn warnings. FalloutNV.esm: 2,576 scripts with source, 0 errors, 151 warnings recorded (S6.14, test_stab_s6b).
 
 ### P9. Spec validation regexes accept a trailing newline
 

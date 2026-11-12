@@ -325,5 +325,57 @@ class IndexGapTests(unittest.TestCase):
         self.assertEqual(tools.record_find('Thing', limit=10 ** 9)['count'], 5)
 
 
+class LintVanillaTests(unittest.TestCase):
+    """P8: lint false positives on the vanilla scripts (Ref. Cmd, PlayerREF, ShowMessage, zero-parameter commands)."""
+
+    @staticmethod
+    def engine():
+        from geck_mcp import fnv_engine
+        from geck_mcp.config import Project
+        root = Path(__file__).resolve().parents[1] / 'projects' / 'hellowasteland.windows.json'
+        paths = fnv_engine.default_paths(Project.load(str(root)))
+        if not paths[0].exists():
+            raise unittest.SkipTest('needs the engine map')
+        return fnv_engine.load(*paths)
+
+    @unittest.skipUnless(DATA, 'needs the game Data folder')
+    def test_vanilla_scripts_lint_clean(self):
+        from collections import Counter
+        from geck_mcp.esp import codec
+        from geck_mcp.fnv_data import lint_script
+        engine = self.engine()
+        data = (DATA / 'FalloutNV.esm').read_bytes()
+        edids = {}
+        for rec, _ in codec.iter_records(data):
+            if rec.type != 'LAND' and rec.editor_id:
+                edids.setdefault(rec.editor_id.lower(), set()).add(rec.type)
+        lookup = lambda name: edids.get(name.lower(), set()) | ({'ACHR'} if name.lower() == 'playerref' else set())
+        codes, scripts = Counter(), 0
+        for rec, _ in codec.iter_records(data, types=['SCPT']):
+            source = rec.get('SCTX')
+            if source:
+                scripts += 1
+                for p in lint_script(codec.text(source), engine, lookup)['problems']:
+                    codes[(p['severity'], p['code'])] += 1
+        errors = {k: v for k, v in codes.items() if k[0] == 'error'}
+        self.assertEqual(errors, {})
+        self.assertNotIn(('warning', 'TOO_MANY_ARGUMENTS'), codes)
+        self.assertNotIn(('warning', 'UNKNOWN_REFERENCE'), codes)
+        # 2,576 scripts with source; 151 warnings recorded on 2026-11-13 (declarations in blocks, stray endif/else,
+        # duplicate variables, decoration lines, variables named like commands, one scn with extra words)
+        self.assertGreaterEqual(scripts, 2500)
+        self.assertLessEqual(sum(codes.values()), 151, codes)
+
+    def test_ref_space_cmd_showmessage_and_zero_param_extras(self):
+        from geck_mcp.fnv_data import lint_script
+        engine = self.engine()
+        source = ('scn T\nref r\nBegin GameMode\n  r. StopLook\n  ShowMessage SomeMsg rank\n  StopCombat player\n'
+                  '  PlayerREF.Disable\nEnd\n')
+        problems = lint_script(source, engine, lambda name: {'MESG'} if name == 'SomeMsg' else set())['problems']
+        self.assertEqual([p for p in problems if p['severity'] == 'error'], [])
+        self.assertEqual([p['code'] for p in problems if p['code'] in ('TOO_MANY_ARGUMENTS', 'UNKNOWN_REFERENCE')],
+                         [])
+
+
 if __name__ == '__main__':
     unittest.main()
