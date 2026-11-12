@@ -42,6 +42,19 @@ def preflight(session, attach, start):
     """Problems that make the run meaningless (empty list: go)."""
     from geck_mcp import fnv_link
     problems = []
+    # The game's pipe takes one client: an MCP server that used it lets go after 20 s idle (EngineLink). Wait for
+    # that, before any call through the session (whose own link would then hold the pipe), and say so when it does
+    # not happen. Only when a game runs: without one there is nothing to wait for.
+    from geck_mcp.fnv_game import game_processes
+    if game_processes():
+        probe = fnv_link.EngineLink(getattr(session.project.fnv, 'engine_pipe', None))
+        try:
+            probe.connect(wait=45)
+        except fnv_link.LinkError as e:
+            return ["cannot attach to the game's pipe (%s): another client holds it; stop it or let the MCP "
+                    'server go idle for 20 s, then run again' % e], {}
+        finally:
+            probe.close()
     status = session.call('fnv_status')
     data = status.get('data') or {}
     if not data.get('running'):
@@ -52,16 +65,6 @@ def preflight(session, attach, start):
             return ['launch failed: %s' % json.dumps(launched.get('error'))[:300]], data
         status = session.call('fnv_status')
         data = status.get('data') or {}
-    # The game's pipe takes one client: an MCP server that used it lets go after 20 s idle (EngineLink). Wait for
-    # that rather than fail; say so when it does not happen.
-    probe = fnv_link.EngineLink(getattr(session.project.fnv, 'engine_pipe', None))
-    try:
-        probe.connect(wait=45)
-    except fnv_link.LinkError as e:
-        return ['cannot attach to the game\'s pipe (%s): another client holds it; stop it or let the MCP '
-                'server go idle for 20 s, then run again' % e], data
-    finally:
-        probe.close()
     install = Path(session.project.state_dir) / 'engine' / 'install.json'
     if not install.exists():
         problems.append('no state/engine/install.json: run fnv_companion_install (game closed)')
@@ -122,7 +125,10 @@ def run_scenarios(session):
                          'detail': 'needs the test save %s' % needs[5:]})
             continue
         started = time.monotonic()
-        envelope = session.call('fnv_test_run', {'path': str(BRIDGE / rel), 'relaunch_on_crash': True})
+        try:
+            envelope = session.call('fnv_test_run', {'path': str(BRIDGE / rel), 'relaunch_on_crash': True})
+        except Exception as e:  # noqa: BLE001 - a timeout or a dead session: this row says so, the others stay
+            envelope = {'ok': False, 'error': {'code': type(e).__name__, 'message': str(e)[:300]}, 'data': None}
         report = envelope.get('data') or {}
         got = 'crash' if report.get('crash') else 'pass' if report.get('passed') else 'fail'
         if not envelope.get('ok'):
@@ -154,7 +160,9 @@ def write_summary(out, summary):
         lines.append('')
     if summary.get('scenarios'):
         lines += ['## Scenarios', '', '| Scenario | Expected | Result |', '|---|---|---|']
-        lines += ['| %s | %s | %s |' % (r['scenario'], r['expected'], r['result']) for r in summary['scenarios']]
+        lines += ['| %s | %s | %s%s |' % (r['scenario'], r['expected'], r['result'],
+                                           ': %s' % r['detail'] if r['result'] in ('not run', 'skipped', 'error')
+                                           and r.get('detail') else '') for r in summary['scenarios']]
         lines.append('')
     (out / 'summary.md').write_text('\n'.join(lines), encoding='utf-8')
 
