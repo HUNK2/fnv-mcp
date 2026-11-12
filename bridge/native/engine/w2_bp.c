@@ -93,6 +93,11 @@ static bool isite_live(uint32_t addr) {
         if (isites[i].live && isites[i].addr == addr) return true;
     return false;
 }
+static bool isite_in(uint32_t addr, uint32_t len) { /* a live int3 site in [addr, addr+len) (K1) */
+    for (int i = 0; i < (int)ISITES; i++)
+        if (isites[i].live && isites[i].addr >= addr && isites[i].addr - addr < len) return true;
+    return false;
+}
 /* The live site at addr with this purpose (a to or trace site only for its owner). -1 when none. */
 static int isite_find(uint32_t addr, uint32_t purpose, DWORD owner) {
     for (int i = 0; i < (int)ISITES; i++) {
@@ -117,6 +122,7 @@ static int isite_add(uint32_t addr, int bp, DWORD owner, uint32_t purpose) {
         }
     }
     if (slot < 0) return -1;
+    if (!shared && patched_range(addr, 1)) return -3; /* inside a hook or probe patch: the 0xCC would corrupt it (K1) */
     if (!shared && cov_in_flight(addr, 1)) return -2; /* a coverage hit there would erase the new 0xCC: busy */
     if (!shared) cov_release_range(addr, 1); /* an armed coverage byte is put back first, never saved as orig */
     if (!shared && !read_bytes(addr, &orig, 1)) return -1;
@@ -490,11 +496,11 @@ static const char *bp_resume_prepare(const Stop *s, uint32_t mode, uint32_t arg,
         int site;
         if (arg < 0x10000) return "bad_arguments";
         if (isite_find(arg, SITE_TO, s->thread) >= 0) return NULL;
-        if (bp_probe_at(arg)) return "in_use";
+        if (bp_probe_at(arg) || probe_range(arg, 1)) return "in_use";
         probe_suspend();
         site = isite_add(arg, -1, s->thread, SITE_TO);
         probe_resume();
-        return site == -2 ? "busy" : site < 0 ? "unreadable" : NULL;
+        return site == -2 ? "busy" : site == -3 ? "in_use" : site < 0 ? "unreadable" : NULL;
     }
     if (mode == RESUME_TRACE) {
         uint32_t max = 0, lo = 0, hi = 0;
@@ -606,7 +612,7 @@ static void op_bp_set(int argc, char **argv) {
         probe_suspend();
         site = isite_add(addr, (int)id, 0, SITE_BP);
         probe_resume();
-        if (site < 0) return fail(site == -2 ? "busy" : "unreadable");
+        if (site < 0) return fail(site == -2 ? "busy" : site == -3 ? "in_use" : "unreadable");
     }
     Bp *b = &bps[id];
     b->used = true;

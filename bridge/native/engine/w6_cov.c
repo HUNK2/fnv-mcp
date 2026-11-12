@@ -132,7 +132,7 @@ static void cov_write_all(bool arm) {
         }
         if (cov_state[i] != 0) continue;
         /* a breakpoint or probe placed on this line after `cov add` owns it now */
-        if (bp_probe_at(cov_addr[i]) || isite_live(cov_addr[i])) continue;
+        if (bp_probe_at(cov_addr[i]) || isite_live(cov_addr[i]) || patched_range(cov_addr[i], 1)) continue; /* K1 */
         unsigned char *at = (unsigned char *)(uintptr_t)cov_addr[i];
         DWORD old;
         if (!VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old)) continue;

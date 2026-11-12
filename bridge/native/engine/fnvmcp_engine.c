@@ -748,6 +748,13 @@ static void emit_hook(const Hook *h) {
 }
 /* hook <target> <stolen> <relocs: comma list of rel32 offsets or -> <flags> <filter_sel> <filter_value>
  *      <key_sel> <nargs> <deref0_sel> <deref1_sel> <snap_sel> <snap_len> <label hex> */
+/* K1: bytes another patch owns. An int3 or coverage byte inside a hook's jump corrupts it, and a hook over a live
+ * int3 copies the 0xCC into its trampoline: both crash the game on the next call. */
+static bool hook_range(uint32_t addr, uint32_t len);
+static bool probe_range(uint32_t addr, uint32_t len);
+static bool isite_in(uint32_t addr, uint32_t len);
+static bool patched_range(uint32_t addr, uint32_t len) { return hook_range(addr, len) || probe_range(addr, len); }
+
 static void op_hook(int argc, char **argv) {
     uint32_t target, stolen, flags, filter_value, nargs, snap_len, v[6];
     if (argc != 14 || !parse_u32(argv[1], &target) || !parse_u32(argv[2], &stolen) || stolen < 5 || stolen > 16 ||
@@ -767,8 +774,8 @@ static void op_hook(int argc, char **argv) {
         hook_count = kept;
     }
     if (hook_count >= HOOKS) return fail("too_many_hooks");
-    for (int i = 0; i < hook_count; i++)
-        if (hooks[i]->target == target && hooks[i]->stolen) return fail("already_hooked");
+    if (hook_range(target, stolen)) return fail("already_hooked"); /* any overlap, not only the same target (K1) */
+    if (probe_range(target, stolen) || isite_in(target, stolen)) return fail("in_use");
     if (shadow_tls == TLS_OUT_OF_INDEXES && (shadow_tls = TlsAlloc()) == TLS_OUT_OF_INDEXES) return fail("no_tls");
     MEMORY_BASIC_INFORMATION info;
     if (!VirtualQuery((LPCVOID)(uintptr_t)target, &info, sizeof(info)) || info.State != MEM_COMMIT ||
@@ -1004,8 +1011,20 @@ enum { PROBE_STAGED, PROBE_ARMED, PROBE_DISARMED, PROBE_CHANGED };
 typedef struct { uint32_t target; uint8_t mode, stolen, state, pad; unsigned char original[16]; unsigned char *stub, *tramp; } Probe;
 typedef struct { uint32_t probe, address, original, value; uint8_t kind, state, pad[2]; } ProbeSite;
 static Probe *probes;
+static bool hook_range(uint32_t addr, uint32_t len) {
+    for (int i = 0; i < hook_count; i++)
+        if (hooks[i]->stolen && addr < hooks[i]->target + hooks[i]->stolen && hooks[i]->target < addr + len) return true;
+    return false;
+}
 static ProbeSite *probe_sites;
 static uint32_t probe_capacity, probe_used, probe_site_used, probe_samples_per;
+static bool probe_range(uint32_t addr, uint32_t len) { /* the bytes an armed probe patched (an int3 probe: one) */
+    for (uint32_t i = 0; i < probe_used; i++) {
+        uint32_t size = probes[i].stolen ? probes[i].stolen : 1;
+        if (probes[i].state == PROBE_ARMED && addr < probes[i].target + size && probes[i].target < addr + len) return true;
+    }
+    return false;
+}
 static volatile LONG *probe_counts;  /* [capacity] calls */
 static volatile LONG *probe_meta;    /* [capacity][2]: sampled calls, caller-table overflow */
 static uint32_t *probe_samples;      /* [capacity][samples_per][PROBE_WORDS] */

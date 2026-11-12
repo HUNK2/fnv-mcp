@@ -234,5 +234,52 @@ class HookLimitTests(StopTestCase):
         self.assertEqual(hook['actionApplied'], 2)
 
 
+@needs_zig
+class PatchOverlapTests(StopTestCase):
+    """K1: an int3 inside a hook's patched bytes, or a hook over a live int3, crashed the game."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        receipt = build(cls.tmp.name)
+        cls.host = StopHost(receipt, Path(receipt['dll']).parent, cls.tmp.name, 300)
+        cls.t = cls.host.t
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.host.close()
+        cls.tmp.cleanup()
+
+    def tearDown(self):
+        self.host.link.one('bp', 'clear', 'ff')
+        for h in self.host.link.one('hooks').get('hooks') or []:
+            self.host.link.one('unhook', hexint(h['id']))
+
+    def hook(self, target, label='k1'):
+        from geck_mcp import fnv_link
+        return self.host.link.one('hook', hexint(target), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0),
+                                  hexint(1), '0', '0', hexint(0), hexint(0), fnv_link.hexs(label))
+
+    def test_no_int3_inside_a_hooks_bytes(self):
+        self.assertTrue(self.hook(self.t['bpTarget']).get('ok'))
+        for offset in (0, 3, 5):
+            result = self.host.link.one('bp', 'set', hexint(1), hexint(self.t['bpTarget'] + offset), 'int3', 'ff',
+                                        hexint(0))
+            self.assertEqual(result.get('error'), 'in_use', offset)
+        # outside the six stolen bytes is fine
+        self.assertTrue(self.host.link.one('bp', 'set', hexint(1), hexint(self.t['bpTarget'] + 6), 'int3', 'ff',
+                                           hexint(0)).get('ok'))
+
+    def test_no_hook_over_a_live_int3(self):
+        self.assertTrue(self.host.link.one('bp', 'set', hexint(2), hexint(self.t['bpTarget'] + 3), 'int3', 'ff',
+                                           hexint(0)).get('ok'))
+        self.assertEqual(self.hook(self.t['bpTarget']).get('error'), 'in_use')
+        self.assertEqual(self.host.link.one('hooks').get('hooks') or [], [])
+
+    def test_no_hook_overlapping_another(self):
+        self.assertTrue(self.hook(self.t['bpTarget']).get('ok'))
+        self.assertEqual(self.hook(self.t['bpTarget'] + 1, 'k1b').get('error'), 'already_hooked')
+
+
 if __name__ == '__main__':
     unittest.main()

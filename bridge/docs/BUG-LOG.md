@@ -2272,7 +2272,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | U7 | low | open | A journal line with a wrong field type breaks every journal read | `audit3/state.md L4` |
 | U8 | low | open | Probe-remove undo reads and writes probe_session.json outside one lock | `audit3/state.md L5` |
 | U9 | low | open | A speed change from an out-of-range multiplier is not journaled | `audit3/state.md L6` |
-| K1 | high | open | An int3 can land inside a hook's patched bytes or be copied into its trampoline: the game crashes | `audit3/companion.md H1` |
+| K1 | high | fixed | An int3 can land inside a hook's patched bytes or be copied into its trampoline: the game crashes | `audit3/companion.md H1` |
 | K2 | medium | open | A worker parked at a stop the main thread waits on cannot be released while the bridge keeps talking (dead-man reset by unserved requests) | `audit3/companion.md M1` |
 | K3 | medium | open | Hook stubs and record rings are never reused: ~1000 installs end every hook tool; each recording hook leaks 768 KB | `audit3/companion.md M2` |
 | K4 | medium | open | fnv_flow trace takes an old parked stop of a cleared break with the same bp id as its own hit | `audit3/companion.md M3` |
@@ -2345,5 +2345,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: high
 - Found by: round-3 audit (docs/audit3/state.md H1): two memory writes 00->01->02, `fnv_undo journal_id=<first>` then fnv_revert_all left 01.
 - Fix: _order_targets names what each undo restores: memory byte ranges (write, writes; they meet when they overlap), a ref (console_ref, ref_enabled, actor_flag, item_count), a console command and its first word (settings, script variables, angles), the one weather override (ForceWeather / SetWeather / ReleaseWeatherOverride and their short names), time fixed/speed, the fly camera and the HUD. An undo is refused ("undo the later change first", with the later ids) while a newer open entry of this game process has a target that meets one of its own. fnv_undo with a count and fnv_revert_all go newest first, so they are not affected. Tests: tests/test_s7_round3.py UndoOrderTests.
+- Status: fixed
+
+### K1. An int3 could land inside a hook's patched bytes, or a hook could copy a live int3 into its trampoline
+
+- Where: native/engine/w2_bp.c (isite_add, the to resume), fnvmcp_engine.c (op_hook), w6_cov.c (cov_write_all)
+- Severity: high
+- Found by: round-3 audit (docs/audit3/companion.md H1): `fnv_debug break F hits=2` then `fnv_debug break F` (hook over the int3), or a hook on F then a trap break at F+3 (inside the jump displacement); both crash the game on the next call of F.
+- Fix: the companion knows which bytes other patches own: hook_range (live hooks, target..target+stolen) and probe_range (armed probes; an int3 probe owns one byte). isite_add refuses a new site there (-3, `in_use` for bp set and the to resume; a trace return site there is skipped), coverage arming skips those bytes, and op_hook refuses any overlap with another hook (`already_hooked`, was the same target only) or with an armed probe or a live int3 site (`in_use`). Tests: tests/test_engine_bp.py PatchOverlapTests (fake host).
 - Status: fixed
 
