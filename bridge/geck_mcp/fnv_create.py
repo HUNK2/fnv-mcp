@@ -980,7 +980,7 @@ class PlaceTools:
         return self.live.link
 
     def _placed(self):
-        return [e for e in self.live.journal.entries(process=self.live.identity())
+        return [e for e in self.live.journal.entries(process=self.live.game_identity())
                 if e['kind'] == 'place' and not e['undone']]
 
     def _pose(self, ptr):
@@ -1234,7 +1234,7 @@ class PlaceTools:
 
     def list(self):
         latest = {}
-        for e in self.live.journal.entries(process=self.live.identity()):
+        for e in self.live.journal.entries(process=self.live.game_identity()):
             if e['kind'] == 'place' and not e['undone']:
                 latest[e['ref']] = dict(e)
             elif e['kind'] == 'place_pose' and e['ref'] in latest:
@@ -1317,7 +1317,7 @@ class AuthorTools:
 
     def export(self, cell=None, name=None):
         placed = self.place.list()['placed'] if self.place else []
-        created = [e for e in self.live.journal.entries(process=self.live.identity())
+        created = [e for e in self.live.journal.entries(process=self.live.game_identity())
                    if e['kind'] == 'form_create' and not e['undone']]
         records, objects, problems = {}, [], []
         new_ids = {}

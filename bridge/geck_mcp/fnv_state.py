@@ -137,6 +137,7 @@ def atomic_write(path, data):
 
 
 _warned = set()
+READ_RETRY_SECONDS = 2.0      # update_json retries a file another process holds (a sharing violation) this long
 
 
 def read_json(path, default):
@@ -170,6 +171,22 @@ def _warn(path, what):
         log.warning('state file %s %s', path, what)
 
 
+def _readable(path):
+    """Wait (up to READ_RETRY_SECONDS) until an existing file can be read; raise STATE_UNREADABLE instead of letting
+    update_json write the default over a file it could not read (S2 review M2)."""
+    deadline = time.monotonic() + READ_RETRY_SECONDS
+    while True:
+        try:
+            path.read_bytes()
+            return
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            if time.monotonic() >= deadline:
+                raise StateError('STATE_UNREADABLE', 'Cannot read %s (%s); it was left as it is' % (path, e))
+            time.sleep(0.05)
+
+
 def write_json(path, value, indent=None):
     atomic_write(path, json.dumps(value, indent=indent) + ('\n' if indent else ''))
 
@@ -178,6 +195,7 @@ def update_json(path, fn, default, indent=None):
     """Read, change and write a JSON state file under its lock. `fn(value)` returns the new value, or None after
     changing `value` in place. Returns the new value."""
     with locked(path):
+        _readable(Path(path))
         value = read_json(path, default)
         new = fn(value)
         if new is None:

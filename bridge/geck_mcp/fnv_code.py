@@ -87,6 +87,8 @@ class CodeTools:
         under the file's lock and on top of what another server process stored for the same game (S2.4); the merged
         list becomes ours."""
         mine = GameIdentity.parse(self._swaps_game)
+        if mine is None:   # no game known: writing would erase another server's list for the live game (review M8)
+            return
 
         def merge(stored):
             theirs = GameIdentity.parse(stored.get('game'))

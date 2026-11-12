@@ -237,7 +237,7 @@ FNV_LIVE_TOOLS = {
 }
 
 
-def register(server, project, annotations, result_type):
+def register(server, project, annotations, result_type, maintain=True):
     import json
     from functools import partial
 
@@ -246,8 +246,10 @@ def register(server, project, annotations, result_type):
 
     live = LiveService(project)
     # journal compaction and state pruning, off the start path (tasklist and file walks take a moment)
-    import threading
-    threading.Thread(target=live.maintain, name='fnv-state-maintenance', daemon=True).start()
+    # (tests pass maintain=False: it prunes the real %LOCALAPPDATA%\\fnvmcp crash folder; S2 review I4)
+    if maintain:
+        import threading
+        threading.Thread(target=live.maintain, name='fnv-state-maintenance', daemon=True).start()
     deep = DeepTools(live)
     live.deep = deep
     data = DataTools(project, live)

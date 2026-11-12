@@ -90,7 +90,7 @@ class ProfileSet(unittest.TestCase):
         out = self.tools.profile_set(mods={'Missing': True}, plugins={'FalloutNV.esm': False}, dry_run=True)
         self.assertEqual(len(out['errors']), 2)
         self.assertIsNone(out['backup'])
-        game = SimpleNamespace(process=lambda: [1234])
+        game = SimpleNamespace(process=lambda fresh=False: [1234])
         with self.assertRaises(fnv_records.DataError):
             self.tools.profile_set(mods={'ModA': False}, game=game)
 
@@ -118,7 +118,7 @@ class Helpers(unittest.TestCase):
             ini = profile / 'Fallout.ini'
             ini.write_text('[Controls]\nbBackground Mouse=0\nbBackground Keyboard=1\n', encoding='utf-8')
             project = SimpleNamespace(fnv=SimpleNamespace(mo2_root=tmp, mo2_profile='Dev'))
-            game = SimpleNamespace(process=lambda: [])
+            game = SimpleNamespace(process=lambda fresh=False: [])
             world = WorldTools(SimpleNamespace(live=SimpleNamespace(project=project), game=game))
             out = world.window('status', persist=True)
             self.assertTrue(out['ini']['changed'])

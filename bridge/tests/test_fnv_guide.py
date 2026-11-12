@@ -167,7 +167,7 @@ class RegistrationTests(unittest.TestCase):
                         return fn
                     return decorate
 
-            fnv_live_tools.register(FakeServer(), project, ('read', 'act', 'control'), dict)
+            fnv_live_tools.register(FakeServer(), project, ('read', 'act', 'control'), dict, maintain=False)
             self.assertEqual(set(tools), set(fnv_live_tools.FNV_LIVE_TOOLS))
             for name, (kind, _) in fnv_live_tools.FNV_LIVE_TOOLS.items():
                 self.assertEqual(tools[name][1], kind, name)

@@ -457,7 +457,7 @@ class RecordsTools:
         fnv = project.fnv
         if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
             raise DataError('NO_MO2_PROFILE', 'Set fnv.mo2_root and fnv.mo2_profile in the project file')
-        if game is not None and game.process():
+        if game is not None and game.process(fresh=True):
             raise DataError('GAME_RUNNING', 'Quit the game first: MO2 reads the profile when the game starts')
         profile = Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile
         mods_dir = Path(fnv.mo2_root) / 'mods'

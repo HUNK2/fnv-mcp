@@ -396,7 +396,7 @@ class ProcState:
         with _STATE_LOCK:
             rec = read_json(path, {}).get(section)
         ident = self._ident(rec)
-        if not ident or not ident.same_game(GameIdentity(int(pid), start)):
+        if not ident or not ident.same_game(GameIdentity.parse((pid, start))):
             return None
         return rec.get('value')
 
@@ -406,7 +406,9 @@ class ProcState:
         path = self._path()
         if path is None or not pid:
             return
-        me = GameIdentity(int(pid), start)
+        me = GameIdentity.parse((pid, start))
+        if me is None:
+            return
 
         def change(data):
             kept = {}

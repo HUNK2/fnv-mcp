@@ -64,7 +64,9 @@ class EngineLink:
 
     idle_release_seconds = 20.0
 
-    def __init__(self, pipe=None, timeout=15.0):
+    DEFAULT_TIMEOUT = 15.0
+
+    def __init__(self, pipe=None, timeout=DEFAULT_TIMEOUT):
         self.pipe = r'\\.\pipe\%s' % (pipe or os.environ.get('FNVMCP_PIPE') or DEFAULT_PIPE)
         self.timeout = timeout
         self.handle = None

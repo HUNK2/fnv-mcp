@@ -269,7 +269,7 @@ class NativeTools:
                 failed.append({'request': req['request'], 'target': req['target'], 'error': str(e)[:200]})
         exports = {e['name']: e['address'] for e in out.get('exports', [])}
         self.loaded[key] = {'id': mod['id'], 'dll': str(dll), 'exports': exports, 'hooks': installed}
-        self.live.journal.add({'kind': 'native_load', 'module': key, 'id': mod['id'], 'undo': None})
+        self.live.journal.add({'kind': 'native_load', 'module': key, 'moduleId': mod['id'], 'undo': None})
         return verdict('Loaded %s as module %d: %d hooks installed%s' % (
             key, mod['id'], len(installed), (', %d failed' % len(failed)) if failed else ''),
             'Its init ran on the main thread; fnv_native log shows what it logged.', module=key, id=mod['id'],

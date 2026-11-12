@@ -74,7 +74,7 @@ class PluginTools:
     # ------------------------------------------------------------------ prologue plans
     def _code_bytes(self, address, length=24):
         try:
-            if self.live.game.process():
+            if self.live.game.process(fresh=True):
                 raw = self.live.reads([(address, length)])[0]
                 if raw:
                     return raw, 'running game'
@@ -151,7 +151,7 @@ class PluginTools:
     def install(self, name):
         from .fnv_link import enable_mod
         game = self.live.game
-        if game.process():
+        if game.process(fresh=True):
             raise ConvError('GAME_RUNNING', 'Quit the game first (fnv_quit): a loaded plugin DLL cannot be replaced.')
         ident = c_name(name)
         dll = self._folder(name) / ('%s.dll' % ident)

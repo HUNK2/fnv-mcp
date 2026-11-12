@@ -394,12 +394,10 @@ class WorldTools:
                     fid = (descr.get(m) or {}).get('formId')
                     if fid:
                         self.live.journal.add({'kind': 'world_edit', 'action': 'duplicate', 'ref': fid,
-                                               'undo': {'op': 'console_ref', 'ref': fid, 'lines': ['Disable', 'MarkForDelete']},
-                                               'pid': (self.link.hello or {}).get('pid')})
+                                               'undo': {'op': 'console_ref', 'ref': fid, 'lines': ['Disable', 'MarkForDelete']}})
             if undo_lines:
                 entry = self.live.journal.add({'kind': 'world_edit', 'action': action, 'ref': r['formId'],
-                                               'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': undo_lines},
-                                               'pid': (self.link.hello or {}).get('pid')})
+                                               'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': undo_lines}})
                 out['journalId'] = entry['id']
             if action in ('move', 'rotate', 'scale', 'transform'):
                 after = self.live.reads([(p, 0x40)])[0]

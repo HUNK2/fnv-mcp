@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 from .fnv_conv import ConvError, verdict
-from .fnv_state import atomic_write
+from .fnv_state import atomic_write, locked
 
 PROTECTED_MODS = ('fnvmcp engine companion', 'xnvse data', 'jip ln nvse plugin')
 # A prepare failure with one of these codes is the game crashing or hanging while it loads, which is exactly what a
@@ -366,10 +366,11 @@ class BisectTools:
                                 'missing or changed; fix it by hand, then delete %s.' % (name, marker['marker']),
                                 marker)
         restored = []
-        for name, sha in shas.items():
-            if _sha(profile / name) != sha:
-                _atomic_write(profile / name, Path(backups[name]).read_bytes())
-                restored.append(str(profile / name))
+        with locked(profile / 'modlist.txt', 30.0):          # the profile lock every list edit takes (S2.4)
+            for name, sha in shas.items():
+                if _sha(profile / name) != sha:
+                    _atomic_write(profile / name, Path(backups[name]).read_bytes())
+                    restored.append(str(profile / name))
         return {'marker': marker['marker'], 'restored': restored or None, 'settled': str(profile)}
 
     def _restore_plugin(self):

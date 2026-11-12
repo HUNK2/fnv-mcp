@@ -175,6 +175,9 @@ class FakeLive:
     def identity(self):
         return {'pid': 5}
 
+    def game_identity(self):
+        return {'pid': 5}
+
     def ready(self):
         return {}
 

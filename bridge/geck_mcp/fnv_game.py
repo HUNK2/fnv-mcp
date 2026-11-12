@@ -711,7 +711,7 @@ class Game:
 
     # ------------------------------------------------------------ install / logs / saves
     def install_plugin(self, plugin_path, mod_name=None):
-        if self.process():
+        if self.process(fresh=True):
             raise GameError('GAME_RUNNING', 'Quit the game before installing (plugins load at startup)')
         source = Path(plugin_path)
         if not source.is_file() or source.suffix.lower() not in ('.esp', '.esm'):

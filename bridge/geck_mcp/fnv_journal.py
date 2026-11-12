@@ -19,6 +19,9 @@ from pathlib import Path
 from .fnv_state import GameIdentity, atomic_write, locked
 
 UNDONE, CONFIRM = '_undone', '_confirm'
+# An add waits this long for the journal lock: longer than an undo may hold it (fnv_live.UNDO_LOCK_TIMEOUT plus one
+# companion request), so a change that already landed in the game always gets its entry (S2 review I3).
+ADD_TIMEOUT = 60.0
 EVENTS = (UNDONE, CONFIRM)
 _ASK = object()
 
@@ -119,13 +122,15 @@ class Journal:
         return dict(e) if e else None
 
     def last_seq(self):
+        """The highest seq number used: the sidecar or the journal itself, whichever is higher (an empty or stale
+        sidecar never makes a seq repeat; S2 review I2)."""
         with self._mutex:
             try:
-                return int(self.seq_path.read_text(encoding='ascii').strip() or 0)
-            except (FileNotFoundError, ValueError):
-                pass
+                side = int(self.seq_path.read_text(encoding='ascii').strip() or 0)
+            except (OSError, ValueError):
+                side = 0
             by_id, _ = self._folded()
-            return max([e.get('seq') or 0 for e in by_id.values()] or [0])
+            return max([side] + [e.get('seq') or 0 for e in by_id.values()])
 
     # ------------------------------------------------------------------ writing
     def _identity(self, given):
@@ -139,8 +144,16 @@ class Journal:
             return None
 
     def _append(self, record):
+        """Append one line (under the lock). A last line left without its newline (a server killed mid-append) is
+        closed first, so the new record is never glued to it and lost (S2 review I1)."""
         line = (json.dumps(record) + '\n').encode('utf-8')
-        with open(self.path, 'ab') as f:
+        with open(self.path, 'a+b') as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell():
+                f.seek(-1, os.SEEK_END)
+                if f.read(1) != b'\n':
+                    line = b'\n' + line
+            f.seek(0, os.SEEK_END)
             f.write(line)
             f.flush()
 
@@ -150,11 +163,10 @@ class Journal:
         ident = self._identity(identity)
         body = {k: v for k, v in entry.items() if k not in ('pid', 'started', 'seq', 'orphan', 'undone')}
         stamp = ident.as_dict() if ident else {'orphan': True}
-        with self.locked():
+        body.pop('id', None)             # the journal's id, never the caller's (S2 review M1)
+        with self.locked(ADD_TIMEOUT):
             seq = self.last_seq() + 1
             record = {'id': uuid.uuid4().hex[:12], 'seq': seq, 'time': time.time(), 'undone': False, **stamp, **body}
-            if 'id' in entry:
-                record['id'] = entry['id']
             atomic_write(self.seq_path, str(seq))
             self._append(record)
         return record
@@ -163,7 +175,7 @@ class Journal:
         ids = [i for i in dict.fromkeys(ids) if i]
         if not ids:
             return
-        with self.locked():
+        with self.locked(ADD_TIMEOUT):
             self._append({'kind': UNDONE, 'ids': ids, 'time': time.time()})
 
     def confirm(self, entry_id, after):

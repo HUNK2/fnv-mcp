@@ -176,7 +176,7 @@ class FakeLive:
         self.live = LiveService(self.project)
         self.live._game = fnv_game.Game(self.project)
         self.live._game.link = self.link
-        self.live._game.process = lambda: (4242, 1)
+        self.live._game.process = lambda fresh=False: (4242, 1)
         # what every running game has: the console print flags the console tools save and restore
         self.link.put(FACTS['verbose_print_flag']['address'], b'\x00')
         self.link.put(FACTS['console_visible_flag']['address'], b'\x00')

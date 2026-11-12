@@ -51,6 +51,9 @@ def _fid(value):
     return '%08X' % value
 
 
+UNDO_LOCK_TIMEOUT = 30.0     # an undo waits this long for the journal lock (see fnv_journal.ADD_TIMEOUT)
+
+
 class LiveService:
     def __init__(self, project):
         self.project = project
@@ -1363,7 +1366,7 @@ class LiveService:
         for e in entries:
             try:
                 # Under the journal's lock: another server may have undone it since the list was read (S2.3).
-                with self.journal.locked(timeout=30):
+                with self.journal.locked(timeout=UNDO_LOCK_TIMEOUT):
                     now = self.journal.get(e['id']) or e
                     if now.get('undone'):
                         r = {'id': e['id'], 'undone': False, 'kind': e.get('kind'), 'reason': 'already undone'}
