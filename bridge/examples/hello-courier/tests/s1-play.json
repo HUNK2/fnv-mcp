@@ -1,5 +1,6 @@
 {
  "name": "S1: play Hello Courier as a player",
+ "start": {"coc": "HelloCourierRoom"},
  "plugins": ["HelloCourier.esp"],
  "steps": [
   {"wait": {"until": "GetStage HelloCourier >= 10", "timeout": 15}},
