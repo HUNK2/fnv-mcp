@@ -447,6 +447,7 @@ class Supervisor:
                 continue
             if self.code is None or fingerprint in (self.code, self.failed):
                 seen, since = None, None
+                self.busy_since = None                            # no reload pending: a later wait starts afresh
                 continue
             if fingerprint != seen:                               # wait until the files stop changing
                 seen, since = fingerprint, time.monotonic()

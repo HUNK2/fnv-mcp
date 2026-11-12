@@ -242,7 +242,7 @@ class LiveServiceTests(GameHelperTests):
             live.run('fnv_x', lambda: seen.setdefault('act', busy.count(path)) and {}, 'act')
             live.run('fnv_y', lambda: seen.setdefault('control', busy.count(path)) and {}, 'control')
             live.run('fnv_z', lambda: seen.setdefault('read', busy.count(path)) and {}, 'read')
-        self.assertEqual(seen, {'act': 1, 'control': 1, 'read': 0})
+        self.assertEqual(seen, {'act': 1, 'control': 1, 'read': 1})   # a cancelled read keeps running too (fnv_wait_for holds the gate)
         self.assertEqual(busy.count(path), 0)
 
     def test_geck_changes_are_reported_busy(self):

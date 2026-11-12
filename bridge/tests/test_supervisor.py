@@ -228,6 +228,28 @@ class BusyReloadTests(unittest.TestCase):                    # R4
         self.assertGreaterEqual(reloaded_at, done_at - 0.05, 'reloaded while the call was still running')
         self.assertLess(reloaded_at - done_at, 1.0, 'the reload did not follow the end of the call')
 
+    def test_old_busy_wait_does_not_count_against_a_later_one(self):
+        # An edit made while a cancelled call ran, then reverted: the reload is no longer pending. A later busy wait
+        # must start its own drain clock, not inherit the first one (which would kill the server at once).
+        import json
+        self.start(work=2, drain_limit=3.0)
+        time.sleep(0.8)                                           # the watch loop has seen the busy child
+        self.assertIsNotNone(self.sup.busy_since)
+        (self.watched / 'code.py').write_text('v = 1\n')         # reverted: same code as the running child
+        time.sleep(4.0)                                           # call 1 ends; the first wait is long past 3 s
+        self.assertEqual(self.sup.reloads, 0)
+        self.sup.from_client(json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+                                         'params': {'name': 'long_act'}}).encode())
+        time.sleep(0.5)
+        self.sup.from_client(json.dumps({'jsonrpc': '2.0', 'method': 'notifications/cancelled',
+                                         'params': {'requestId': 2}}).encode())
+        (self.watched / 'code.py').write_text('v = 3\n')
+        self.wait_reload(15)
+        self.assertEqual(self.sup.reloads, 1)
+        self.assertEqual(self.old.proc.wait(15), 0, 'the busy server was killed')
+        self.assertNotIn('killed a busy server', (self.dir / 'supervisor.log').read_text(encoding='utf-8')
+                         if (self.dir / 'supervisor.log').exists() else '')
+
     def test_drain_limit_logs_and_reloads(self):
         started = time.monotonic()
         self.start(work=120, drain_limit=2.0)
@@ -258,6 +280,28 @@ class BusyFileTests(unittest.TestCase):
                 os.environ.pop('GECK_MCP_BUSY_FILE')
             with busy.track('unset'):                 # no variable: does nothing
                 pass
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows sharing rules')
+    def test_update_survives_a_reader_holding_the_file(self):
+        # The supervisor reads the file while the server writes it; on Windows os.replace onto a file another
+        # handle has open fails (no FILE_SHARE_DELETE). The update must retry, not be lost.
+        import os
+        import threading
+        sys.path.insert(0, str(ROOT))
+        from geck_mcp import busy
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'busy.json'
+            os.environ['GECK_MCP_BUSY_FILE'] = str(path)
+            try:
+                with busy.track('a'):
+                    reader = open(path, encoding='utf-8')
+                    threading.Timer(0.2, reader.close).start()
+                    with busy.track('b'):
+                        time.sleep(0.4)
+                        self.assertEqual(busy.count(path), 2)
+                self.assertEqual(busy.count(path), 0)
+            finally:
+                os.environ.pop('GECK_MCP_BUSY_FILE')
 
 
 if __name__ == '__main__':

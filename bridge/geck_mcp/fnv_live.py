@@ -161,10 +161,10 @@ class LiveService:
         return self._engine
 
     def run(self, name, action, kind='read'):
-        if kind == 'read':
-            return self._run(name, action, kind)
+        # Every kind: a cancelled call keeps running in its thread (act calls are shielded, reads are abandoned but
+        # not stopped, and fnv_wait_for holds the frame gate), so the supervisor waits for it before a reload (R4).
         from . import busy
-        with busy.track(name):          # a cancelled call keeps running: the supervisor waits for it (R4)
+        with busy.track(name):
             return self._run(name, action, kind)
 
     def _run(self, name, action, kind):

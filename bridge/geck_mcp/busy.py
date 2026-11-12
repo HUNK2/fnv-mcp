@@ -19,7 +19,16 @@ _since = None
 def _write(path):
     tmp = path.with_name('%s.%d.tmp' % (path.name, os.getpid()))
     tmp.write_text(json.dumps({'count': len(_calls), 'calls': list(_calls), 'since': _since}), encoding='utf-8')
-    os.replace(tmp, path)
+    # On Windows os.replace fails while another handle has the target open (the supervisor reading it, which takes
+    # microseconds): retry for up to 2 s rather than lose the update.
+    for attempt in range(40):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 39:
+                raise
+            time.sleep(0.05)
 
 
 @contextmanager
