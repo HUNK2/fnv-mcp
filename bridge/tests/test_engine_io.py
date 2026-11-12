@@ -190,7 +190,7 @@ class IoCompanionTests(unittest.TestCase):
         self.assertEqual(illegal['fault']['code'], '0xc000001d')
         good = self.op('call', hexint(self.t['add3']), 'ig', '0', '0', hexint(1), hexint(2), hexint(3))
         self.assertEqual((good['ok'], good['eax']), (True, '0x00000006'))
-        self.assertEqual(self.link.ping()['companion'], 2)
+        self.assertEqual(self.link.ping()['companion'], 3)
 
     def test_unguarded_call_is_unchanged(self):
         ok = self.op('call', hexint(self.t['add3']), 'i', '0', '0', hexint(1), hexint(2), hexint(3))

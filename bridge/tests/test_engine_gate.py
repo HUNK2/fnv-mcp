@@ -70,7 +70,7 @@ class GateCompanionTests(unittest.TestCase):
 
     def test_ping_reports_version_and_gate_fields(self):
         ping = self.link.ping()
-        self.assertEqual((ping['companion'], ping['wire']), (2, 2))
+        self.assertEqual((ping['companion'], ping['wire']), (3, 2))     # 3: writes exit notes (S6 review C)
         for key in ('held', 'stepLeft', 'parked', 'lastFrameTick'):
             self.assertIn(key, ping)
         self.assertEqual(ping['parked'], 0)
