@@ -164,6 +164,9 @@ def validate(data, index=None, assets=None, masters_expected=None):
                 checked['textures'] += 1
                 if assets.find(tex) is None:
                     errors.append('%s texture missing: Data\\%s (used by %s)' % (where, tex, rel))
+    for rec, _ in plugin.records():      # read problems a record survived (a wrong zlib checksum; S6 review B M5)
+        for w in getattr(rec, 'warnings', None) or []:
+            warnings.append('%s %08X: %s' % (rec.type, rec.form_id, w))
     return {'ok': not errors, 'errors': errors, 'warnings': warnings, 'checked': checked}
 
 

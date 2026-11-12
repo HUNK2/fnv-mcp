@@ -167,7 +167,7 @@ class RecordIndex:
 
     def _fresh(self, path, st):
         row = self.db.execute('select id, size, mtime, version from files where path = ?', (str(path),)).fetchone()
-        if row and row[1] == st.st_size and abs(row[2] - st.st_mtime) < 1e-3 and row[3] == INDEX_VERSION:
+        if row and row[1] == st.st_size and abs(row[2] - st.st_mtime) < 1e-3 and row[3] >= INDEX_VERSION:
             return row[0], row
         return None, row
 
@@ -437,9 +437,11 @@ class DataTools:
         """A raw form id inside a plugin -> its load-order form id and EditorID (when indexed)."""
         own = plugin_entry.get('masters', []) + [plugin_entry['name']]
         high = raw >> 24
-        if raw == 0 or high >= len(own):      # 0..len(masters)-1: a master; len(masters): the plugin itself (P6)
+        if raw == 0:
             return None
-        owner = own[high].lower()
+        # a top byte at or past the master count names the plugin itself: the same rule the record index uses when
+        # it stores the records (S6 review B M7; P6 was not a bug)
+        owner = own[min(high, len(own) - 1)].lower()
         row = self.index.db.execute('select type, edid from records where owner = ? and local = ? limit 1',
                                     (owner, raw & 0xFFFFFF)).fetchone()
         if not row:
@@ -536,7 +538,7 @@ class DataTools:
             kinds = {'float': 0, 'int': 1, 'string': 2, 'array': 3, 'ref': 0}
             for v in variables:
                 subs.append(('SLSD', struct.pack('<I12sB7s', v['index'], b'\0' * 12, kinds.get(v['type'], 0), b'\0' * 7)))
-                subs.append(('SCVR', v['name'].encode('cp1252') + b'\0'))
+                subs.append(('SCVR', v['name'].encode('cp1252', 'cp1252-bytes') + b'\0'))
             for ref in references:
                 if ref.get('kind') == 'variable':
                     subs.append(('SCRV', struct.pack('<I', ref['index'])))
@@ -609,7 +611,7 @@ class DataTools:
                     continue
                 refs = compiled['references']
                 subs = [('SCHR', struct.pack('<4sIIIHH', b'\0' * 4, len(refs), len(body), 0, 0, 1)), ('SCDA', body),
-                        ('SCTX', text.encode('cp1252'))]
+                        ('SCTX', text.encode('cp1252', 'cp1252-bytes'))]
                 for ref in refs:
                     if ref.get('kind') == 'variable':
                         subs.append(('SCRV', struct.pack('<I', ref['index'])))
@@ -1029,8 +1031,12 @@ def _check_call(n, text, commands, variables, lookup, add, statement=False):
     if not command.get('paramsUnresolved') and params is not None and command.get('source') == 'vanilla':
         if len(args) < required:
             add(n, 'error', 'TOO_FEW_ARGUMENTS', '%s needs %d argument(s), got %d' % (command['name'], required, len(args)))
-        elif len(args) > len(params) and params and command['name'].lower() not in VARIADIC_COMMANDS:
-            # the engine ignores tokens after a command with no parameters (RemoveScriptPackage, StopCombat...) (P8)
+        elif len(args) > len(params) and not params and command['name'].lower() not in VARIADIC_COMMANDS:
+            # the engine ignores tokens after a command with no parameters (RemoveScriptPackage, StopCombat...): an
+            # info, since `StopCombat MyNPC` may mean MyNPC.StopCombat (P8, S6 review B M4)
+            add(n, 'info', 'EXTRA_TOKENS_IGNORED', '%s takes no arguments: %s is ignored (did you mean %s.%s?)'
+                % (command['name'], ' '.join(args), args[0], command['name']))
+        elif len(args) > len(params) and command['name'].lower() not in VARIADIC_COMMANDS:
             add(n, 'warning', 'TOO_MANY_ARGUMENTS', '%s takes %d argument(s), got %d' % (command['name'], len(params), len(args)))
     for arg, param in zip(args, params):
         types = FORM_TYPES_FOR_PARAM.get(param.get('type'))

@@ -230,7 +230,7 @@ def parse_subrecords(data, base=0):
         if pos + size > len(data):
             raise FormatError('subrecord %r overruns record' % tag, base + pos)
         try:
-            name = _tag(tag, pos)
+            name = _tag(tag, base + pos - 6)
         except UnicodeDecodeError:
             raise FormatError('non-ASCII subrecord tag', base + pos - 6)
         subs.append(Subrecord(name, bytes(data[pos:pos + size]), big))

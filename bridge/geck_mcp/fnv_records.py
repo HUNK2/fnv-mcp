@@ -182,7 +182,7 @@ class RecordsTools:
         db = self.db
         for e in entries:
             row = db.execute('select version from ref_files where file = ?', (e['fileId'],)).fetchone()
-            if row and row[0] == REFS_VERSION:
+            if row and row[0] >= REFS_VERSION:
                 continue
             info = self.data.index.file(e['fileId'])
             own = [m.lower() for m in info['masters']] + [info['name'].lower()]
@@ -209,7 +209,7 @@ class RecordsTools:
             # finished meanwhile is kept.
             with write_txn(db):
                 row = db.execute('select version from ref_files where file = ?', (e['fileId'],)).fetchone()
-                if row and row[0] == REFS_VERSION:
+                if row and row[0] >= REFS_VERSION:
                     continue
                 db.execute('delete from refs where file = ?', (e['fileId'],))
                 db.executemany('insert into refs values (?, ?, ?, ?, ?, ?, ?, ?)',

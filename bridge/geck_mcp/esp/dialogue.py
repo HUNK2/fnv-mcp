@@ -88,7 +88,7 @@ def check_lines(topic, rec, where):
 
 
 def result_sha(text):
-    return hashlib.sha256(normalized_result(text).encode('cp1252') + b'|result').hexdigest()
+    return hashlib.sha256(normalized_result(text).encode('cp1252', 'cp1252-bytes') + b'|result').hexdigest()
 
 
 def normalized_result(text):
@@ -155,10 +155,10 @@ def build_line(form_id, topic, line, resolve, where, cache=None, apply_fields=No
         entry = (cache or {}).get(info_key(topic, line))
         if entry and entry.get('sourceSha256') == result_sha(text) and entry.get('formId') == '%08X' % form_id:
             for tag, raw in entry['compiled']:
-                subs.append(Subrecord(tag, text.encode('cp1252') if tag == 'SCTX' else bytes.fromhex(raw)))
+                subs.append(Subrecord(tag, text.encode('cp1252', 'cp1252-bytes') if tag == 'SCTX' else bytes.fromhex(raw)))
         else:
             compiled = False
-            subs += [Subrecord('SCHR', EMPTY_SCHR), Subrecord('SCTX', text.encode('cp1252'))]
+            subs += [Subrecord('SCHR', EMPTY_SCHR), Subrecord('SCTX', text.encode('cp1252', 'cp1252-bytes'))]
     else:
         subs.append(Subrecord('SCHR', EMPTY_SCHR))
     if line.get('fields') and apply_fields:

@@ -192,11 +192,11 @@ def script_text(base_dir, spec, edid, where):
     path = (Path(base_dir) / src) if base_dir else Path(src)
     if not path.exists():
         raise SpecError(where + '.source', 'not found: %s' % path)
-    text = path.read_text(encoding='cp1252').replace('\r\n', '\n').replace('\n', '\r\n').rstrip() + '\r\n'
+    text = path.read_text(encoding='cp1252', errors='cp1252-bytes').replace('\r\n', '\n').replace('\n', '\r\n').rstrip() + '\r\n'
     first = text.split('\r\n', 1)[0].split(';')[0].split()
     if len(first) < 2 or first[0].lower() not in ('scn', 'scriptname') or first[1].lower() != edid.lower():
         raise SpecError(where + '.source', 'first line must be "scn %s"' % edid)
-    return text.encode('cp1252')
+    return text.encode('cp1252', 'cp1252-bytes')
 
 
 def source_sha(text_bytes, stype):

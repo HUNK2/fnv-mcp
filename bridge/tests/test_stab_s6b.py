@@ -280,7 +280,8 @@ class FormIndexTests(unittest.TestCase):
         entries = [{'name': 'FalloutNV.esm', 'index': 0}, {'name': 'MyMod.esp', 'index': 1}]
         plugin_entry = {'name': 'MyMod.esp', 'masters': ['FalloutNV.esm']}
         self.assertEqual(tools._form(entries, plugin_entry, 0x01000800)['editorId'], 'Thing')   # index 1: itself
-        self.assertIsNone(tools._form(entries, plugin_entry, 0x02000800))                         # past it: no form
+        # past it: the plugin itself too, the record index's rule (S6 review B M7: P6 was not a bug)
+        self.assertEqual(tools._form(entries, plugin_entry, 0x02000800)['editorId'], 'Thing')
 
 
 class IndexGapTests(unittest.TestCase):
@@ -364,7 +365,10 @@ class LintVanillaTests(unittest.TestCase):
         # 2,576 scripts with source; 151 warnings recorded on 2026-11-13 (declarations in blocks, stray endif/else,
         # duplicate variables, decoration lines, variables named like commands, one scn with extra words)
         self.assertGreaterEqual(scripts, 2500)
-        self.assertLessEqual(sum(codes.values()), 151, codes)
+        warnings = sum(v for k, v in codes.items() if k[0] == 'warning')
+        self.assertLessEqual(warnings, 151, codes)
+        # 132 infos (EXTRA_TOKENS_IGNORED after zero-parameter commands, S6 review B M4)
+        self.assertLessEqual(codes.get(('info', 'EXTRA_TOKENS_IGNORED'), 0), 132)
 
     def test_ref_space_cmd_showmessage_and_zero_param_extras(self):
         from geck_mcp.fnv_data import lint_script
@@ -422,8 +426,8 @@ class SaveRotationTests(unittest.TestCase):
     def test_flt_max_rotation_flagged(self):
         flt_max = struct.unpack('<f', b'\xff\xff\x7f\x7f')[0]
         info = self.initial((flt_max, 0.0, 0.0))
-        self.assertIsNone(info['rotation'])
-        self.assertTrue(info['rotationUnset'])
+        self.assertEqual(info['rotation'], {'x': None, 'y': 0.0, 'z': 0.0})      # per axis (S6 review B I1)
+        self.assertEqual(info['rotationUnset'], ['x'])
         self.assertEqual(info['position'], {'x': 1.0, 'y': 2.0, 'z': 3.0})
 
     def test_real_rotation_kept(self):

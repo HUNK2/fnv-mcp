@@ -345,10 +345,13 @@ class Save:
             info['cell'] = fid(r.resolve(block[0:3]))
             px, py, pz, ax, ay, az = struct.unpack_from('<6f', block, 3)
             info['position'] = {'x': round(px, 2), 'y': round(py, 2), 'z': round(pz, 2)}
-            if FLT_MAX in (ax, ay, az):     # the engine's "no rotation" sentinel (bytes ff ff 7f 7f; P10)
-                info['rotation'], info['rotationUnset'] = None, True
-            else:
-                info['rotation'] = {'x': round(ax, 4), 'y': round(ay, 4), 'z': round(az, 4)}
+            # FLT_MAX (bytes ff ff 7f 7f) is the engine's "unset" for one axis; the others are real (x is the usual
+            # one, z still holds the heading) (P10, S6 review B I1)
+            axes = {'x': ax, 'y': ay, 'z': az}
+            info['rotation'] = {k: None if v == FLT_MAX else round(v, 4) for k, v in axes.items()}
+            unset = [k for k, v in axes.items() if v == FLT_MAX]
+            if unset:
+                info['rotationUnset'] = unset
             if kind == 5:
                 info['base'] = fid(r.resolve(block[27:30]))
                 info['createdFlags'] = block[30]

@@ -1235,7 +1235,7 @@ class LiveService:
 
     def _game_string(self, text):
         """Copy a string into game memory with FormHeap_Allocate (0x00401000, proven) and return its address."""
-        data = text.encode('cp1252') + b'\0'
+        data = text.encode('cp1252', 'cp1252-bytes') + b'\0'
         call = self.link.one('call', '401000', 'i', '0', '0', word(len(data)))
         address = int(call['eax'], 16) if call.get('ok') else 0
         if not address:

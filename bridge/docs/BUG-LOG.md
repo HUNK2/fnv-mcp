@@ -1424,7 +1424,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | T9 | low | open | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
 | P3 | low | fixed | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
 | P4 | low | fixed | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
-| P6 | low | fixed | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
+| P6 | low | not a bug | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
 | P7 | low | fixed | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
 | P8 | low | fixed | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
 | P9 | low | fixed | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
@@ -1966,7 +1966,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - **What happens:** A plugin string with an undefined cp1252 byte still raises UnicodeDecodeError, for example from `fnv_form reload` reading FULL/MODL/MAST, from BSA folder names, or from compiling an in-game script.
 - **Fix idea:** Use the same `cp1252-bytes` error handler (or `errors='replace'` for display) at these sites.
 - Status: fixed (PLAN-3 S6)
-- Resolution: every strict cp1252 decode (authoring, compilation, fnv_create FULL/MODL/MAST and BSA names, fnv_data, fnv_hands, esp assets and scripts) uses the cp1252-bytes handler; esp.codec.text() for new code; a source scan test keeps strict decodes out (S6.7, test_stab_s6b).
+- Resolution: every cp1252 decode, read and encode (the console wire text in fnv_link.hexs, dialogue/generic/fnv_data/fnv_live plugin writers, script files read from disk) uses the cp1252-bytes handler; source scan tests keep strict ones out (S6.7, review B I2).
 
 ### R17. The F16 fix leaves its own error path open: an item that fails mid-test stays in the player's inventory (F16)
 
@@ -2110,8 +2110,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: likely
 - What happens: a top byte equal to len(own) (invalid, one past the master count) resolves to the plugin itself, so non-form 4-byte values can show as forms.
 - Fix idea: `high > len(own)` is the self index; check the intended boundary (masters count = len(own), self index = len(own), so anything above must be rejected, but `>= len(own)+1` is right only if self is len(own); verify against 0-based masters).
-- Status: fixed (PLAN-3 S6)
-- Resolution: _form accepts top bytes 0..len(masters) (len(masters) is the plugin itself) and rejects anything above (S6.12, test_stab_s6b).
+- Status: not a bug (PLAN-3 S6)
+- Resolution: the S6.12 change was reverted by the S6 batch B review (M7): the record index stores records whose top byte is at or past the master count under the plugin itself, and _form now follows that same rule (very likely the engine's too).
 
 ### P7. Index and lookup gaps
 
@@ -2155,7 +2155,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: 25,228 occurrences across all saves of `rotation.x = 3.4028234663852886e+38` (bytes ffff7f7f), e.g. autosave.fos ACHR 0200CFF3 and 0011253F. It appears unflagged and shows in save diffs as noise.
 - Fix idea: map the sentinel to None or flag it as "unset". Also theoretical: `global_variables`/`inspect` with a namer would hit `int(None, 16)` if a global form were unresolved (never occurred in the data).
 - Status: fixed (PLAN-3 S6)
-- Resolution: a reference location whose rotation holds the FLT_MAX sentinel (bytes ff ff 7f 7f) reads rotation: null, rotationUnset: true (S6.16, test_stab_s6b).
+- Resolution: only the axis holding the FLT_MAX sentinel reads null; rotationUnset lists those axes (x in practice; z keeps the heading) (S6.16, review B I1).
 
 ### N4. `form_delete` does not supersede `form_create`, so export keeps deleted forms
 

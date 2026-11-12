@@ -58,9 +58,13 @@ def check_spec(spec):
         raise SpecError('schema', 'must be %d' % SCHEMA)
     if not isinstance(spec.get('project_id'), str) or not re.match(r'^[a-z0-9][a-z0-9_-]{0,63}\Z', spec['project_id']):
         raise SpecError('project_id', 'lowercase letters, digits, - and _ only')
+    if spec['project_id'] in records.DEVICE_NAMES:
+        raise SpecError('project_id', '%s is a Windows device name' % spec['project_id'])
     plugin = spec.get('plugin')
     if not isinstance(plugin, str) or not re.match(r'^[A-Za-z0-9 _.-]{1,60}\.esp\Z', plugin):
         raise SpecError('plugin', 'must be a simple .esp filename')
+    if plugin.split('.', 1)[0].strip().lower() in records.DEVICE_NAMES:
+        raise SpecError('plugin', '%s is a Windows device name' % plugin)
     masters = spec.get('masters')
     if not isinstance(masters, list) or not masters or len(set(m.lower() for m in masters)) != len(masters):
         raise SpecError('masters', 'must be a non-empty list without duplicates')

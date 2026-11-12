@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 
 from .fnv_state import atomic_write, locked
+from .esp import codec as _codec  # noqa: F401,E402 - registers the cp1252-bytes error handler
 
 NATIVE = Path(__file__).resolve().parents[1] / 'native'
 SOURCES = ('engine/fnvmcp_engine.c', 'engine/w1_pred.c', 'engine/w1_gate.c', 'engine/w1_samp.c', 'engine/w1_sink.c',
@@ -47,7 +48,7 @@ class LinkError(Exception):
 
 def hexs(text):
     """Text argument on the wire: the line's bytes (cp1252, the game's code page) as hex."""
-    return text.encode('cp1252', errors='strict').hex()
+    return text.encode('cp1252', 'cp1252-bytes').hex()     # cp1252's undefined bytes pass through (R16 review)
 
 
 def word(value):
