@@ -254,5 +254,23 @@ class UndoOrderTests(unittest.TestCase):
         self.assertTrue(self.refused(older, newer)[0])
 
 
+class QuotedNameTests(unittest.TestCase):
+    """W4: fnv_formid_live pasted free text into a quoted xNVSE expression."""
+
+    def test_a_quote_in_a_plugin_name_is_refused_before_any_eval(self):
+        from fakes import FakeLive
+        with FakeLive(engine_control='read') as fake:
+            with self.assertRaises(ValueError):
+                fake.live.formid_live('a.esp" + QuitGame + "')
+            self.assertEqual([n for n, _ in fake.link.ops if n == 'eval'], [])
+
+    def test_the_helper(self):
+        from geck_mcp.fnv_link import quoted
+        self.assertEqual(quoted('My Mod.esp'), '"My Mod.esp"')
+        for bad in ('a"b.esp', 'a\nb.esp', 'a\rb.esp'):
+            with self.assertRaises(ValueError):
+                quoted(bad)
+
+
 if __name__ == '__main__':
     unittest.main()

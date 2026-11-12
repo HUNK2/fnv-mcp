@@ -478,7 +478,7 @@ class LiveService:
             expr = 'GetCrosshairRef'
         elif PLUGIN_LOCAL.match(ref):
             plugin, local = PLUGIN_LOCAL.match(ref).groups()
-            expr = '(BuildRef (GetModIndex "%s") %d)' % (plugin, int(local, 16))
+            expr = '(BuildRef (GetModIndex %s) %d)' % (fnv_link.quoted(plugin), int(local, 16))
         elif is_form_id(ref):          # one parser with the record tools (T6)
             value = form_id(ref)
             expr = '(BuildRef %d %d)' % (value >> 24, value & 0xFFFFFF)
@@ -559,7 +559,7 @@ class LiveService:
             return self._editor_id_from_plugins(edid)
         hits.sort(key=lambda h: self.PREFERRED.index(h[1][0]) if h[1][0] in self.PREFERRED else 99)
         master, (rtype, form_id, name, _model) = hits[0]
-        index = fnv_link.value_of(self.link.eval('GetModIndex "%s"' % master))
+        index = fnv_link.value_of(self.link.eval('GetModIndex %s' % fnv_link.quoted(master)))
         if index is None or index < 0 or index > 254:
             return None
         local = int(form_id, 16) & 0xFFFFFF
@@ -588,7 +588,7 @@ class LiveService:
         if not row:
             return None
         owner, local, rtype, name = row
-        index = fnv_link.value_of(self.link.eval('GetModIndex "%s"' % owner))
+        index = fnv_link.value_of(self.link.eval('GetModIndex %s' % fnv_link.quoted(owner)))
         if index is None or index < 0 or index > 254:
             return None
         return {'formId': _fid((int(index) << 24) | local), 'type': rtype, 'name': name, 'master': owner, 'candidates': 1}
@@ -906,7 +906,8 @@ class LiveService:
 
     def formid_live(self, plugin):
         self.ready()
-        v = self.values(['IsModLoaded "%s"' % plugin, 'GetModIndex "%s"' % plugin])
+        name = fnv_link.quoted(plugin)       # W4: free text inside a quoted expression
+        v = self.values(['IsModLoaded %s' % name, 'GetModIndex %s' % name])
         loaded = bool(v[0])
         return {'plugin': plugin, 'loaded': loaded, 'index': '%02X' % int(v[1]) if loaded and v[1] is not None else None,
                 'formIdPrefix': ('%02X' % int(v[1])) if loaded else None}

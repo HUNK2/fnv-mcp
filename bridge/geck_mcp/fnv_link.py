@@ -46,6 +46,15 @@ class LinkError(Exception):
         self.evidence = evidence
 
 
+def quoted(text):
+    """text as a quoted xNVSE string argument. A double quote or a line break would end the string and let the rest
+    run as script (W4), so they are refused."""
+    text = str(text)
+    if '"' in text or '\n' in text or '\r' in text:
+        raise ValueError('a name in a script expression cannot contain a double quote or a line break: %r' % text)
+    return '"%s"' % text
+
+
 def hexs(text):
     """Text argument on the wire: the line's bytes (cp1252, the game's code page) as hex."""
     return text.encode('cp1252', 'cp1252-bytes').hex()     # cp1252's undefined bytes pass through (R16 review)

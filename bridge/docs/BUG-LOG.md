@@ -2288,7 +2288,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | W1 | high | fixed | Read-classed fnv_snapshot, fnv_diff and fnv_watch run caller console lines and xNVSE expressions (T1 incomplete) | `audit3/contract.md H1` |
 | W2 | high | fixed | resolve() evaluates any bare identifier as an xNVSE expression: fnv_ref ref=QuitGame runs QuitGame under read | `audit3/contract.md H2` |
 | W3 | medium | fixed | fnv_warnings capture start and fnv_window mouse/unpause change the game as 'control' without the engine_control check | `audit3/contract.md M1` |
-| W4 | medium | open | fnv_formid_live (read) pastes free text into a quoted xNVSE expression | `audit3/contract.md M2` |
+| W4 | medium | fixed | fnv_formid_live (read) pastes free text into a quoted xNVSE expression | `audit3/contract.md M2` |
 | W5 | low | open | After a launch where no game started, fnv_status says 'terminated from outside' | `audit3/contract.md L1` |
 | W6 | low | open | The audio-cache flag can stay off when its restore write fails (N21 incomplete) | `audit3/contract.md L2` |
 | W7 | low | open | fnv_run_script's quit guard is bypassed by (QuitGame) or a multi-line source | `audit3/contract.md L3` |
@@ -2361,5 +2361,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: medium
 - Found by: round-3 audit (docs/audit3/contract.md M1)
 - Fix: MUTATING_ACTIONS lists fnv_warnings capture (start and stop; capture status is a read) and fnv_window release_mouse, capture_mouse and unpause, so they run as act and need engine_control full; both tools pass the action. Tests: tests/test_stab_gate.py cases.
+- Status: fixed
+
+### W4. fnv_formid_live pasted free text into a quoted xNVSE expression
+
+- Where: geck_mcp/fnv_live.py (formid_live, resolve's Plugin.esp:LOCALID, master lookups), fnv_create.py, fnv_deep.py (GetModIndex of master names from plugin headers)
+- Severity: medium
+- Found by: round-3 audit (docs/audit3/contract.md M2)
+- Fix: fnv_link.quoted() builds every quoted name argument and refuses a double quote or a line break (ValueError, before any eval). Tests: tests/test_s7_round3.py QuotedNameTests.
 - Status: fixed
 

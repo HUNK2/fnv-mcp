@@ -23,7 +23,7 @@ from pathlib import Path
 from . import fnv_engine, fnv_procmem, fnv_symdb
 from .fnv_facts import SCRIPT_BLOCKS
 from .fnv_args import capped
-from .fnv_link import hexs, word
+from .fnv_link import hexs, quoted, word
 from .fnv_live import LiveError, _fid, _num
 
 HF_EXIT, HF_RECORD, HF_TABLE = 1, 2, 4
@@ -384,7 +384,7 @@ class DeepTools:
     def _masters_by_index(self):
         """{load-order index: master file} for the masters with an offline index, from the running game."""
         masters = list(self._reverse_index())
-        values = self.live.values(['GetModIndex "%s"' % m for m in masters]) if masters else []
+        values = self.live.values(['GetModIndex %s' % quoted(m) for m in masters]) if masters else []
         return {int(v): m for m, v in zip(masters, values) if v is not None and 0 <= v < 255}
 
     def describe_forms(self, form_ids, names=True):

@@ -22,7 +22,7 @@ import zipfile
 from pathlib import Path
 
 from .fnv_args import capped
-from .fnv_link import hexs, value_of, word
+from .fnv_link import hexs, quoted, value_of, word
 from .fnv_live import LiveError
 
 MODEL_LOADER = 0x011C3B3C
@@ -809,7 +809,7 @@ class FormTools:
             raise LiveError('PLUGIN_NOT_FOUND', '%s is not in the load order (or its file is missing)' % name)
         if built is not None:
             target = dict(target, path=str(built))
-        index = int(value_of(self.link.eval('GetModIndex "%s"' % target['name'])))
+        index = int(value_of(self.link.eval('GetModIndex %s' % quoted(target['name']))))
         if index < 0 or index > 254:
             raise LiveError('NOT_LOADED', '%s is not loaded in the running game' % target['name'])
         data = Path(target['path']).read_bytes()
@@ -834,7 +834,7 @@ class FormTools:
             mod = rec.form_id >> 24
             local = rec.form_id & 0xFFFFFF
             owner_index = index if mod >= len(masters) else int(value_of(self.link.eval(
-                'GetModIndex "%s"' % masters[mod])))
+                'GetModIndex %s' % quoted(masters[mod]))))
             form_id = '%02X%06X' % (owner_index, local)
             exists = self.link.eval('(BuildRef %d %d)' % (owner_index, local))
             if not exists.get('ok') or (exists.get('result') or {}).get('type') != 'form':
@@ -1340,7 +1340,7 @@ class AuthorTools:
             files = ','.join(str(e['fileId']) for e in entries)
             row = None
             for e in entries:
-                index = value_of(self.live.link.eval('GetModIndex "%s"' % e['name']))
+                index = value_of(self.live.link.eval('GetModIndex %s' % quoted(e['name'])))
                 if index is not None and int(index) == int(form_id, 16) >> 24:
                     row = self.data.index.db.execute(
                         'select edid from records where file = ? and local = ? limit 1',
