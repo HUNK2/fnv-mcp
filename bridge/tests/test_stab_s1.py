@@ -217,6 +217,22 @@ class PendingRestoreTests(unittest.TestCase):                # R3
         self.assertEqual(cm.exception.code, 'BUSY')
         self.assertEqual(stat_ids(self.path), {self.ids[0]})
 
+    def test_reused_pid_is_not_busy(self):
+        # Windows reuses pids quickly: a marker whose pid now belongs to another process (different start time)
+        # is a dead bisect, not a running one.
+        import json
+        import subprocess
+        marker = self.dead_server()
+        other = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.addCleanup(other.wait)
+        self.addCleanup(other.kill)
+        data = json.loads(marker.read_text(encoding='utf-8'))
+        data.update(pid=other.pid, pidStart=12345)
+        marker.write_text(json.dumps(data), encoding='utf-8')
+        done = self.tools().finish_pending()
+        self.assertEqual([d.get('restored') for d in done], [str(self.path)])
+        self.assertEqual(self.path.read_bytes(), self.original)
+
     def test_status_lists_pending_restore(self):
         from geck_mcp import fnv_game
         self.dead_server()

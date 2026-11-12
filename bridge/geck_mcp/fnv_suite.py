@@ -86,6 +86,30 @@ def pid_alive(pid):
         kernel32.CloseHandle(ctypes.c_void_p(handle))
 
 
+def process_start(pid):
+    """The process's creation time (FILETIME int), or None when it cannot be read (or not on Windows)."""
+    if os.name != 'nt':
+        return None
+    from .fnv_game import process_started
+    try:
+        return process_started(pid)
+    except OSError:
+        return None
+
+
+def owner_running(marker, own_pid):
+    """True when the marker's bisect is still running in another process. The pid alone is not enough: Windows
+    reuses pids quickly, so a marker records its process's start time and a different start means a dead owner."""
+    pid = marker.get('pid')
+    if pid == own_pid or not pid_alive(pid):
+        return False
+    started = marker.get('pidStart')
+    if started is None:
+        return True              # an older marker: the pid is all there is
+    now = process_start(pid)
+    return now is None or now == started
+
+
 class BisectTools:
     def __init__(self, live, records, runner_factory, quit_game=None):
         self.live = live
@@ -247,7 +271,8 @@ class BisectTools:
         folder = bisect_dir(self._state_dir())
         folder.mkdir(parents=True, exist_ok=True)
         marker = folder / name
-        body = json.dumps({**data, 'pid': self._pid(), 'startedAt': time.time()}, indent=2) + '\n'
+        body = json.dumps({**data, 'pid': self._pid(), 'pidStart': process_start(self._pid()),
+                           'startedAt': time.time()}, indent=2) + '\n'
         _atomic_write(marker, body.encode('utf-8'))
         return marker
 
@@ -311,7 +336,7 @@ class BisectTools:
             if m.get('corrupt'):
                 raise ConvError('RESTORE_PENDING', 'The bisect restore marker %s cannot be read; check the plugin '
                                 'and profile by hand, then delete it.' % m['marker'], m)
-            if m.get('pid') != self._pid() and pid_alive(m.get('pid')):
+            if owner_running(m, self._pid()):
                 raise ConvError('BUSY', 'Another server (pid %s) is bisecting; it owns %s.' % (
                     m.get('pid'), m.get('plugin') or 'the profile'), m)
             if 'plugin' in m:
