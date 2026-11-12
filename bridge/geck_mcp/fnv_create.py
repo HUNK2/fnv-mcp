@@ -62,14 +62,14 @@ def bsa_hashes(path):
         dirs, hashes = [], []
         for count in counts:
             length = stream.read(1)[0]
-            dirs.append(stream.read(length).rstrip(b'\0').decode('cp1252'))
+            dirs.append(stream.read(length).rstrip(b'\0').decode('cp1252', 'cp1252-bytes'))
             hashes.append([struct.unpack('<QII', stream.read(16))[0] for _ in range(count)])
         names = stream.read(name_len).split(b'\0')
     i = 0
     for folder, folder_hashes in zip(dirs, hashes):
         for h in folder_hashes:
             if i < len(names):
-                out.setdefault(h, []).append((folder + '\\' + names[i].decode('cp1252')).lower())
+                out.setdefault(h, []).append((folder + '\\' + names[i].decode('cp1252', 'cp1252-bytes')).lower())
             i += 1
     return out
 SAFE_TYPES = {'STAT': 32, 'MISC': 31, 'ARMO': 24, 'AMMO': 41, 'KEYM': 46, 'BOOK': 25, 'LIGH': 30, 'NOTE': 49,
@@ -742,13 +742,13 @@ class FormTools:
         ops = []
         full = rec.get('FULL')
         if full is not None:
-            ops.append(('name', full.split(b'\0', 1)[0].decode('cp1252'),
+            ops.append(('name', full.split(b'\0', 1)[0].decode('cp1252', 'cp1252-bytes'),
                         'SetName "%s" ' + form_id))
         if rtype == 'ARMO':
             for tag, which, female in (('MODL', 0, 0), ('MOD2', 1, 0), ('MOD3', 0, 1), ('MOD4', 1, 1)):
                 v = rec.get(tag)
                 if v is not None:
-                    ops.append(('model.%s' % tag, v.split(b'\0', 1)[0].decode('cp1252'),
+                    ops.append(('model.%s' % tag, v.split(b'\0', 1)[0].decode('cp1252', 'cp1252-bytes'),
                                 'SetBipedModelPathEX "%%s" %d %d %s' % (which, female, form_id)))
             data = rec.get('DATA')
             if data and len(data) >= 12:
@@ -764,7 +764,7 @@ class FormTools:
             return ops
         modl = rec.get('MODL')
         if modl is not None:
-            ops.append(('model', modl.split(b'\0', 1)[0].decode('cp1252'), 'SetModelPathEX "%%s" %s' % form_id))
+            ops.append(('model', modl.split(b'\0', 1)[0].decode('cp1252', 'cp1252-bytes'), 'SetModelPathEX "%%s" %s' % form_id))
         data = rec.get('DATA')
         if rtype == 'AMMO':
             # AMMO DATA is speed f32, flags u8, 3 unused, value i32, clip rounds u8; weight is DAT2 at +8.
@@ -815,7 +815,7 @@ class FormTools:
         data = Path(target['path']).read_bytes()
         plugin_obj = codec.parse(data, lazy=True)
         tes4 = next(iter(plugin_obj.records()), None)
-        masters = [s.data.split(b'\0', 1)[0].decode('cp1252') for s in tes4[0].subrecords if s.tag == 'MAST'] \
+        masters = [s.data.split(b'\0', 1)[0].decode('cp1252', 'cp1252-bytes') for s in tes4[0].subrecords if s.tag == 'MAST'] \
             if tes4 else []
         wanted = {str(r).lower() for r in records} if records else None
         applied, skipped, restart = [], [], []

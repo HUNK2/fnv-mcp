@@ -23,6 +23,7 @@ from .esp.assets import AssetIndex, AssetError, nif_textures, bsa_extract
 from .esp.formids import FormIdMap, MasterIndex
 from .esp.records import SpecError
 from .esp.validate import validate
+from .esp import codec as _codec  # noqa: F401 - registers the cp1252-bytes error handler (R16)
 
 
 CODE_STATE = Path(__file__).resolve().parent.parent / 'state'
@@ -123,7 +124,7 @@ class Authoring:
                 if sub.tag in ('MODL', 'NIFZ'):
                     for value in sub.data.split(b'\0'):
                         if value:
-                            models.add('meshes\\' + value.decode('cp1252'))
+                            models.add('meshes\\' + value.decode('cp1252', 'cp1252-bytes'))
                 elif sub.tag in ('ICON', 'MICO') and sub.data:
                     wanted.add('textures\\' + codec.cstring(sub.data))
         wanted |= models

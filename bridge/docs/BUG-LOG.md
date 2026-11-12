@@ -1410,7 +1410,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R13 | low | fixed | `fnv_debug thaw` with nothing on record resumes every thread of the game once (E1/E6 fix) | `geck_mcp/fnv_debugger.py thaw()` |
 | R14 | low | fixed | C2 is only partly fixed: a failed refs index build keeps the SQLite write lock (C2) | `geck_mcp/fnv_records.py:175-208` |
 | R15 | low | fixed | C3 is fixed within one process only: two server processes still collide (C3) | `geck_mcp/fnv_data.py:168-210` |
-| R16 | low | open | C13 is only partly fixed: strict cp1252 decodes remain in other readers (C13) | `geck_mcp/fnv_create.py:64, 71, 745, 751, 767, 818` |
+| R16 | low | fixed | C13 is only partly fixed: strict cp1252 decodes remain in other readers (C13) | `geck_mcp/fnv_create.py:64, 71, 745, 751, 767, 818` |
 | R17 | low | open | The F16 fix leaves its own error path open: an item that fails mid-test stays in the player's inventory (F16) | `geck_mcp/fnv_crawl.py:483-517` |
 | R18 | low | open | The new "terminated from outside" note in `fnv_status` is wrong with an older companion and when the bridge itself force-quit (S4 diagnosis) | `geck_mcp/fnv_game.py:305-313` |
 | R19 | low | fixed | Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix) | `geck_mcp/fnv_live.py:89-96` |
@@ -1963,7 +1963,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - **Confidence:** likely.
 - **What happens:** A plugin string with an undefined cp1252 byte still raises UnicodeDecodeError, for example from `fnv_form reload` reading FULL/MODL/MAST, from BSA folder names, or from compiling an in-game script.
 - **Fix idea:** Use the same `cp1252-bytes` error handler (or `errors='replace'` for display) at these sites.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: every strict cp1252 decode (authoring, compilation, fnv_create FULL/MODL/MAST and BSA names, fnv_data, fnv_hands, esp assets and scripts) uses the cp1252-bytes handler; esp.codec.text() for new code; a source scan test keeps strict decodes out (S6.7, test_stab_s6b).
 
 ### R17. The F16 fix leaves its own error path open: an item that fails mid-test stays in the player's inventory (F16)
 

@@ -164,6 +164,11 @@ def cstring(data):
     return data.decode('cp1252', 'cp1252-bytes')
 
 
+def text(data):
+    """cp1252 bytes as text, keeping the bytes cp1252 leaves undefined (they write back unchanged; R16)."""
+    return bytes(data).decode('cp1252', 'cp1252-bytes')
+
+
 def zstring(text):
     return text.encode('cp1252', 'cp1252-bytes') + b'\0'
 

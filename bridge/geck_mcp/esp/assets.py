@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import struct
+from . import codec as _codec  # noqa: F401 - registers the cp1252-bytes error handler (R16)
 
 
 class AssetError(ValueError):
@@ -37,14 +38,14 @@ def bsa_extract(path, wanted):
         entries = []
         for count in counts:
             length = stream.read(1)[0]
-            folder = stream.read(length).rstrip(b'\0').decode('cp1252')
+            folder = stream.read(length).rstrip(b'\0').decode('cp1252', 'cp1252-bytes')
             for _ in range(count):
                 _hash, size, data_offset = struct.unpack('<QII', stream.read(16))
                 entries.append((folder, size, data_offset))
         names = stream.read(name_len).split(b'\0')
         default_compressed = bool(flags & 0x4)
         for (folder, size, data_offset), name in zip(entries, names):
-            full = (folder + '\\' + name.decode('cp1252')).lower()
+            full = (folder + '\\' + name.decode('cp1252', 'cp1252-bytes')).lower()
             if full not in wanted:
                 continue
             compressed = default_compressed ^ bool(size & 0x40000000)
@@ -110,13 +111,13 @@ def bsa_names(path):
         dirs = []
         for count in counts:
             length = stream.read(1)[0]
-            dirs.append(stream.read(length).rstrip(b'\0').decode('cp1252'))
+            dirs.append(stream.read(length).rstrip(b'\0').decode('cp1252', 'cp1252-bytes'))
             stream.seek(16 * count, os.SEEK_CUR)
         names = stream.read(name_len).split(b'\0')
     out, i = set(), 0
     for folder, count in zip(dirs, counts):
         for _ in range(count):
-            out.add((folder + '\\' + names[i].decode('cp1252')).lower())
+            out.add((folder + '\\' + names[i].decode('cp1252', 'cp1252-bytes')).lower())
             i += 1
     if i != files:
         raise AssetError('%s: file count mismatch (%d names, %d declared)' % (path, i, files))
@@ -176,7 +177,7 @@ def nif_textures(data):
     for match in SIZED_DDS.finditer(data):
         length, text = match.group(1)[0], match.group(2)
         if length == len(text):
-            path = text.decode('cp1252').replace('/', '\\')
+            path = text.decode('cp1252', 'cp1252-bytes').replace('/', '\\')
             if not path.lower().startswith('textures\\'):
                 path = 'textures\\' + path.lstrip('\\')
             if path not in found:

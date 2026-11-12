@@ -510,7 +510,7 @@ class DataTools:
             stype = generic.SCRIPT_TYPES[rec.get('script_type', 'object')]
             text = generic.script_text(authoring.spec_path.parent, rec, edid, 'records.%s' % edid)
             form_id = receipt['formIds'].get(edid)
-            compiled = self.compile_ingame(text.decode('cp1252').replace('\r\n', '\n'), include_bytecode=True)
+            compiled = self.compile_ingame(text.decode('cp1252', 'cp1252-bytes').replace('\r\n', '\n'), include_bytecode=True)
             if not compiled['compiled']:
                 results[edid] = {'compiled': False, 'errors': compiled['errors'], 'hint': compiled.get('hint'),
                                  'lint': compiled.get('lint')}

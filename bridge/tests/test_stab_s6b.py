@@ -92,5 +92,29 @@ class FormIdTextTests(unittest.TestCase):
         self.assertGreaterEqual(fnv_records.REFS_VERSION, 4)
 
 
+class Cp1252Tests(unittest.TestCase):
+    """R16: strict cp1252 decodes raised on the bytes cp1252 leaves undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D)."""
+
+    def test_undefined_cp1252_byte_in_full_modl_mast(self):
+        from geck_mcp.esp import codec
+        for raw in (b'Caf\x81', b'meshes\\x\x8d.nif', b'Mod\x9d.esp'):
+            text = codec.text(raw)
+            self.assertEqual(text.encode('cp1252', 'cp1252-bytes'), raw, 'reads back to the same bytes')
+
+    def test_script_variable_with_an_undefined_byte(self):
+        from geck_mcp.esp import scripts
+        slsd = struct.pack('<I', 1) + b'\0' * 12 + b'\0' + b'\0' * 7
+        layout = scripts.semantic_layout([('SLSD', slsd.hex()), ('SCVR', b'var\x81\0'.hex())])
+        self.assertEqual(layout[0][0], 'var\x81')
+
+    def test_no_strict_cp1252_decode_left(self):
+        import re
+        root = Path(__file__).resolve().parents[1] / 'geck_mcp'
+        strict = re.compile(r"""\.decode\(\s*['"]cp1252['"]\s*\)""")
+        found = ['%s:%d' % (path.relative_to(root), n) for path in root.rglob('*.py')
+                 for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1) if strict.search(line)]
+        self.assertEqual(found, [])
+
+
 if __name__ == '__main__':
     unittest.main()

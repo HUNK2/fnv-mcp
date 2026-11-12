@@ -19,6 +19,7 @@ import time
 from .fnv_eyes import heading_to
 from .fnv_link import hexs, value_of, word
 from .fnv_live import LiveError
+from .esp import codec as _codec  # noqa: F401 - registers the cp1252-bytes error handler (R16)
 
 PLAYER = 0x011DEA3C
 CONTROLS_DISABLED = 0x680
@@ -962,6 +963,6 @@ class HandsTools:
                               [{'type': 'int', 'value': 1}, {'type': 'int', 'value': 0}], 'void', 'thiscall', True)
         self._frames(5)
         still = bool(self.live.u32s([TEXT_EDIT_SINGLETON])[0])
-        return {'typed': data.decode('cp1252'), 'menu': '0x%08X' % menu, 'closed': not still,
+        return {'typed': data.decode('cp1252', 'cp1252-bytes'), 'menu': '0x%08X' % menu, 'closed': not still,
                 'how': 'the TextEditMenu string (+0x34) set, then its Done click (0x007E66A0, tile id 1): the result '
                        'goes to 0x011DAED8 and the menu that asked (player name entry) takes it on its next update'}

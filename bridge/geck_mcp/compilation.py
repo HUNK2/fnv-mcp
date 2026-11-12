@@ -22,7 +22,7 @@ PHASES = ('editor_opening', 'selecting_script', 'source_verified', 'save_request
 
 
 def source_hash(text):
-    return hashlib.sha256(scripts.normalized(text).decode('cp1252').encode('utf-8')).hexdigest()
+    return hashlib.sha256(scripts.normalized(text).decode('cp1252', 'cp1252-bytes').encode('utf-8')).hexdigest()
 
 
 def script_order(spec, base, pending):
@@ -36,7 +36,7 @@ def script_order(spec, base, pending):
                     aliases[edid.casefold()] = target[1:]
     dependencies = {}
     for edid in pending:
-        text = generic.script_text(base, spec['records'][edid], edid, edid).decode('cp1252')
+        text = generic.script_text(base, spec['records'][edid], edid, edid).decode('cp1252', 'cp1252-bytes')
         code = '\n'.join(line.split(';', 1)[0] for line in text.splitlines())
         dependencies[edid] = {aliases[name.casefold()] for name in re.findall(r'\b([A-Za-z_]\w*)\s*\.', code)
                               if name.casefold() in aliases and aliases[name.casefold()] != edid}

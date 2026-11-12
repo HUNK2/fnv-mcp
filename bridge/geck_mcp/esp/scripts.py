@@ -42,7 +42,7 @@ def semantic_layout(compiled):
         elif tag == 'SCVR':
             if pending is None:
                 raise ValueError('SCVR without SLSD')
-            out.append((data.rstrip(b'\0').decode('cp1252').casefold(), *pending))
+            out.append((data.rstrip(b'\0').decode('cp1252', 'cp1252-bytes').casefold(), *pending))
             pending = None
     if pending is not None or len({v[0] for v in out}) != len(out) or len({v[1] for v in out}) != len(out):
         raise ValueError('Incomplete/duplicate variable layout')
@@ -70,7 +70,7 @@ def verify_script(got, text, stype, formid, prior=None):
     declarations = {}
     types = {'short': 1, 'long': 1, 'int': 1, 'float': 0, 'ref': 0, 'reference': 0,
              'string_var': 2, 'array_var': 3}
-    for line in text.decode('cp1252').splitlines():
+    for line in text.decode('cp1252', 'cp1252-bytes').splitlines():
         match = re.fullmatch(r'\s*(short|long|int|float|ref|reference|string_var|array_var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*',
                              line.split(';', 1)[0], re.I)
         if match:
