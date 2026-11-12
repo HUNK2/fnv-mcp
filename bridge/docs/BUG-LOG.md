@@ -1393,7 +1393,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R11 | medium | fixed | Step over, step out and `step line` leave their temporary `to` site armed and unrecorded when another stop of the same thread comes first (E15 / L5 incomplete) | `geck_mcp/fnv_debugger.py _run_to` |
 | T2 | medium | fixed | fnv_input: invalid key_name raises outside invoke() | `fnv_live_tools.py:618` |
 | P2 | medium | fixed | Vanilla compressed LAND with bad Adler-32 breaks full parse | `esp/codec.py decompress` |
-| P5 | medium | open | record_find reports the wrong version's name and editor ID | `fnv_data.py record_find` |
+| P5 | medium | fixed | record_find reports the wrong version's name and editor ID | `fnv_data.py record_find` |
 | G2 | low | fixed | fnv_spawn with a reference spec (player, crosshair, a ref form id) fails with a script compile error | `geck_mcp/fnv_agent.py:808` |
 | G3 | low | fixed | A placed ref whose SetPos/SetAngle fails is never journaled | `geck_mcp/fnv_create.py:1005-1019` |
 | G6 | low | fixed | fnv_wait_for seconds with clock=real uses the fixed step as the real frame rate | `geck_mcp/fnv_time.py:450-455` |
@@ -1691,7 +1691,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed
 - What happens: `max(file)` with SQLite bare columns picks the highest file id, not the load-order winner. After FalloutNV.esm was re-indexed (new, higher file id), record_find('0015EDAC') returned `VDialogueVeronicaAbeMsgRefuse` while the winner is DeadMoney.esm ("It's better you don't...").
 - Fix idea: select fields from the row of the file with the highest load-order index.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: record_find takes type, EditorID and name from the version in the plugin with the highest load-order index (the winner), not the highest file id; record_users names and conflicts EDID keep their own pattern (minor, see the S6 ledger) (S6.11, test_stab_s6b).
 
 ### N1. An unknown undo op is marked undone without running
 

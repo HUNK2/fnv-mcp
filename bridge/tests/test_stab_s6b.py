@@ -241,5 +241,29 @@ class XxxxTests(unittest.TestCase):
         self.assertEqual(codec.Subrecord('DATA', b'1'), codec.Subrecord('DATA', b'1', xxxx=True))
 
 
+class RecordFindWinnerTests(unittest.TestCase):
+    """P5: record_find showed the name of the highest file id, not of the load-order winner."""
+
+    def test_record_find_uses_load_order_winner(self):
+        import sqlite3
+        from types import SimpleNamespace
+        from geck_mcp.fnv_data import DataTools
+        db = sqlite3.connect(':memory:')
+        db.execute('create table records(file integer, owner text, local integer, type text, edid text, full text, '
+                   'offset integer)')
+        # FalloutNV.esm was re-indexed after DeadMoney.esm, so it has the higher file id (2) but loads first
+        db.execute("insert into records values (2, 'falloutnv.esm', 0x15EDAC, 'INFO', 'VDialogueVeronicaAbeMsgRefuse', "
+                   "'Base text', 0)")
+        db.execute("insert into records values (1, 'falloutnv.esm', 0x15EDAC, 'INFO', 'VDialogueVeronicaAbeMsgRefuse', "
+                   "'It''s better you don''t...', 0)")
+        entries = [{'name': 'FalloutNV.esm', 'index': 0, 'fileId': 2}, {'name': 'DeadMoney.esm', 'index': 1, 'fileId': 1}]
+        tools = DataTools.__new__(DataTools)
+        tools._index = SimpleNamespace(db=db)
+        tools._active = lambda: (entries, None)
+        out = tools.record_find('0015EDAC')['results'][0]
+        self.assertEqual(out['winner'], 'DeadMoney.esm')
+        self.assertEqual(out['name'], "It's better you don't...")
+
+
 if __name__ == '__main__':
     unittest.main()

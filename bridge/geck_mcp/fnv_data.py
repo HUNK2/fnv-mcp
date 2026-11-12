@@ -364,9 +364,13 @@ class DataTools:
         order = {e['fileId']: e['index'] for e in entries}
         out = []
         for owner, local, rtype, edid, full, versions, _ in rows:
-            files = [f for (f,) in self.index.db.execute('select file from records where owner = ? and local = ?',
-                                                        (owner, local)) if f in by_file]
-            files.sort(key=lambda f: order[f])
+            versions_of = [row for row in self.index.db.execute(
+                'select file, type, edid, full from records where owner = ? and local = ?', (owner, local))
+                if row[0] in by_file]
+            versions_of.sort(key=lambda row: order[row[0]])
+            files = [row[0] for row in versions_of]
+            if versions_of:     # the load-order winner's type, EditorID and name, not the highest file id's (P5)
+                _, rtype, edid, full = versions_of[-1]
             out.append({'formId': self._global(entries, owner, local), 'type': rtype, 'editorId': edid, 'name': full,
                         'definedIn': by_file[files[0]]['name'] if files else owner,
                         'winner': by_file[files[-1]]['name'] if files else None, 'overrides': max(0, len(files) - 1)})
