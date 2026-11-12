@@ -1369,7 +1369,7 @@ A second hunt the same day, after the fix pass was committed (133ed0e). Nothing 
 
 The parser sweep ran 16 plugins (about 630,000 records), the record index (866,000 references), 3,719 scripts, 58 saves (1.4 million change forms), 21 BSAs and the engine map; everything not listed here checked clean. Findings that did not hold up when checked were dropped (fnv_window persist writes the dev profile's Fallout.ini, as designed, with a backup; fnv_hook_set is gated). R entries that name an earlier ID are fixes from the first pass that are incomplete or wrong.
 
-Totals: 74 bugs, 6 high, 22 medium, 46 low (N13 found by the S4.3 race tests, N14 and N15 by the S4.5 smoke tests, N16 by the live suite, N17-N19 by the live s1-play runs while fixing N16, N20 by the S3 live check). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
+Totals: 75 bugs, 6 high, 23 medium, 46 low (N13 found by the S4.3 race tests, N14 and N15 by the S4.5 smoke tests, N16 by the live suite, N17-N19 by the live s1-play runs while fixing N16, N20 by the S3 live check, N21 by timing a coc launch). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
 
 Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m unittest discover -s tests` from `bridge`, ran 1,011 tests: all passed, 4 skipped, 0 failures. That includes the 54 engine companion tests, which now find Zig from the project files instead of being skipped without `GECK_MCP_ZIG`. Before S0 the same run with `GECK_MCP_ZIG` set was 1,002 tests, 4 skipped. No C test failed, so no N13.
 
@@ -1449,6 +1449,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | N18 | low | fixed | A photo right after a dialogue is refused with MENU_OPEN: DialogMenu stays on the menu stack for a moment after the dialogue reports it closed | `geck_mcp/fnv_eyes.py` (`_no_menu`) |
 | N19 | low | fixed | fnv_play activate reports "nothing visible changed" when it took an item (a taken reference is marked deleted, not disabled) | `geck_mcp/fnv_hands.py` (`activate`) |
 | N20 | medium | fixed | The menus flag 0x0118C6F0 was read the wrong way round: photo hide_hud never hid the HUD, fnv_render toggle menus reported the opposite state | `geck_mcp/fnv_eyes.py` (MENUS_SHOWN_FLAG), `fnv_render.py` |
+| N21 | medium | fixed | fnv_launch / fnv_restart with a coc or save start took ~190 s: the start line went out in the main menu's first frames | `geck_mcp/fnv_game.py` (start_from_menu) |
 
 ## Round 2: High
 
@@ -1778,6 +1779,15 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live 2026-11-12 (S3 live check): ToggleMenus with the flag 1 -> 0 printed "Menus -> Off", 0 -> 1 printed "Menus -> On"; the screenshot after the first had no HUD.
 - What happens: the byte is non-zero while the HUD and menus are shown. Reading it as "hidden", photo hide_hud saw a visible HUD as already hidden and never sent tm (photos kept the HUD), fnv_render said "now on" when the menus went off, and the new hud_set undo restored the opposite state.
 - Fix: MENUS_SHOWN_FLAG; hud_hidden, _hud_off and the render verdict and undo read it as shown.
+- Status: fixed
+
+### N21. A coc or save launch took ~190 s: the start line went out in the main menu's first frames
+
+- Where: geck_mcp/fnv_game.py (`start_from_menu`, reached from fnv_launch and fnv_restart)
+- Severity: medium
+- Confidence: confirmed live 2026-11-13, measured
+- What happens: the launch sent `coc <cell>` (or `load "<save>"`) as soon as the main menu showed, at the menu's frame ~2-20. The game then ran no frame for ~170-200 s (three runs: 190, 197, 178 s). Main-thread stack samples every 4 s: the first ~20 s in IOManager::LoadAllQueuedPriorities, then 85 of ~100 samples in the audio queue (Owner::AddSound -> BSWin32GameSound::CopyFrom / SetVolume -> DirectSound -> AUDIOSES -> an RPC to the Windows audio service) at ~3% of a core, no disk reads. The same coc sent at the menu's frame 149 (3 s) or 506 (10 s) reached the cell at once (1.7 s); disk reads had settled in the slow and the fast runs alike, so unfinished startup loading is not the cause. Why the first frames matter is not known.
+- Fix: a coc or save start waits until the menu has run 300 frames (at most 10 s) before sending the line (`wait_menu_settled`; the launch result has menuSettle). Live after the fix: coc launch 16.3 s (was ~190 s), save launch through fnv_restart 16.8 s.
 - Status: fixed
 
 ## Round 2: Low
