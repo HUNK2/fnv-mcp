@@ -130,7 +130,9 @@ missing. In short:
    something installed in it, listed in `MUTATING_ACTIONS` in `geck_mcp/fnv_live_tools.py`. With `"read"` these
    now refuse too (they used to run as read or control):
    - `fnv_hooks remove`; `fnv_trace`, `fnv_tracepoint`, `fnv_script_profile`, `fnv_script_trace`, `fnv_damage_log`
-     start and stop; `fnv_frame_profile`; `fnv_crash_context` enable and disable; `fnv_memory alloc_trace`;
+     start and stop, and read for the three that install their hook on the first read (`fnv_script_profile`,
+     `fnv_script_trace`, `fnv_damage_log`); `fnv_frame_profile`; `fnv_crash_context` enable and disable;
+     `fnv_memory` alloc_trace and refcount;
      `fnv_events` subscribe and unsubscribe; `fnv_watch frames=`; `fnv_systems` formula and sweep;
      `fnv_leveled_roll seed=`. These tools are now annotated as act (not read-only).
    - `fnv_probe` install, remove, clear, config and harvest; `fnv_name_oracle` run, calibrate and sweep;

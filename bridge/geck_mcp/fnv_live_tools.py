@@ -40,12 +40,12 @@ MUTATING_ACTIONS = {
     'fnv_hooks': {'remove'},
     'fnv_trace': {'start', 'stop'},
     'fnv_tracepoint': {'start', 'stop'},
-    'fnv_script_profile': {'start', 'stop'},
-    'fnv_script_trace': {'start', 'stop'},
-    'fnv_damage_log': {'start', 'stop'},
+    'fnv_script_profile': '*',                      # read installs the hook as well (it starts the window)
+    'fnv_script_trace': '*',
+    'fnv_damage_log': '*',
     'fnv_frame_profile': '*',
     'fnv_crash_context': {'enable', 'disable'},
-    'fnv_memory': {'alloc_trace'},
+    'fnv_memory': {'alloc_trace', 'refcount'},       # refcount sets hardware write watches on every thread
     'fnv_events': {'subscribe', 'unsubscribe'},
     'fnv_watch': {'frames'},
     'fnv_systems': {'formula', 'sweep'},
