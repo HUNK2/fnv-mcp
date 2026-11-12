@@ -292,7 +292,8 @@ class Game:
             note = self.last_exit()
         except Exception:  # noqa: BLE001 - no note folder: decide by age
             note = None
-        return mine[0] if young or (note or {}).get('pid') == ours else None
+        fresh_note = (note or {}).get('pid') == ours and time.time() - float((note or {}).get('at') or 0) < 60
+        return mine[0] if young or fresh_note else None    # an old note (a hung exit) never hides a new game (M11)
 
     def forget_process(self):
         self._proc_cache = None

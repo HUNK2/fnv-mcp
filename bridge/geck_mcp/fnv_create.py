@@ -1313,7 +1313,7 @@ class PlaceTools:
             return self.check(kw['ref'])
         if action == 'list':
             placed = self.list()['placed']
-            shown = capped(placed)       # export and remove read list() whole (S5.3)
+            shown = capped(placed, newest_first=True)    # export and remove read list() whole (S5.3, review M9)
             return {'placed': shown['items'], 'total': shown['total'], 'truncated': shown['truncated'],
                     'changed': False}
         if action == 'remove':

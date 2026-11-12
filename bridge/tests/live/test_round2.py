@@ -23,15 +23,13 @@ class Round2Tests(LiveCase):
         self.ok('fnv_undo')
         self.assertAlmostEqual(pose()[2], before[2], delta=1, msg='the export pose kept the undone nudge')
 
-    # G4: the journal part is fixed (S2.6: notUndoable is this game's {count, newest 50 ids}); the general reply
-    # cap is S5.4
+    # G4: notUndoable is this game's {count, newest 50 ids} (S2.6); results are capped at 200 (S5.3)
     def test_g4_revert_all_reply_small(self):
         self.ok('fnv_spawn', form=CAPS, count=1, distance=100)
         envelope = self.call('fnv_revert_all')
         self.assertTrue(envelope.get('ok'), envelope.get('error'))
         self.assertLess(envelope['_size'], 20000, 'revert_all reply of %d characters' % envelope['_size'])
 
-    @unittest.expectedFailure                     # G5: open
     def test_g5_wait_refuses_paused_clock(self):
         self.ok('fnv_time_control', action='pause')
         try:
@@ -62,7 +60,6 @@ class Round2Tests(LiveCase):
         finally:
             self.call('fnv_hook_set', function='Actor::GetLevel', action='remove')
 
-    @unittest.expectedFailure                     # G12: open
     def test_g12_mem_write_range(self):
         self.assertEqual(self.code('fnv_mem_write', target='player', value=300, as_type='u8'),
                          'INVALID_ARGUMENT')
@@ -84,12 +81,10 @@ class Round2Tests(LiveCase):
             self.call('fnv_debug', action='break', op='clear')
             self.call('fnv_debug', action='continue')
 
-    @unittest.skip('G14 open: the unguarded qqq would quit the game and end the run; enable with the S5.4 fix')
     def test_g14_console_qqq_refused(self):
         self.assertEqual(self.code('fnv_console', line='qqq'), 'CONSOLE_REFUSED')
         self.assertTrue(self.ok('fnv_status')['running'])
 
-    @unittest.expectedFailure                     # G16: open
     def test_g16_engine_get_arg_count(self):
         self.assertEqual(self.code('fnv_engine_get', function='Actor::GetLevel', this='player', args=[1, 2, 3]),
                          'BAD_ARGUMENTS')

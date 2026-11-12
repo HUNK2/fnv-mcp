@@ -2,9 +2,10 @@
 form, so the envelope reports INVALID_ARGUMENT with a message the caller can act on."""
 import re
 
-HEX = re.compile(r'^(?:0x)?([0-9A-Fa-f]{1,8})$')
+HEX = re.compile(r'^(?:0x)?([0-9A-Fa-f]{1,8})$', re.I)
 EDITOR_ID = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,127}$')
 
+F32_MAX = 3.4028234663852886e38
 RANGES = {'u8': (0, 0xFF), 'i8': (-0x80, 0x7F), 'u16': (0, 0xFFFF), 'i16': (-0x8000, 0x7FFF),
           'u32': (0, 0xFFFFFFFF), 'i32': (-0x80000000, 0x7FFFFFFF), 'ptr': (0, 0xFFFFFFFF)}
 FORMATS = {'<B': 'u8', '<b': 'i8', '<H': 'u16', '<h': 'i16', '<I': 'u32', '<i': 'i32'}
@@ -45,12 +46,20 @@ def ranged(name, value, as_type):
     kind = FORMATS.get(as_type, as_type)
     if kind in ('f32', 'f64', 'float', 'double'):
         try:
-            return float(value)
+            number = float(value)
         except (TypeError, ValueError):
             raise ValueError('%s: expected a number for %s, got %r' % (name, as_type, value)) from None
+        if kind in ('f32', 'float') and abs(number) > F32_MAX and number == number and abs(number) != float('inf'):
+            raise ValueError('%s: f32 holds at most +-%g, got %r' % (name, F32_MAX, value))
+        return number
     try:
-        number = int(value, 0) if isinstance(value, str) else int(value)
-    except (TypeError, ValueError):
+        if isinstance(value, float):
+            if not value.is_integer():      # 1.9 as u8 would write 1 (S5 review M6)
+                raise ValueError
+            number = int(value)
+        else:
+            number = int(value, 0) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError, OverflowError):
         raise ValueError('%s: expected a whole number for %s, got %r' % (name, as_type, value)) from None
     low, high = RANGES.get(kind, (None, None))
     if low is not None and not low <= number <= high:
@@ -67,6 +76,20 @@ def readable_type(name):
         return '%s<%s>' % (m.group(1), ', '.join(re.findall(r'[VU](\w+)@', m.group(2))))
     m = re.match(r'^\.?\?A[VU](\w+)@@$', text)
     return m.group(1) if m else text
+
+
+def as_bool(name, value):
+    """true/false, 1/0, yes/no (text or number) -> bool; anything else is an error (bool('false') is True)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ('true', '1', 'yes', 'on'):
+        return True
+    if text in ('false', '0', 'no', 'off'):
+        return False
+    raise ValueError('%s: expected true or false (or 1 / 0), got %r' % (name, value))
 
 
 def capped(items, limit=200, newest_first=False):

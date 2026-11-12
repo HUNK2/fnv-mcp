@@ -25,10 +25,10 @@ class ConsoleGuardTests(unittest.TestCase):
         return str(caught.exception)
 
     def test_quit_lines_refused(self):
-        for line in ('qqq', 'QuitGame', '  exitgame', 'RestartGame'):
+        for line in ('qqq', 'QuitGame', '  exitgame', 'exit'):
             self.assertIn('fnv_quit', self.refused(line))
-        for line in ('load mysave', 'LoadGame x', 'con_loadgame x'):
-            self.assertIn('fnv_launch', self.refused(line))
+        for line in ('load mysave', 'LoadGame x', 'con_loadgame x', 'RestartGame'):
+            self.assertIn('fnv_restart', self.refused(line))     # fnv_launch refuses while a game runs (review I3)
         for line in ('save x', 'SaveGame x'):
             self.assertIn('fnv_test_save', self.refused(line))
         self.assertIn('fnv_move', self.refused('cow wasteland 0 0'))

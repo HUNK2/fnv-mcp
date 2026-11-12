@@ -302,7 +302,7 @@ between the base frame and the wait.
 | `speed x=F` | Writes both time multiplier floats (0.05 to 10), so the change does not ramp |
 | `status` | Gate state, clock counter, fixed step, multiplier, frame, and the real frame rate from two readings |
 
-Changing actions need `fnv.engine_control` set to `full`. Without a running game the tool answers `NOT_RUNNING`
+Changing actions need `fnv.engine_control` set to `full`. Without a running game the tool answers `GAME_NOT_RUNNING`
 with the next step (`fnv_launch`).
 
 **`fnv_wait_for`** (kind `read`). Exactly one condition:

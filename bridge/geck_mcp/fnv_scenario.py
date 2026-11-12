@@ -880,7 +880,10 @@ class ScenarioRunner:
             arg = {**arg, 'equals': want}
             what = 'player cell'
         elif 'console' in arg:
-            actual = live.console(self._expr(arg['console']))['output']
+            line = self._expr(arg['console'])
+            if live.console_refused(line):      # the fnv_console guard (S5 review M10)
+                raise ValueError('expect console: %s is not run from a test step' % live.console_refused(line))
+            actual = live.console(line)['output']
             what = 'output of %s' % arg['console']
         elif 'disabled' in arg:
             r = live.resolve(arg['disabled'])

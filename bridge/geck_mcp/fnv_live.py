@@ -21,7 +21,7 @@ from . import fnv_engine, fnv_facts, fnv_link
 from .fnv_facts import FACTS
 from .fnv_game import Game, GameError
 from .fnv_link import LinkError, element_value, hexs, word
-from .fnv_args import capped, form_id, is_form_id, ranged, readable_type
+from .fnv_args import as_bool, capped, form_id, is_form_id, ranged, readable_type
 from .fnv_conv import next_step
 from .fnv_journal import Journal
 from .fnv_state import GameIdentity
@@ -188,7 +188,10 @@ class LiveService:
 
     # Codes that all mean "no game to talk to": the envelope reports one code for them (PLAN-3 S5.1, T4).
     # COMPANION_UNREACHABLE joins them only when no game process exists (a running game with a busy pipe keeps it).
-    GAME_NOT_RUNNING_CODES = ('NOT_RUNNING', 'NO_GAME_LOADED', 'GAME_NOT_RUNNING')
+    GAME_NOT_RUNNING_CODES = ('NOT_RUNNING', 'GAME_NOT_RUNNING')
+    # these join them only when no game process exists: a game at the main menu answers NO_GAME_LOADED with its own
+    # next step (fnv_launch refuses while a game runs; S5 review I1)
+    NO_PROCESS_CODES = ('COMPANION_UNREACHABLE', 'NO_GAME_LOADED')
     UNCERTAIN_CODES = ('COMPANION_TIMEOUT', 'COMPANION_DISCONNECTED')
 
     def _run(self, name, action, kind):
@@ -223,7 +226,7 @@ class LiveService:
             return 'INVALID_ARGUMENT' if isinstance(e, ValueError) else 'FNV_ERROR'
         if code in self.GAME_NOT_RUNNING_CODES:
             return 'GAME_NOT_RUNNING'
-        if code == 'COMPANION_UNREACHABLE':
+        if code in self.NO_PROCESS_CODES:
             try:
                 if not self.game.process(fresh=True):
                     return 'GAME_NOT_RUNNING'
@@ -882,13 +885,17 @@ class LiveService:
     # ================================================================= milestone 5/6: console and scripts
     # Console lines fnv_console refuses (G14): the bridge's own tools do these with their bookkeeping (quit log,
     # session, the dev profile's save slots). Matched on the first word, case-insensitively, also after `ref.`.
-    CONSOLE_REFUSED = {'qqq', 'quitgame', 'exitgame', 'restartgame', 'load', 'loadgame', 'con_loadgame', 'save',
-                       'savegame', 'bat', 'runbatch', 'cow'}
-    CONSOLE_INSTEAD = {'qqq': 'fnv_quit', 'quitgame': 'fnv_quit', 'exitgame': 'fnv_quit', 'restartgame': 'fnv_quit',
-                       'load': 'fnv_launch start=save:<name>', 'loadgame': 'fnv_launch start=save:<name>',
-                       'con_loadgame': 'fnv_launch start=save:<name>', 'save': 'fnv_test_save action=save',
-                       'savegame': 'fnv_test_save action=save', 'cow': 'fnv_move',
-                       'bat': 'fnv_do (one console step per line)', 'runbatch': 'fnv_do (one console step per line)'}
+    # Long and short names from the engine map's command table (ExitGame is also `exit`, CenterOnWorld `cow`; JIP
+    # adds RunBatchScript; S5 review I2).
+    _LOAD = 'fnv_restart start=save:<name> (or fnv_test_save action=load for a test save)'
+    _SAVE = 'fnv_test_save action=save'
+    _BATCH = 'fnv_do (one console step per line)'
+    CONSOLE_INSTEAD = {'qqq': 'fnv_quit', 'quitgame': 'fnv_quit', 'exitgame': 'fnv_quit', 'exit': 'fnv_quit',
+                       'restartgame': 'fnv_restart', 'load': _LOAD, 'loadgame': _LOAD, 'con_loadgame': _LOAD,
+                       'save': _SAVE, 'savegame': _SAVE, 'forcesave': _SAVE, 'systemsave': _SAVE, 'autosave': _SAVE,
+                       'cow': 'fnv_move', 'centeronworld': 'fnv_move',
+                       'bat': _BATCH, 'runbatch': _BATCH, 'runbatchscript': _BATCH}
+    CONSOLE_REFUSED = set(CONSOLE_INSTEAD)
 
     @classmethod
     def console_refused(cls, line):
@@ -914,6 +921,11 @@ class LiveService:
         return dict(result, output=shown['items'], outputTotal=shown['total'], outputTruncated=shown['truncated'])
 
     def run_script(self, source, ref=None):
+        text = (source or '').strip()
+        refused = self.console_refused(text) if '\n' not in text else None
+        if refused:                    # the same guard as fnv_console (S5 review M10)
+            raise LiveError('CONSOLE_REFUSED', '%s is not run through fnv_run_script. Next: use %s.'
+                            % (refused, self.CONSOLE_INSTEAD[refused]), {'command': refused})
         self.ready()
         r = self.resolve(ref) if ref else None
         self.changing('script')
@@ -1090,7 +1102,7 @@ class LiveService:
         if kind in SIMPLE_TYPES or kind.endswith('*'):
             fmt, _ = SIMPLE_TYPES.get(kind, ('<I', 4))
             if fmt == '<?':
-                return struct.pack(fmt, bool(value))
+                return struct.pack(fmt, as_bool('value', value))
             # range-checked per type: an out-of-range value is INVALID_ARGUMENT naming the range (G12)
             return struct.pack(fmt, ranged('value', value, {'<f': 'f32', '<d': 'f64'}.get(fmt, fmt)))
         if kind == 'bytes':
@@ -1567,9 +1579,13 @@ class LiveService:
         left = [e['id'] for e in self.journal.entries(since_seq=since, process=ident)
                 if not e['undone'] and not e.get('undo')]
         skipped = {'count': len(left), 'ids': left[::-1][:50]}
-        shown = capped(results)        # one row per entry: a long session would make the reply too big (S5.3)
+        # one row per entry, in the order the undos ran: a long session would make the reply too big (S5.3); every
+        # failed id is listed, past the cap too (S5 review M9)
+        failed = [r for r in results if not r['undone']]
+        shown = capped(results)
         return {'reverted': sum(r['undone'] for r in results), 'results': shown['items'], 'total': shown['total'],
-                'truncated': shown['truncated'], 'notUndoable': skipped, 'changed': any(r['undone'] for r in results)}
+                'truncated': shown['truncated'], 'failed': [r['id'] for r in failed], 'notUndoable': skipped,
+                'changed': any(r['undone'] for r in results)}
 
 
 # -- Undo ops (PLAN-3 S3.1) -------------------------------------------------------------------------------------

@@ -54,7 +54,8 @@ NEXT_STEPS = {
     'NOT_RUNNING': 'The game is not running: call fnv_launch.',
     'GAME_EXITED': 'The game exited: call fnv_launch (fnv_crash_explain shows why when it crashed).',
     'GAME_STARTING': 'The game is still starting: wait, then call fnv_status.',
-    'NO_GAME_LOADED': 'No save or cell is loaded: call fnv_launch with start=continue, a save or a cell.',
+    'NO_GAME_LOADED': 'No save or cell is loaded: call fnv_restart with start=continue, a save or a cell '
+                      '(fnv_launch when the game is closed).',
     'COMPANION_TIMEOUT': 'The engine companion did not answer: call fnv_status; if the game hangs call fnv_hang_doctor.',
     'COMPANION_DISCONNECTED': 'The engine companion is gone: call fnv_status, then fnv_launch if the game is not running.',
     'COMPANION_UNREACHABLE': 'The engine companion does not answer: call fnv_status; if it is not installed, quit the game, '

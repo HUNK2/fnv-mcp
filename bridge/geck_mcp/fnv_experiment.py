@@ -204,7 +204,10 @@ class ExperimentTools:
         return float(v) if isinstance(v, (int, float)) else v
 
     def _lines(self, lines, ptr):
+        from .fnv_live import LiveService
         for line in lines or []:
+            if LiveService.console_refused(line):     # the fnv_console guard (S5 review M10)
+                raise ValueError('%s is not run from an experiment' % LiveService.console_refused(line))
             self.link.console(line, ref=ptr)
 
     def _effect(self, spec, before, after):

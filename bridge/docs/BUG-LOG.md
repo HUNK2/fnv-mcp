@@ -1381,8 +1381,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R4 | high | fixed (live check pending) | Hot reload kills a cancelled call that is still running in the old server (A5 fix) | `geck_mcp/supervisor.py:331-338` |
 | T1 | high | fixed | The engine_control gate is bypassed by tools registered as control or read | `fnv_live.py:167` |
 | G1 | medium | fixed | Undoing a nudge/rotate/scale leaves the export pose at the undone value | `geck_mcp/fnv_create.py:1109-1119` |
-| G4 | medium | partly fixed | fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit) | `geck_mcp/fnv_live.py:1419` |
-| G5 | medium | open | fnv_wait_for seconds with clock=game says "met" while the game clock is paused | `geck_mcp/fnv_time.py` |
+| G4 | medium | fixed | fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit) | `geck_mcp/fnv_live.py:1419` |
+| G5 | medium | fixed | fnv_wait_for seconds with clock=game says "met" while the game clock is paused | `geck_mcp/fnv_time.py` |
 | G9 | medium | fixed | fnv_globals rounds short/long globals that hold fractions (GameHour), and its undo restores the rounded value | `geck_mcp fnv_globals read and set` |
 | R5 | medium | open | `fnv_flow call` leaves its breakpoint armed (and its predicate slot freed) when the call cannot be armed (E4 incomplete; new path from the B10 fix) | `geck_mcp/fnv_flow.py:171-191 arms the breakpoint` |
 | R6 | medium | open | `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite) | `geck_mcp/fnv_inspect.py:671-681` |
@@ -1391,21 +1391,21 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R9 | medium | open | C5 is only partly fixed: some form-id references are still skipped as text (C5) | `geck_mcp/fnv_records.py:96` |
 | R10 | medium | fixed | `save_session` rewrites `session.json` with no lock: parallel act tools lose changes or corrupt it, and a corrupt file then breaks every act tool in a new server (D8 incomplete) | `geck_mcp/fnv_game.py:239-253` |
 | R11 | medium | open | Step over, step out and `step line` leave their temporary `to` site armed and unrecorded when another stop of the same thread comes first (E15 / L5 incomplete) | `geck_mcp/fnv_debugger.py _run_to` |
-| T2 | medium | open | fnv_input: invalid key_name raises outside invoke() | `fnv_live_tools.py:618` |
+| T2 | medium | fixed | fnv_input: invalid key_name raises outside invoke() | `fnv_live_tools.py:618` |
 | P2 | medium | open | Vanilla compressed LAND with bad Adler-32 breaks full parse | `esp/codec.py decompress` |
 | P5 | medium | open | record_find reports the wrong version's name and editor ID | `fnv_data.py record_find` |
 | G2 | low | fixed | fnv_spawn with a reference spec (player, crosshair, a ref form id) fails with a script compile error | `geck_mcp/fnv_agent.py:808` |
 | G3 | low | fixed | A placed ref whose SetPos/SetAngle fails is never journaled | `geck_mcp/fnv_create.py:1005-1019` |
-| G6 | low | open | fnv_wait_for seconds with clock=real uses the fixed step as the real frame rate | `geck_mcp/fnv_time.py:450-455` |
-| G7 | low | open | fnv_time_control status says "The game is running" while the clock is paused | `geck_mcp/fnv_time.py status verdict` |
-| G8 | low | open | The envelope's game.frame is the frame of the last ping, minutes old | `geck_mcp/fnv_live.py:190-192` |
-| G10 | low | open | fnv_globals set returns the whole unfiltered list, with the values from before the write | `geck_mcp fnv_globals` |
+| G6 | low | fixed | fnv_wait_for seconds with clock=real uses the fixed step as the real frame rate | `geck_mcp/fnv_time.py:450-455` |
+| G7 | low | fixed | fnv_time_control status says "The game is running" while the clock is paused | `geck_mcp/fnv_time.py status verdict` |
+| G8 | low | fixed | The envelope's game.frame is the frame of the last ping, minutes old | `geck_mcp/fnv_live.py:190-192` |
+| G10 | low | fixed | fnv_globals set returns the whole unfiltered list, with the values from before the write | `geck_mcp fnv_globals` |
 | G11 | low | open | fnv_hook_set: with a limit, actionHits counts every call and read says every call was changed | `native/engine/fnvmcp_engine.c:580-581` |
-| G12 | low | open | fnv_mem_write: an out-of-range value is FNV_ERROR, and setting types show as mangled names | `geck_mcp fnv_mem_write` |
+| G12 | low | fixed | fnv_mem_write: an out-of-range value is FNV_ERROR, and setting types show as mangled names | `geck_mcp fnv_mem_write` |
 | G13 | low | open | After break clear, a stop that is still parked is described as "break 0" | `geck_mcp/fnv_debugger.py` |
-| G14 | low | open | fnv_console runs qqq (and other quit/load lines) unguarded; the quit is then traced as not asked by the bridge | `geck_mcp/fnv_live.py:235` |
-| G15 | low | open | fnv_status fails with SEVERAL_GAMES while a game is exiting | `geck_mcp/fnv_game.py` |
-| G16 | low | open | fnv_engine_get ignores extra arguments | `geck_mcp/fnv_control.py:396-404` |
+| G14 | low | fixed | fnv_console runs qqq (and other quit/load lines) unguarded; the quit is then traced as not asked by the bridge | `geck_mcp/fnv_live.py:235` |
+| G15 | low | fixed | fnv_status fails with SEVERAL_GAMES while a game is exiting | `geck_mcp/fnv_game.py` |
+| G16 | low | fixed | fnv_engine_get ignores extra arguments | `geck_mcp/fnv_control.py:396-404` |
 | R12 | low | open | `fnv_session start` rollback leaves prepare's crash-context hooks on, and stops a warning capture it did not start (A11 incomplete) | `geck_mcp/fnv_session.py:77-117` |
 | R13 | low | open | `fnv_debug thaw` with nothing on record resumes every thread of the game once (E1/E6 fix) | `geck_mcp/fnv_debugger.py thaw()` |
 | R14 | low | fixed | C2 is only partly fixed: a failed refs index build keeps the SQLite write lock (C2) | `geck_mcp/fnv_records.py:175-208` |
@@ -1416,9 +1416,9 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R19 | low | fixed | Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix) | `geck_mcp/fnv_live.py:89-96` |
 | R20 | low | fixed | E6 state file: one save with a different `start` drops every other section (ProcState) | `geck_mcp/fnv_pred.py:400-421` |
 | T3 | low | open | fnv_name_export writes a trace file even when it has nothing to export | `fnv naming export tool` |
-| T4 | low | open | Inconsistent error codes for "game not running" | `fnv_live.py ready()/in_game(), fnv_link.py EngineLink.connect, fnv_game.game_pro` |
-| T5 | low | open | Raw int(...,16) ValueError text in fnv_probe and fnv_events arguments | `fnv_live_tools.py` |
-| T6 | low | open | Short form ids (no leading zeros / no load-order prefix) not accepted consistently | `fnv_live.py resolve()` |
+| T4 | low | fixed | Inconsistent error codes for "game not running" | `fnv_live.py ready()/in_game(), fnv_link.py EngineLink.connect, fnv_game.game_pro` |
+| T5 | low | fixed | Raw int(...,16) ValueError text in fnv_probe and fnv_events arguments | `fnv_live_tools.py` |
+| T6 | low | fixed | Short form ids (no leading zeros / no load-order prefix) not accepted consistently | `fnv_live.py resolve()` |
 | T7 | low | open | fnv_asset_check accepts arbitrary paths and surfaces a raw parse error | `fnv_asset_check registration` |
 | T8 | low | open | Parameters documented/required but ignored | `several fnv_* registrations` |
 | T9 | low | open | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
@@ -1548,7 +1548,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: after 8 changes in this game, fnv_revert_all reverted 8 and returned notUndoable with 3,761 ids from every earlier game process (journal.jsonl has 5,291 lines). The reply was 56,996 characters, too big for the client, so the agent cannot see the result without reading a dump file. fnv_session end (revert since) has the same list.
 - Fix idea: filter skipped with the same same_process/since test as the undo list, and cap it (count plus the newest 50).
-- Status: partly fixed (S2.6: notUndoable lists only this game process and scope, {count, newest 50 ids}; the general reply cap is S5.4)
+- Status: fixed (PLAN-3 S5)
+- Resolution: results capped at 200 with total/truncated, every failed id in `failed` (S5.3).
 
 ### G5. fnv_wait_for seconds with clock=game says "met" while the game clock is paused
 
@@ -1557,7 +1558,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: fnv_time_control pause (clock counter 1), then fnv_wait_for seconds=1 clock=game -> "Condition met at frame 441880 after 60 frames", although no game time passed. The description promises game seconds scaled by the time multiplier; a paused clock (multiplier effectively 0) should never meet it, or the tool should refuse/warn.
 - Fix idea: when the clock counter is above 0 (or the multiplier is 0), refuse with CLOCK_PAUSED, or wait on the game clock itself (a predicate over the game-time global) instead of a frame estimate.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: a game-clock wait while the clock counter is above 0 raises CLOCK_PAUSED (S5.5).
 
 ### G9. fnv_globals rounds short/long globals that hold fractions (GameHour), and its undo restores the rounded value
 
@@ -1664,7 +1666,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed by a call (fnv_input with key_name="nokey")
 - What happens: scan_code raises ValueError before the envelope wrapper, so the client gets a raw "Error executing tool" text instead of {ok:false, error.code:INVALID_ARGUMENT}; no operationId or game identity.
 - Fix idea: move the scan_code call inside the lambda passed to invoke.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: key_name is parsed inside the envelope; no tool does work before invoke (AST test) (S5.2).
 
 ### P2. Vanilla compressed LAND with bad Adler-32 breaks full parse
 
@@ -1804,7 +1807,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: likely (code reading)
 - What happens: with fnv_time_control fixed fps=30 on a machine that renders 60 fps, seconds=10 clock=real waits 300 frames, which take 5 real seconds. The fixed step sets game time per frame, not frames per real second; only the game clock should use it.
 - Fix idea: clock=real -> measured real fps (or wall time); clock=game -> fixed fps when set, else measured.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: clock=real uses the measured frame rate; only clock=game uses the fixed step (S5.5).
 
 ### G7. fnv_time_control status says "The game is running" while the clock is paused
 
@@ -1813,7 +1817,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: after pause, status gave verdict "The game is running at frame 10319" with clockCounter 1 and pausedByUs true. The verdict only looks at the gate.
 - Fix idea: verdict "The game clock is paused (frames still run)" when clockCounter > 0.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: status says "The game clock is paused (frames still run)" when the counter is above 0 (S5.5).
 
 ### G8. The envelope's game.frame is the frame of the last ping, minutes old
 
@@ -1822,7 +1827,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: after one fnv_player call every reply's envelope said frame 441444 for several minutes, while data.frame moved to 442345. Agents read the envelope frame as "now".
 - Fix idea: report max(hello frame, link.last_frame), or name the field pingFrame.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: the envelope frame is max(ping frame, last reply frame) (S5.5).
 
 ### G10. fnv_globals set returns the whole unfiltered list, with the values from before the write
 
@@ -1831,7 +1837,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: set {"GameHour": 13} with no query returned 200 of 258 globals (a large reply), and a listed value is the one read before the write (set 9 -> globals[] still says 13 while changed says new 9).
 - Fix idea: with set and no query, list only the changed globals; re-read after writing.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: set without a query lists only the changed globals, values re-read after the write (S5.3).
 
 ### G11. fnv_hook_set: with a limit, actionHits counts every call and read says every call was changed
 
@@ -1849,7 +1856,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: as_type u8 value 300 -> FNV_ERROR "'B' format requires 0 <= number <= 255" (not INVALID_ARGUMENT); writing a game setting by address without as_type -> "Cannot write a value of type '?$SettingT@VGameSettingCollection@@'".
 - Fix idea: range-check per type and raise INVALID_ARGUMENT; demangle or name the class (Setting).
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: per-type range checks (INVALID_ARGUMENT naming the range), bool text parsed, decorated names shown as C++ (S5.2).
 
 ### G13. After break clear, a stop that is still parked is described as "break 0"
 
@@ -1867,7 +1875,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: fnv_console line=qqq quit the game ("Bye."). fnv_status lastExit then says how=console, servingRequest=true, askedByBridge=false, although the bridge sent it, so the S4 diagnosis points away from the bridge. Game.quit (session bookkeeping, quit-log) is bypassed.
 - Fix idea: refuse qqq/quitgame/load/coc-style lines in fnv_console with a pointer to fnv_quit / fnv_move / fnv_launch, or route them through those; at least log a quit-log entry when the line is a quit.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: fnv_console (and fnv_run_script one-liners, fnv_do console expects, experiments) refuse quit/load/save/batch/cow lines and their engine aliases with the tool to use (S5.4).
 
 ### G15. fnv_status fails with SEVERAL_GAMES while a game is exiting
 
@@ -1876,7 +1885,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live (seen once)
 - What happens: right after qqq, fnv_status returned SEVERAL_GAMES with pids [17324, 28984]; a second later both were gone and status worked. A short-lived second FalloutNV.exe appears during shutdown (xNVSE/CrashLogger exit path; unknown which). Any tool called in that window fails.
 - Fix idea: when one of the pids is the session's game and it is exiting (or the other one is younger than a few seconds), report not_running/exiting instead of failing; retry once after a short wait.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: two FalloutNV.exe with one the session game (exit note under 60 s old, or the other younger than 5 s) -> the session pid, status exiting: true (S5.5).
 
 ### G16. fnv_engine_get ignores extra arguments
 
@@ -1885,7 +1895,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live (extra args); too few by code reading
 - What happens: Actor::GetLevel (no parameters) with args [1,2,3] returned 1, ok. With too few args the callee reads its missing parameters from whatever lies on the stack above the pushed ones (the companion restores esp afterwards, so no corruption, but the answer is computed from garbage and reported as a result).
 - Fix idea: refuse when len(args) differs from the signature's parameter count (TOO_MANY_ARGS).
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: engine_get refuses a count different from the signature (this counted outside thiscall) with BAD_ARGUMENTS (S5.2).
 
 ### R12. `fnv_session start` rollback leaves prepare's crash-context hooks on, and stops a warning capture it did not start (A11 incomplete)
 
@@ -2003,7 +2014,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed by a call (offline sweep)
 - What happens: depending on tool, the same condition returns different codes (a LiveError not-running code, COMPANION_* connect failure, or generic FNV_ERROR). Agents cannot branch on one code. Non-ValueError unexpected exceptions also map to FNV_ERROR with retrySafe true even for act/control kinds, which may claim retry is safe after a possible change.
 - Fix idea: one GAME_NOT_RUNNING code from ready(); treat FNV_ERROR in act/control kinds as outcome unknown (retrySafe false).
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: one GAME_NOT_RUNNING code when no game process exists, per-code recovery, outcome_unknown / partial_change (S5.1).
 
 ### T5. Raw int(...,16) ValueError text in fnv_probe and fnv_events arguments
 
@@ -2012,7 +2024,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed by a call (non-hex string input)
 - What happens: error message is Python's "invalid literal for int() with base 16: 'zz'" with no mention of which parameter; code is INVALID_ARGUMENT.
 - Fix idea: wrap with a helper naming the parameter and expected format.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: fnv_args.hex_int names the parameter and the expected form (S5.2).
 
 ### T6. Short form ids (no leading zeros / no load-order prefix) not accepted consistently
 
@@ -2021,7 +2034,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: likely (some tools accept "0x14", others require 8 hex digits or an EditorID)
 - What happens: the same form id string works in one tool and gives not-found in another; docs do not state the accepted forms.
 - Fix idea: one shared parser; document the accepted forms.
-- Status: open
+- Status: fixed (PLAN-3 S5)
+- Resolution: one form id parser (0x14, 14, 00000014, FF000001) for resolve and the record tools (S5.2).
 
 ### T7. fnv_asset_check accepts arbitrary paths and surfaces a raw parse error
 
