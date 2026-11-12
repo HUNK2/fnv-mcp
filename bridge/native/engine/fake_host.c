@@ -55,6 +55,10 @@ extern char bp_call_site[], bp_after_site[], bp_ret_site[];
 static volatile uint32_t hook_last, hook_thread_result, hook_thread_done, crash_done, crash_thread_done;
 static volatile uint32_t bp_result;
 static volatile LONG crash_expected;
+/* Race workers (PLAN-3 S1.1): "race <threads> <iters>" starts threads that wait for race_go, then each calls
+ * bp_target <iters> times (every call returns 12). The test sets race_go (and the seam) in this process's memory,
+ * so it works while the main thread is parked in a seam. */
+static volatile LONG race_go, race_started, race_done, race_bad;
 static void __attribute__((thiscall)) fake_force(void *self, int control) {
     (void)self;
     force_count++;
@@ -256,6 +260,15 @@ static DWORD WINAPI hook_worker(LPVOID arg) {
     append_log(out);
     return 0;
 }
+static DWORD WINAPI race_worker(LPVOID arg) {
+    int iters = (int)(intptr_t)arg;
+    InterlockedIncrement(&race_started);
+    while (!race_go) SwitchToThread();
+    for (int i = 0; i < iters; i++)
+        if (call_bp_target(i) != 12) InterlockedIncrement(&race_bad);
+    InterlockedIncrement(&race_done);
+    return 0;
+}
 static DWORD WINAPI crash_worker(LPVOID arg) {
     (void)arg;
     crash_expected = 1;
@@ -315,6 +328,17 @@ static bool run_line(const char *line, void *ref) {
         char out[64];
         snprintf(out, sizeof(out), "bpcall %u", (unsigned)bp_result);
         append_log(out);
+        return true;
+    }
+    if (!strncmp(line, "race ", 5)) {
+        int threads = 0, iters = 0;
+        if (sscanf(line + 5, "%d %d", &threads, &iters) != 2 || threads < 1 || threads > 64 || iters < 1) return false;
+        race_go = 0;
+        race_started = race_done = race_bad = 0;
+        for (int i = 0; i < threads; i++) {
+            HANDLE thread = CreateThread(NULL, 0, race_worker, (LPVOID)(intptr_t)iters, 0, NULL);
+            if (thread) CloseHandle(thread);
+        }
         return true;
     }
     if (!strcmp(line, "crash")) {
@@ -423,7 +447,8 @@ int main(int argc, char **argv) {
            "\"osPtr\":\"0x%08x\",\"osGlobals\":\"0x%08x\",\"faulter\":\"0x%08x\",\"ud2\":\"0x%08x\","
            "\"hookme\":\"0x%08x\",\"hookLast\":\"0x%08x\",\"hookThreadResult\":\"0x%08x\",\"hookThreadDone\":\"0x%08x\","
            "\"crashDone\":\"0x%08x\",\"crashThreadDone\":\"0x%08x\",\"bpTarget\":\"0x%08x\",\"bpCall\":\"0x%08x\","
-           "\"bpAfter\":\"0x%08x\",\"bpRet\":\"0x%08x\",\"bpCallee\":\"0x%08x\",\"bpResult\":\"0x%08x\",\"seam\":\"0x%08x\"}\n",
+           "\"bpAfter\":\"0x%08x\",\"bpRet\":\"0x%08x\",\"bpCallee\":\"0x%08x\",\"bpResult\":\"0x%08x\",\"seam\":\"0x%08x\","
+           "\"raceGo\":\"0x%08x\",\"raceStarted\":\"0x%08x\",\"raceDone\":\"0x%08x\",\"raceBad\":\"0x%08x\"}\n",
            (unsigned)(uintptr_t)memory, (unsigned)(uintptr_t)&chain_a, (unsigned)(uintptr_t)chain_b,
            (unsigned)(uintptr_t)add3, (unsigned)(uintptr_t)sub2, (unsigned)(uintptr_t)member,
            (unsigned)(uintptr_t)&self_value, (unsigned)(uintptr_t)fast, (unsigned)(uintptr_t)halfsum,
@@ -442,7 +467,9 @@ int main(int argc, char **argv) {
            (unsigned)hook_thread_done, (unsigned)crash_done, (unsigned)crash_thread_done,
            (unsigned)(uintptr_t)bp_target, (unsigned)(uintptr_t)bp_call_site, (unsigned)(uintptr_t)bp_after_site,
            (unsigned)(uintptr_t)bp_ret_site, (unsigned)(uintptr_t)bp_callee, (unsigned)bp_result,
-           (unsigned)(uintptr_t)(void *)GetProcAddress(dll, "fnvmcp_seam")); /* 0 unless a seam build */
+           (unsigned)(uintptr_t)(void *)GetProcAddress(dll, "fnvmcp_seam"), /* 0 unless a seam build */
+           (unsigned)(uintptr_t)&race_go, (unsigned)(uintptr_t)&race_started, (unsigned)(uintptr_t)&race_done,
+           (unsigned)(uintptr_t)&race_bad);
     fflush(stdout);
     send(18, NULL);  /* DeferredInit */
     send(14, NULL);  /* NewGame */

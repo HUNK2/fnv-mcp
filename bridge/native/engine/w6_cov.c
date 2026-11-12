@@ -12,7 +12,9 @@
 
 static uint32_t *cov_addr;      /* sorted */
 static unsigned char *cov_orig;
-static volatile LONG *cov_state; /* 0 idle, 1 armed, 2 hit */
+/* 0 idle, 1 armed, 2 hit, 3 restoring. Every move out of 1 goes through 3: the thread that wins 1 -> 3 owns the
+ * byte until it is put back, and any other trap there meanwhile re-runs the int3 until it is (R1). */
+static volatile LONG *cov_state;
 static uint32_t *cov_order;      /* hit order */
 static volatile LONG cov_count, cov_hits;
 static bool cov_armed;
@@ -27,6 +29,43 @@ static int cov_find(uint32_t address) {
     }
     return -1;
 }
+/* Put back the original byte of line i if it is still 0xCC. Safe to run from two threads at once (the owner of the
+ * line and a release that does not wait for it): WriteProcessMemory changes the page protection itself and fails
+ * rather than faulting, where a VirtualProtect + store could fault if the other thread put the protection back in
+ * between. Writing the same original byte twice is harmless. */
+static void cov_restore(int i) {
+    unsigned char *at = (unsigned char *)(uintptr_t)cov_addr[i];
+    for (int tries = 0; tries < 64 && *at == 0xCC; tries++) {
+        SIZE_T done = 0;
+        if (WriteProcessMemory(GetCurrentProcess(), at, &cov_orig[i], 1, &done) && done == 1) break;
+        SwitchToThread();
+    }
+    FlushInstructionCache(GetCurrentProcess(), at, 1);
+}
+/* Take line i out of the armed state for a release or disarm: 1 -> 3, restore, -> 0. A line another thread owns (3,
+ * a hit in flight) gets its byte put back here too, without waiting: the owner may be suspended by the caller
+ * (isite_add, cov_write_all), and the caller must not read 0xCC as code. The owner still finishes it as a hit. */
+static void cov_release_line(int i) {
+    LONG state = InterlockedCompareExchange(&cov_state[i], 3, 1);
+    if (state == 1) {
+        SEAM(2);
+        cov_restore(i);
+        InterlockedExchange(&cov_state[i], 0);
+    } else if (state == 3) {
+        cov_restore(i);
+    }
+}
+/* Wait until no line is being restored (a hit in flight), before rows move or the table empties. False after 2 s. */
+static bool cov_quiesce(void) {
+    DWORD start = GetTickCount();
+    for (;;) {
+        bool busy = false;
+        for (uint32_t i = 0; i < (uint32_t)cov_count && !busy; i++) busy = cov_state[i] == 3;
+        if (!busy) return true;
+        if (GetTickCount() - start > 2000) return false;
+        SwitchToThread();
+    }
+}
 /* From on_trap: true when the int3 is a coverage site (hit or in flight). */
 static bool cov_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result) {
     if (!cov_count) return false;
@@ -34,22 +73,22 @@ static bool cov_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result) {
     int i = cov_find(address);
     if (i < 0) return false;
     unsigned char *at = (unsigned char *)(uintptr_t)address;
-    if (InterlockedCompareExchange(&cov_state[i], 2, 1) == 1) {
+    LONG state = InterlockedCompareExchange(&cov_state[i], 3, 1);
+    if (state == 1) {
         SEAM(1);
-        DWORD old;
-        if (VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old)) {
-            if (*at == 0xCC) *at = cov_orig[i];
-            VirtualProtect(at, 1, old, &old);
-            FlushInstructionCache(GetCurrentProcess(), at, 1);
-        }
+        cov_restore(i);
         LONG n = InterlockedIncrement(&cov_hits);
         cov_order[(uint32_t)(n - 1) % COV_MAX] = address;
+        InterlockedExchange(&cov_state[i], 2);
+    } else if (state == 3) {
+        /* Another thread (a hit or a release) owns the byte and is putting it back: run the int3 again. */
+        SwitchToThread();
     } else if (*at == 0xCC) {
         /* Not ours to claim: this line is not armed (idle, hit, or released to another tool), and the 0xCC there
          * now belongs to someone else (a breakpoint, a probe, a `to` or trace site). Re-running it would loop. */
         return false;
     }
-    /* Ours, or a trap in flight whose byte another thread (or disarm) already put back: run the original. */
+    /* Ours, in flight, or a trap whose byte another thread (or disarm) already put back: run the original. */
     e->ContextRecord->Eip = address;
     *result = EXCEPTION_CONTINUE_EXECUTION;
     return true;
@@ -67,35 +106,26 @@ static void cov_release_range(uint32_t addr, uint32_t len) {
     for (uint32_t i = 0; i < (uint32_t)cov_count; i++) {
         uint32_t a = cov_addr[i];
         if (a < addr || a - addr >= len) continue;
-        if (InterlockedCompareExchange(&cov_state[i], 0, 1) != 1) continue;
-        SEAM(2);
-        unsigned char *at = (unsigned char *)(uintptr_t)a;
-        DWORD old;
-        if (VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old)) {
-            if (*at == 0xCC) *at = cov_orig[i];
-            VirtualProtect(at, 1, old, &old);
-            FlushInstructionCache(GetCurrentProcess(), at, 1);
-        }
+        cov_release_line((int)i);
     }
 }
 static void cov_write_all(bool arm) {
     probe_suspend();
     for (uint32_t i = 0; i < (uint32_t)cov_count; i++) {
-        if (arm ? cov_state[i] != 0 : cov_state[i] != 1) continue;
+        if (!arm) { /* disarm: through 3 like every other move out of 1; an in-flight line gets its byte back */
+            cov_release_line((int)i);
+            continue;
+        }
+        if (cov_state[i] != 0) continue;
         /* a breakpoint or probe placed on this line after `cov add` owns it now */
-        if (arm && (bp_probe_at(cov_addr[i]) || isite_live(cov_addr[i]))) continue;
+        if (bp_probe_at(cov_addr[i]) || isite_live(cov_addr[i])) continue;
         unsigned char *at = (unsigned char *)(uintptr_t)cov_addr[i];
         DWORD old;
         if (!VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old)) continue;
-        if (arm) {
-            if (*at != 0xCC) {
-                cov_orig[i] = *at;
-                *at = 0xCC;
-                cov_state[i] = 1;
-            }
-        } else if (*at == 0xCC) {
-            *at = cov_orig[i];
-            cov_state[i] = 0;
+        if (*at != 0xCC) {
+            cov_orig[i] = *at;
+            *at = 0xCC;
+            cov_state[i] = 1;
         }
         VirtualProtect(at, 1, old, &old);
     }
@@ -112,6 +142,7 @@ static void op_cov(int argc, char **argv) {
     }
     if (argc == 3 && !strcmp(argv[1], "add")) {
         if (cov_armed) return fail("armed");
+        if (!cov_quiesce()) return fail("busy"); /* rows move below: no hit may be writing its row */
         long length = unhex(argv[2]);
         if (length < 0 || length % 4) return fail("bad_arguments");
         uint32_t added = 0, skipped = 0;
@@ -170,6 +201,7 @@ static void op_cov(int argc, char **argv) {
     }
     if (argc == 2 && !strcmp(argv[1], "reset")) {
         if (cov_armed) return fail("armed");
+        if (!cov_quiesce()) return fail("busy");
         cov_count = 0;
         cov_hits = 0;
         emit("{\"ok\":true}");
