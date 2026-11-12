@@ -20,6 +20,7 @@ import struct
 import time
 from collections import Counter, defaultdict
 
+from .fnv_conv import ConvError
 from .fnv_facts import ACTOR_VALUES
 from .fnv_link import word
 from .fnv_naming import ancestors, common_ancestor, hx, is_a, return_width
@@ -289,13 +290,22 @@ class OracleTools:
         """Quests, cells, worldspaces, packages and weapons from FalloutNV.esm with EditorIDs, as live objects."""
         import sqlite3
         path = self.live.project.state_dir / 'fnv' / 'records.sqlite'
+        missing = ConvError('RECORDS_INDEX_MISSING', 'The record index has no FalloutNV.esm records yet: run '
+                            'fnv_record_find once (any query) to build it, then call again.')
+        if not path.is_file():
+            raise missing
         db = sqlite3.connect(str(path))
         try:
-            rows = db.execute("SELECT r.type, r.local, r.edid FROM records r JOIN files f ON f.id = r.file WHERE "
+            try:
+                rows = db.execute("SELECT r.type, r.local, r.edid FROM records r JOIN files f ON f.id = r.file WHERE "
                               "f.name = 'FalloutNV.esm' AND r.type IN (%s) AND" % ','.join("'%s'" % t for t in FORM_TYPES) + " r.edid IS NOT NULL "
                               "AND r.edid != '' AND (r.flags & 0x20) = 0").fetchall()
+            except sqlite3.OperationalError:     # an empty or older cache: no records table yet
+                raise missing from None
         finally:
             db.close()
+        if not rows:
+            raise missing
         rnd = random.Random(seed)
         by_type = defaultdict(list)
         for t, local, edid in rows:
