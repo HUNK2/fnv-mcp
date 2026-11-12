@@ -378,7 +378,12 @@ class TimeControl:
     def status(self):
         self.require_game()
         snap = self.snapshot(measure=True)
-        state = 'held' if snap['held'] else 'running'
+        if snap['held']:
+            headline = 'The game is held at frame %d' % snap['frame']
+        elif snap['clockCounter'] > 0:      # frames run, game time does not (G7)
+            headline = 'The game clock is paused (frames still run) at frame %d' % snap['frame']
+        else:
+            headline = 'The game is running at frame %d' % snap['frame']
         reasons = ['clock counter %d%s' % (snap['clockCounter'],
                                            ', paused by this tool' if self.paused_by_us else '')]
         reasons.append('fixed step %s fps' % ('%g' % snap['fixedFps'] if snap['fixedFps'] else 'off'))
@@ -387,7 +392,7 @@ class TimeControl:
             reasons.append('%g real fps' % snap['realFps'])
         elif snap['held']:
             reasons.append('no real fps: the gate is held')
-        return verdict('The game is %s at frame %d' % (state, snap['frame']), ', '.join(reasons) + '.',
+        return verdict(headline, ', '.join(reasons) + '.',
                        held=snap['held'], pausedByUs=self.paused_by_us, clockCounter=snap['clockCounter'],
                        fixedStepMs=snap['fixedStepMs'] or None, fixedFps=snap['fixedFps'],
                        multiplier=snap['multiplier'], targetMultiplier=snap['targetMultiplier'],
@@ -449,7 +454,11 @@ class WaitFor:
             extra = {'framesRequested': frames}
         elif seconds is not None:
             snap = self.control.snapshot(measure=True)
-            fps, source = self.rate(snap)
+            if clock == 'game' and snap['clockCounter'] > 0:      # no game time passes (G5)
+                raise ConvError('CLOCK_PAUSED', 'The game clock is paused (clock counter %d), so game seconds do not '
+                                'pass. Next: fnv_time_control resume, or use clock=real.' % snap['clockCounter'],
+                                {'clockCounter': snap['clockCounter']})
+            fps, source = self.rate(snap, clock)
             multiplier = snap['multiplier'] if clock == 'game' else 1.0
             if multiplier <= 0:
                 raise ConvError('BAD_TIMESCALE', 'The time multiplier is %g, so game seconds do not pass. Next: call '
@@ -486,9 +495,10 @@ class WaitFor:
         return _frame(results[2])
 
     @staticmethod
-    def rate(snap):
-        """(frames per real second, where the number came from)."""
-        if snap['fixedFps']:
+    def rate(snap, clock='game'):
+        """(frames per second of `clock`, where the number came from). The fixed step sets game time per frame, so
+        only the game clock uses it; real seconds use the measured frame rate (G6)."""
+        if clock == 'game' and snap['fixedFps']:
             return snap['fixedFps'], 'fixed step'
         if snap['realFps']:
             return snap['realFps'], 'measured'

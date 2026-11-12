@@ -262,11 +262,37 @@ class Game:
         if not fresh and cached and time.monotonic() - cached[0] < self.PROCESS_CACHE_SECONDS:
             return cached[1]
         running = game_processes()
+        self.exiting = False
         if len(running) > 1:
-            raise GameError('SEVERAL_GAMES', 'More than one FalloutNV.exe is running', {'pids': [p for p, _ in running]})
-        found = running[0] if running else None
+            found = self._exiting_game(running)
+            if found is None:
+                raise GameError('SEVERAL_GAMES', 'More than one FalloutNV.exe is running',
+                                {'pids': [p for p, _ in running]})
+            self.exiting = True
+        else:
+            found = running[0] if running else None
         self._proc_cache = (time.monotonic(), found)
         return found
+
+    YOUNG_SECONDS = 5
+
+    def _exiting_game(self, running):
+        """Two FalloutNV.exe while the session's game shuts down (a short-lived second one appears on the exit path,
+        G15): the session's game when the other one is younger than YOUNG_SECONDS or the session's game left its
+        exit note; else None."""
+        ours = self.session().get('pid')
+        mine = [r for r in running if r[0] == ours]
+        others = [r for r in running if r[0] != ours]
+        if len(running) != 2 or not mine:
+            return None
+        now = int((time.time() + 11644473600) * 10 ** 7)          # FILETIME (100 ns since 1601)
+        start = others[0][1]
+        young = start is not None and 0 <= now - start < self.YOUNG_SECONDS * 10 ** 7
+        try:
+            note = self.last_exit()
+        except Exception:  # noqa: BLE001 - no note folder: decide by age
+            note = None
+        return mine[0] if young or (note or {}).get('pid') == ours else None
 
     def forget_process(self):
         self._proc_cache = None
@@ -309,7 +335,7 @@ class Game:
     def status(self):
         proc = self.process()
         session = self.session()
-        out = {'running': bool(proc), 'pid': proc[0] if proc else None,
+        out = {'running': bool(proc), 'pid': proc[0] if proc else None, 'exiting': bool(getattr(self, 'exiting', False)),
                'profile': {'mo2': str(self.mo2_root), 'name': self.profile},
                'session': {k: session.get(k) for k in ('pid', 'launchedAt', 'start', 'ready')}}
         from .fnv_suite import restore_markers

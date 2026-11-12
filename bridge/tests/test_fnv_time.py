@@ -522,7 +522,7 @@ class WaitForTests(TimeTestCase):
         self.assertEqual(out['frames'], 50)
         self.assertEqual(out['rateSource'], 'fixed step')
         out = self.wait.run(seconds=2, clock='real')
-        self.assertEqual(out['estimatedFrames'], 100)
+        self.assertEqual(out['estimatedFrames'], 120)    # real seconds: the measured 60 fps, not the step (G6)
 
     def test_seconds_while_held_assume_60_fps(self):
         self.control.run('hold')

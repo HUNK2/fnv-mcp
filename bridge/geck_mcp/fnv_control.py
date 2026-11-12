@@ -404,6 +404,12 @@ class ControlTools:
         sig = parse_signature(fn.get('signature') or '')
         returns = param_kind(sig['returns']) if sig else 'uint'
         ret = {'float': 'float', 'double': 'double', 'void': 'void', 'bool': 'bool', 'pointer': 'ptr'}.get(returns, 'int')
+        params = [p for p in (sig or {}).get('params') or [] if p.strip() not in ('', 'void')]
+        if sig and '...' not in params and len(args or []) != len(params):
+            # Too many are ignored by the callee; too few are read from whatever lies on the stack (G16).
+            raise LiveError('BAD_ARGUMENTS', '%s takes %d argument(s) (%s), got %d' % (
+                name, len(params), ', '.join(params) or 'none', len(args or [])),
+                {'expected': len(params), 'given': len(args or []), 'signature': fn.get('signature')})
         typed = []
         layout = layout_args(sig)[0] if sig else []
         for i, a in enumerate(args or []):

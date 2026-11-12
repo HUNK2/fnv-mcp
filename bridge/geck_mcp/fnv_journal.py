@@ -37,6 +37,25 @@ class Journal:
         self._records = []          # raw records read so far, in file order
         self._offset = 0
         self._fold = None           # (number of records folded, {id: entry}, [ids in order])
+        self._local = threading.local()   # .ids: entries this thread added inside recording() (PLAN-3 S5.1)
+
+    def recording(self):
+        """Collect the ids of the entries this thread adds until the block ends (a tool call's own changes; other
+        threads' entries are not included). Nested recordings also pass their ids to the outer one."""
+        journal = self
+
+        class _Recording:
+            def __enter__(self):
+                self.outer = getattr(journal._local, 'ids', None)
+                self.ids = journal._local.ids = []
+                return self.ids
+
+            def __exit__(self, *exc):
+                journal._local.ids = self.outer
+                if self.outer is not None:
+                    self.outer.extend(self.ids)
+                return False
+        return _Recording()
 
     # ------------------------------------------------------------------ locking
     def locked(self, timeout=10.0):
@@ -179,6 +198,9 @@ class Journal:
             record = {'id': uuid.uuid4().hex[:12], 'seq': seq, 'time': time.time(), 'undone': False, **stamp, **body}
             atomic_write(self.seq_path, str(seq))
             self._append(record)
+        ids = getattr(self._local, 'ids', None)
+        if ids is not None:
+            ids.append(record['id'])
         return record
 
     def mark_undone(self, ids):

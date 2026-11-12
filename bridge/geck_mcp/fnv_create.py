@@ -21,6 +21,7 @@ import time
 import zipfile
 from pathlib import Path
 
+from .fnv_args import capped
 from .fnv_link import hexs, value_of, word
 from .fnv_live import LiveError
 
@@ -1311,7 +1312,10 @@ class PlaceTools:
         if action == 'check':
             return self.check(kw['ref'])
         if action == 'list':
-            return self.list()
+            placed = self.list()['placed']
+            shown = capped(placed)       # export and remove read list() whole (S5.3)
+            return {'placed': shown['items'], 'total': shown['total'], 'truncated': shown['truncated'],
+                    'changed': False}
         if action == 'remove':
             return self.remove(kw.get('ref'))
         raise ValueError('action is at, array, nudge, rotate, scale, snap, check, list or remove')

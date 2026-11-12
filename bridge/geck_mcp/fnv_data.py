@@ -24,6 +24,7 @@ import zlib
 from pathlib import Path
 
 from .esp import codec
+from .fnv_args import form_id, is_form_id
 from .fnv_facts import ACTOR_VALUES, SCRIPT_BLOCKS
 from .fnv_state import sqlite_connect, write_txn
 
@@ -375,10 +376,9 @@ class DataTools:
     # ------------------------------------------------------------------ fnv_record_show
     def _resolve(self, entries, ref):
         ref = ref.strip()
-        m = re.match(r'^(?:0x)?([0-9A-Fa-f]{8})$', ref)
         local = re.match(r'^(.+\.es[mp]):(?:0x)?([0-9A-Fa-f]{1,6})$', ref, re.I)
-        if m:
-            value = int(m.group(1), 16)
+        if is_form_id(ref):           # 0x14, 14, 00000014: the same forms fnv_live.resolve takes (T6)
+            value = form_id(ref)
             if value >> 24 == 0xFF:
                 raise DataError('RUNTIME_FORM', '%s is a runtime form id (0xFF...): the game made it while running, so '
                                 'no plugin has a record for it. Next: inspect it live with fnv_ref.' % ref)

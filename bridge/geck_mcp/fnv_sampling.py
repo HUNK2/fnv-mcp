@@ -11,6 +11,7 @@ record per event with the frame, the reference's form id and the first six words
 import struct
 import time
 
+from .fnv_args import hex_int
 from .fnv_conv import ConvError
 from .fnv_link import hexs, word
 from .fnv_pred import compile_predicate
@@ -173,7 +174,7 @@ class SinkTools:
     def read(self, since=0, ref=None, limit=500):
         args = ['sink', 'read', word(int(since)), word(min(int(limit), 500))]
         if ref:
-            args.append(word(int(str(ref), 16)))
+            args.append(word(hex_int('ref', ref)))
         out = self.live.link.one(*args)
         if 'records' not in out:
             raise ConvError('SINK_READ_FAILED', 'The companion did not return sink records (%s).' % out.get('error'),

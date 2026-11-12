@@ -5,6 +5,7 @@ decomp's layouts (fnv_facts, engine map). Act tools change the running game; eve
 in state/fnv/journal.jsonl with what is needed to undo it, and saves are backed up before the first change
 of a game session. Act tools refuse unless the project sets fnv.engine_control = "full".
 """
+import contextlib
 import json
 import logging
 import math
@@ -20,6 +21,8 @@ from . import fnv_engine, fnv_facts, fnv_link
 from .fnv_facts import FACTS
 from .fnv_game import Game, GameError
 from .fnv_link import LinkError, element_value, hexs, word
+from .fnv_args import capped, form_id, is_form_id, ranged, readable_type
+from .fnv_conv import next_step
 from .fnv_journal import Journal
 from .fnv_state import GameIdentity
 
@@ -183,9 +186,17 @@ class LiveService:
         with busy.track(name):
             return self._run(name, action, kind)
 
+    # Codes that all mean "no game to talk to": the envelope reports one code for them (PLAN-3 S5.1, T4).
+    # COMPANION_UNREACHABLE joins them only when no game process exists (a running game with a busy pipe keeps it).
+    GAME_NOT_RUNNING_CODES = ('NOT_RUNNING', 'NO_GAME_LOADED', 'GAME_NOT_RUNNING')
+    UNCERTAIN_CODES = ('COMPANION_TIMEOUT', 'COMPANION_DISCONNECTED')
+
     def _run(self, name, action, kind):
         started = time.monotonic()
         operation_id = str(uuid.uuid4())
+        journal = getattr(self, 'journal', None)     # the envelope works even before the journal exists
+        recording = journal.recording() if journal is not None else contextlib.nullcontext([])
+        made = recording.__enter__()
         try:
             if kind == 'act' and getattr(self.project.fnv, 'engine_control', 'read') != 'full':
                 raise LiveError('CONTROL_DISABLED', 'Act tools are off for this project: set fnv.engine_control to '
@@ -194,17 +205,65 @@ class LiveService:
             changed = kind != 'read' and not (isinstance(data, dict) and data.get('changed') is False)
             return {'ok': True, 'operationId': operation_id, 'operation': name, 'projectId': self.project.project_id,
                     'outcome': 'acknowledged' if changed else 'unchanged', 'data': data, 'error': None,
-                    'game': self.identity(), 'elapsedMs': round((time.monotonic() - started) * 1000)}
+                    'game': self._identity_or_none(), 'elapsedMs': round((time.monotonic() - started) * 1000)}
         except Exception as e:  # reported, never raised to the client
-            code = getattr(e, 'code', 'INVALID_ARGUMENT' if isinstance(e, ValueError) else 'FNV_ERROR')
-            uncertain = code in ('COMPANION_TIMEOUT', 'COMPANION_DISCONNECTED') and kind != 'read'
-            return {'ok': False, 'operationId': operation_id, 'operation': name, 'projectId': self.project.project_id,
-                    'outcome': 'outcome_unknown' if uncertain else 'failed_before_change',
-                    'data': getattr(e, 'evidence', None),
-                    'error': {'code': code, 'message': str(e), 'retrySafe': not uncertain,
-                              'recovery': 'Check fnv_status / fnv_journal before retrying' if uncertain else
-                              'Fix the input or the game state (fnv_status) and call again.'},
-                    'game': self.identity(), 'elapsedMs': round((time.monotonic() - started) * 1000)}
+            return self._failure(name, kind, e, operation_id, started, list(made))
+        finally:
+            recording.__exit__(None, None, None)
+
+    def _identity_or_none(self):
+        try:
+            return self.identity()
+        except Exception:  # noqa: BLE001 - the envelope must still be returned
+            return None
+
+    def _envelope_code(self, e):
+        code = getattr(e, 'code', None)
+        if not isinstance(code, str) or not code:
+            return 'INVALID_ARGUMENT' if isinstance(e, ValueError) else 'FNV_ERROR'
+        if code in self.GAME_NOT_RUNNING_CODES:
+            return 'GAME_NOT_RUNNING'
+        if code == 'COMPANION_UNREACHABLE':
+            try:
+                if not self.game.process(fresh=True):
+                    return 'GAME_NOT_RUNNING'
+            except Exception:  # noqa: BLE001 - several games or no process list: keep the companion's code
+                pass
+        return code
+
+    def _failure(self, name, kind, e, operation_id, started, made):
+        """The error envelope. outcome: outcome_unknown when the change may have happened (the companion stopped
+        answering, or an act tool failed with an error that is not one of ours); partial_change when this call's
+        journal entries are still open (part of the change landed; data.journalIds lists them); else
+        failed_before_change."""
+        code = self._envelope_code(e)
+        open_ids = []
+        for entry_id in made:
+            try:
+                entry = self.journal.get(entry_id)
+            except Exception:  # noqa: BLE001 - an unreadable journal: count the entry as open
+                entry = None
+            if entry is None or not entry.get('undone'):
+                open_ids.append(entry_id)
+        uncoded = not isinstance(getattr(e, 'code', None), str) and not isinstance(e, ValueError)
+        if code in self.UNCERTAIN_CODES and (kind != 'read' or open_ids) or uncoded and kind != 'read':
+            outcome, recovery = 'outcome_unknown', 'Check fnv_status / fnv_journal before retrying.'
+        elif open_ids:
+            outcome = 'partial_change'
+            recovery = ('Part of the change was made (data.journalIds): fnv_undo those entries, or check fnv_journal, '
+                        'before calling again.')
+        else:
+            outcome = 'failed_before_change'
+            recovery = next_step(code) or 'Fix the input or the game state (fnv_status) and call again.'
+        data = getattr(e, 'evidence', None)
+        if open_ids:
+            data = dict(data, journalIds=open_ids) if isinstance(data, dict) else \
+                ({'journalIds': open_ids} if data is None else {'evidence': data, 'journalIds': open_ids})
+        return {'ok': False, 'operationId': operation_id, 'operation': name, 'projectId': self.project.project_id,
+                'outcome': outcome, 'data': data,
+                'error': {'code': code, 'message': str(e), 'retrySafe': outcome == 'failed_before_change',
+                          'recovery': recovery},
+                'game': self._identity_or_none(), 'elapsedMs': round((time.monotonic() - started) * 1000)}
 
     def identity(self):
         if self._game is None:
@@ -212,7 +271,10 @@ class LiveService:
         link = self._game.link
         hello = link.hello
         if hello:
-            return {'pid': hello.get('pid'), 'started': hello.get('started'), 'frame': hello.get('frame')}
+            # the newest frame this connection saw: the ping's can be minutes old (G8)
+            frames = [f for f in (hello.get('frame'), getattr(link, 'last_frame', None)) if isinstance(f, int)]
+            return {'pid': hello.get('pid'), 'started': hello.get('started'),
+                    'frame': max(frames) if frames else hello.get('frame')}
         if link.handle is None:
             return None
         # Connected but no ping on this connection yet (a fresh server child, a tool that only sends batches): the
@@ -356,8 +418,8 @@ class LiveService:
         elif PLUGIN_LOCAL.match(ref):
             plugin, local = PLUGIN_LOCAL.match(ref).groups()
             expr = '(BuildRef (GetModIndex "%s") %d)' % (plugin, int(local, 16))
-        elif FORM_ID.match(ref) and (ref.lower().startswith('0x') or len(ref) == 8 or not EDITOR_ID.match(ref)):
-            value = int(FORM_ID.match(ref).group(1), 16)
+        elif is_form_id(ref):          # one parser with the record tools (T6)
+            value = form_id(ref)
             expr = '(BuildRef %d %d)' % (value >> 24, value & 0xFFFFFF)
         elif EDITOR_ID.match(ref):
             expr = ref
@@ -789,8 +851,14 @@ class LiveService:
                 'formIdPrefix': ('%02X' % int(v[1])) if loaded else None}
 
     def events(self, since=0):
+        """The companion's events after `since`, oldest first, at most 200: `next` is the since for the rest."""
         self.ready()
-        return self.link.events(since)
+        out = dict(self.link.events(since))
+        shown = capped(out.get('events') or [])
+        out.update(events=shown['items'], total=shown['total'], truncated=shown['truncated'])
+        if shown['truncated']:
+            out['next'] = shown['items'][-1].get('seq')
+        return out
 
     def script_errors(self, since='last'):
         """Script errors from the console log (with script, mod and message) since the last call."""
@@ -812,16 +880,38 @@ class LiveService:
                 'uses': ['console log (scof) written by the engine companion']}
 
     # ================================================================= milestone 5/6: console and scripts
+    # Console lines fnv_console refuses (G14): the bridge's own tools do these with their bookkeeping (quit log,
+    # session, the dev profile's save slots). Matched on the first word, case-insensitively, also after `ref.`.
+    CONSOLE_REFUSED = {'qqq', 'quitgame', 'exitgame', 'restartgame', 'load', 'loadgame', 'con_loadgame', 'save',
+                       'savegame', 'bat', 'runbatch', 'cow'}
+    CONSOLE_INSTEAD = {'qqq': 'fnv_quit', 'quitgame': 'fnv_quit', 'exitgame': 'fnv_quit', 'restartgame': 'fnv_quit',
+                       'load': 'fnv_launch start=save:<name>', 'loadgame': 'fnv_launch start=save:<name>',
+                       'con_loadgame': 'fnv_launch start=save:<name>', 'save': 'fnv_test_save action=save',
+                       'savegame': 'fnv_test_save action=save', 'cow': 'fnv_move',
+                       'bat': 'fnv_do (one console step per line)', 'runbatch': 'fnv_do (one console step per line)'}
+
+    @classmethod
+    def console_refused(cls, line):
+        """The refused command word of a console line, or None."""
+        first = (line or '').strip().split(None, 1)[0] if (line or '').strip() else ''
+        command = first.rsplit('.', 1)[-1].lower()
+        return command if command in cls.CONSOLE_REFUSED else None
+
     def run_console(self, line, ref=None):
-        self.ready()
         if '\n' in line or len(line) > 500:
             raise ValueError('One console line of at most 500 characters')
+        refused = self.console_refused(line)
+        if refused:
+            raise LiveError('CONSOLE_REFUSED', '%s is not run through fnv_console. Next: use %s.'
+                            % (refused, self.CONSOLE_INSTEAD[refused]), {'command': refused})
+        self.ready()
         r = self.resolve(ref) if ref else None
         self.changing('console: ' + line)
         result = self.console(line, r['ptr'] if r else 0)
         self.journal.add({'kind': 'console', 'line': line, 'ref': r['formId'] if r else None, 'undo': None,
                           'output': result['output'][:20]})
-        return result
+        shown = capped(result['output'], 400)
+        return dict(result, output=shown['items'], outputTotal=shown['total'], outputTruncated=shown['truncated'])
 
     def run_script(self, source, ref=None):
         self.ready()
@@ -999,15 +1089,17 @@ class LiveService:
     def _encode(self, kind, value):
         if kind in SIMPLE_TYPES or kind.endswith('*'):
             fmt, _ = SIMPLE_TYPES.get(kind, ('<I', 4))
-            if fmt in ('<f', '<d'):
-                return struct.pack(fmt, float(value))
             if fmt == '<?':
                 return struct.pack(fmt, bool(value))
-            number = int(value, 0) if isinstance(value, str) else int(value)
-            return struct.pack(fmt, number)
+            # range-checked per type: an out-of-range value is INVALID_ARGUMENT naming the range (G12)
+            return struct.pack(fmt, ranged('value', value, {'<f': 'f32', '<d': 'f64'}.get(fmt, fmt)))
         if kind == 'bytes':
-            return bytes.fromhex(str(value))
-        raise ValueError('Cannot write a value of type %r (give as_type: u8/u16/u32/i32/f32/f64/ptr/bytes)' % kind)
+            try:
+                return bytes.fromhex(str(value))
+            except ValueError:
+                raise ValueError('value: expected hex bytes such as "0A FF 00" for bytes, got %r' % (value,)) from None
+        raise ValueError('Cannot write a value of type %s (give as_type: u8/u16/u32/i32/f32/f64/ptr/bytes)'
+                         % readable_type(kind))
 
     def mem_write(self, target, value, path=None, as_type=None, cls=None, note=None):
         self.ready()
@@ -1475,8 +1567,9 @@ class LiveService:
         left = [e['id'] for e in self.journal.entries(since_seq=since, process=ident)
                 if not e['undone'] and not e.get('undo')]
         skipped = {'count': len(left), 'ids': left[::-1][:50]}
-        return {'reverted': sum(r['undone'] for r in results), 'results': results, 'notUndoable': skipped,
-                'changed': any(r['undone'] for r in results)}
+        shown = capped(results)        # one row per entry: a long session would make the reply too big (S5.3)
+        return {'reverted': sum(r['undone'] for r in results), 'results': shown['items'], 'total': shown['total'],
+                'truncated': shown['truncated'], 'notUndoable': skipped, 'changed': any(r['undone'] for r in results)}
 
 
 # -- Undo ops (PLAN-3 S3.1) -------------------------------------------------------------------------------------

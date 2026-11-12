@@ -93,7 +93,7 @@ class CoverageTools:
     def stop(self):
         self.live.ready()
         if not self.active:
-            raise ConvError('NOT_RUNNING', 'No coverage run. Next: fnv_coverage start.')
+            raise ConvError('NOT_STARTED', 'No coverage run. Next: fnv_coverage start.')
         hits = self._hits()
         self.live.link.one('cov', 'disarm')
         self.live.link.one('cov', 'reset')

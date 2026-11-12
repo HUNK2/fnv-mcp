@@ -50,6 +50,7 @@ def verdict(text, reason=None, **evidence):
 # Next steps for error codes that already exist in the code base (fnv_live, fnv_game, fnv_link, fnv_engine).
 # The symbol database has no code yet: add it here when fnv_symdb arrives.
 NEXT_STEPS = {
+    'GAME_NOT_RUNNING': 'fnv_launch, then call again.',
     'NOT_RUNNING': 'The game is not running: call fnv_launch.',
     'GAME_EXITED': 'The game exited: call fnv_launch (fnv_crash_explain shows why when it crashed).',
     'GAME_STARTING': 'The game is still starting: wait, then call fnv_status.',

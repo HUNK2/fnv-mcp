@@ -505,7 +505,8 @@ class AgentTools:
             out.append({'item': item['label'], 'first': points[0]['value'] if points else None,
                         'last': points[-1]['value'] if points else None, 'changes': max(0, len(points) - 1),
                         'min': min(numbers) if numbers else None, 'max': max(numbers) if numbers else None,
-                        'timeline': points[:200], 'address': item.get('address')})
+                        'timeline': points[:500], 'timelineTotal': len(points), 'timelineTruncated': len(points) > 500,
+                        'address': item.get('address')})
         frames = (last_frame - first_frame) if first_frame is not None and last_frame is not None else None
         return {'samples': samples, 'seconds': round(time.monotonic() - started, 2), 'frames': frames,
                 'stoppedBy': stopped_by, 'untilMet': bool(stopped_by) if until else None, 'items': out,

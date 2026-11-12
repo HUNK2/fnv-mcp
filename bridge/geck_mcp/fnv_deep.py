@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import fnv_engine, fnv_procmem, fnv_symdb
 from .fnv_facts import SCRIPT_BLOCKS
+from .fnv_args import capped
 from .fnv_link import hexs, word
 from .fnv_live import LiveError, _fid, _num
 
@@ -696,8 +697,9 @@ class DeepTools:
                                        'targets': [h['target'] for h in targets], 'undo': None})
             return {'removed': [h['label'] for h in targets]}
         engine = self.live.engine()
+        shown = capped(self.hooks())
         return {'hooks': [dict(self._hook_out(h), function=engine.summary(int(h['target'], 16)).get('name'))
-                          for h in self.hooks()]}
+                          for h in shown['items']], 'total': shown['total'], 'truncated': shown['truncated']}
 
     @staticmethod
     def _hook_out(h):

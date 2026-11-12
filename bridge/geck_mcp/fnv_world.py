@@ -210,6 +210,18 @@ class WorldTools:
             if rounded:
                 row.update(rounded=True, given=value)
             changed.append(row)
+        if changed:
+            # G10: the values read after the writes; a set without a query lists only the changed globals
+            written = {row['editorId'] for row in changed}
+            if not query:
+                out = [e for e in out if e['editorId'] in written]
+            for e in out:
+                if e['editorId'] in written:
+                    raw = self.live.reads([(e['ptr'] + 0x24, 4)])[0]
+                    if raw:
+                        value = struct.unpack('<f', raw)[0]
+                        e['value'] = int(value) if e['type'] in ('short', 'long') and float(value).is_integer() \
+                            else _r(value, 6)
         for e in out:
             e.pop('ptr', None)
         return {'count': len(out), 'globals': out[:limit], 'more': len(out) > limit, 'changed': changed or None,

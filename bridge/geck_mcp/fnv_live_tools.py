@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from . import fnv_link
+from .fnv_args import hex_int
 from .fnv_game import Game
 from .fnv_data import DataTools
 from .fnv_deep import DeepTools
@@ -352,12 +353,17 @@ def register(server, project, annotations, result_type, maintain=True):
             return live.run(name, fn, kind)
         return call
 
-    async def invoke(name, fn, kind='read', action=None):
+    async def invoke(name, fn, kind='read', action=None, shield=None, attach=None):
+        """Run fn in live.run's envelope on a worker thread. shield: never abandon the call on cancel (default: act
+        calls only). attach(): more content items for the reply (an image), built after the call."""
         kind = gated_kind(name, action, kind)      # MUTATING_ACTIONS decides, not the call site (T1)
-        with anyio.CancelScope(shield=kind != 'read'):
-            result = await anyio.to_thread.run_sync(partial(live.run, name, fn, kind), abandon_on_cancel=kind == 'read')
-        return CallToolResult(content=[TextContent(type='text', text=json.dumps(result, default=str))],
-                              structured_content=json.loads(json.dumps(result, default=str)), is_error=not result.get('ok', True))
+        shield = kind != 'read' if shield is None else shield
+        with anyio.CancelScope(shield=shield):
+            result = await anyio.to_thread.run_sync(partial(live.run, name, fn, kind),
+                                                    abandon_on_cancel=kind == 'read' and not shield)
+        content = [TextContent(type='text', text=json.dumps(result, default=str))] + (list(attach()) if attach else [])
+        return CallToolResult(content=content, structured_content=json.loads(json.dumps(result, default=str)),
+                              is_error=not result.get('ok', True))
 
     Ref = Annotated[str, Field(min_length=1, max_length=200, description=(
         'player | crosshair | form id (0x00000014, 000A3E7C) | Plugin.esp:LOCALID | EditorID'))]
@@ -664,11 +670,13 @@ def register(server, project, annotations, result_type, maintain=True):
         it is held for exactly N frames through the input injector, and the call returns when they have run; use it
         with fnv_time_control step to press a key on a known frame. Controls 0 to 12 go through the engine's own force
         call; other controls by their bound key or mouse button."""
-        if key_name is not None:
-            from .fnv_hands import scan_code
-            key = scan_code(key_name)
-        return await invoke('fnv_input', lambda: live.input(action, control, key, duration_ms, target, frames=frames,
-                                                            button=button, mouse=mouse), 'act')
+        def press():
+            code = key
+            if key_name is not None:          # inside the envelope: an unknown name is INVALID_ARGUMENT (T2)
+                from .fnv_hands import scan_code
+                code = scan_code(key_name)
+            return live.input(action, control, code, duration_ms, target, frames=frames, button=button, mouse=mouse)
+        return await invoke('fnv_input', press, 'act')
 
     @server.tool(annotations=act)
     async def fnv_script_set(target: Annotated[str, Field(min_length=1, max_length=200)],
@@ -960,17 +968,17 @@ def register(server, project, annotations, result_type, maintain=True):
         bAllowScreenShot=1 in the dev profile), else captures the game window."""
         import base64
         from mcp.types import ImageContent
-        with anyio.CancelScope(shield=True):
-            result = await anyio.to_thread.run_sync(partial(live.run, 'fnv_screenshot',
-                                                            lambda: agent.screenshot(name, max_width, method), 'read'))
-        content = [TextContent(type='text', text=json.dumps(result, default=str))]
-        path = (result.get('data') or {}).get('path') if result.get('ok') else None
-        if path:
-            with open(path, 'rb') as f:
-                content.append(ImageContent(type='image', mimeType='image/png',
-                                            data=base64.b64encode(f.read()).decode('ascii')))
-        return CallToolResult(content=content, structured_content=json.loads(json.dumps(result, default=str)),
-                              is_error=not result.get('ok', True))
+        image = []
+
+        def shot():
+            data = agent.screenshot(name, max_width, method)
+            path = (data or {}).get('path')
+            if path:                          # read inside the envelope: a missing file is an error reply (T2)
+                with open(path, 'rb') as f:
+                    image.append(base64.b64encode(f.read()).decode('ascii'))
+            return data
+        return await invoke('fnv_screenshot', shot, 'read', shield=True,
+                            attach=lambda: [ImageContent(type='image', mimeType='image/png', data=b) for b in image])
 
     @server.tool(annotations=act)
     async def fnv_test_save(action: Literal['save', 'load', 'list', 'delete'] = 'list',
@@ -1344,7 +1352,8 @@ def register(server, project, annotations, result_type, maintain=True):
         harvests: list them."""
         def action_fn():
             selection = {k: v for k, v in (('statuses', statuses), ('addresses', functions if action in ('plan', 'install') else None),
-                                           ('start', int(start, 16) if start else None), ('end', int(end, 16) if end else None),
+                                           ('start', hex_int('start', start) if start else None),
+                                           ('end', hex_int('end', end) if end else None),
                                            ('cls', cls), ('callees_of', callees_of), ('limit', limit), ('part', part))
                          if v is not None}
             if action == 'plan':
@@ -1623,10 +1632,11 @@ def register(server, project, annotations, result_type, maintain=True):
         means, known traps, checks that prove the fix. find: search the tool names and descriptions and the guides
         ("which tool for X"). engine: search the saved engine research notes (fnv.research_dir or FNV_RESEARCH_DIR)
         and the recorded engine facts for how the engine does something. Needs no running game."""
-        from .fnv_guide import GuideTools
-        research = getattr(project.fnv, 'research_dir', None) if project.fnv else None
-        guide = GuideTools(str(research) if research else None)
-        return await invoke('fnv_guide', lambda: guide.run(action, words, limit, offset, brief))
+        def answer():
+            from .fnv_guide import GuideTools
+            research = getattr(project.fnv, 'research_dir', None) if project.fnv else None
+            return GuideTools(str(research) if research else None).run(action, words, limit, offset, brief)
+        return await invoke('fnv_guide', answer)
 
     @server.tool(annotations=read)
     async def fnv_setup_check() -> result_type:
