@@ -55,6 +55,19 @@ def process_started(pid):
         kernel32.CloseHandle(handle)
 
 
+def process_alive(pid):
+    """Is process `pid` still running? Through its handle (microseconds), for the launch loops that used tasklist
+    on every poll. A process that refuses the query is counted as alive."""
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    handle = kernel32.OpenProcess(0x00100000 | 0x1000, False, pid)  # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ctypes.get_last_error() == 5        # ERROR_ACCESS_DENIED: it exists; anything else: gone
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == 0x102     # WAIT_TIMEOUT: not signalled, still running
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def post_close(pid):
     """Send WM_CLOSE to the game's top-level windows (what closing the window does)."""
     user32 = ctypes.windll.user32
@@ -567,7 +580,7 @@ class Game:
     # BSWin32GameSound::CopyFrom). Sent at frame 149 (3 s) or 506 (10 s) it was in the cell at once; disk reads had
     # settled in both cases. So a coc or save start lets the menu run MENU_SETTLE_FRAMES frames first (at most
     # MENU_SETTLE_SECONDS).
-    MENU_SETTLE_FRAMES = 300
+    MENU_SETTLE_FRAMES = 200          # coc at the menu's frame 133 stalled, at 149 it did not (single runs)
     MENU_SETTLE_SECONDS = 10.0
     MENU_SETTLE_POLL = 0.5
 
@@ -626,7 +639,7 @@ class Game:
         dismissed = []
         phases, began = [], time.monotonic()
         while time.monotonic() < deadline:
-            if pid and not any(p == pid for p, _ in game_processes()):
+            if pid and not process_alive(pid):
                 raise GameError('GAME_EXITED', 'The game exited while loading', {'crash': self.crash_summary()})
             phase, detail = self.phase()
             if not phases or phases[-1][1] != phase:
@@ -659,13 +672,13 @@ class Game:
 
     def _wait(self, probe, deadline, code, message, pid=None):
         while time.monotonic() < deadline:
-            if pid and not any(p == pid for p, _ in game_processes()):
+            if pid and not process_alive(pid):
                 raise GameError('GAME_EXITED', 'The game exited during startup',
                                 {'crash': self.crash_summary()})
             value = probe()
             if value:
                 return value
-            time.sleep(0.5)
+            time.sleep(0.2)
         raise GameError(code, message)
 
     def ensure_running(self, start='menu', timeout=180):

@@ -1787,7 +1787,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Severity: medium
 - Confidence: confirmed live 2026-11-13, measured
 - What happens: the launch sent `coc <cell>` (or `load "<save>"`) as soon as the main menu showed, at the menu's frame ~2-20. The game then ran no frame for ~170-200 s (three runs: 190, 197, 178 s). Main-thread stack samples every 4 s: the first ~20 s in IOManager::LoadAllQueuedPriorities, then 85 of ~100 samples in the audio queue (Owner::AddSound -> BSWin32GameSound::CopyFrom / SetVolume -> DirectSound -> AUDIOSES -> an RPC to the Windows audio service) at ~3% of a core, no disk reads. The same coc sent at the menu's frame 149 (3 s) or 506 (10 s) reached the cell at once (1.7 s); disk reads had settled in the slow and the fast runs alike, so unfinished startup loading is not the cause. Why the first frames matter is not known.
-- Fix: a coc or save start waits until the menu has run 300 frames (at most 10 s) before sending the line (`wait_menu_settled`; the launch result has menuSettle). Live after the fix: coc launch 16.3 s (was ~190 s), save launch through fnv_restart 16.8 s.
+- Fix: a coc or save start waits until the menu has run 200 frames (at most 10 s) before sending the line (`wait_menu_settled`; the launch result has menuSettle). A coc at the menu's frame 133 still stalled, at 149 it did not (single runs). The launch loops check the game through its process handle instead of tasklist on every poll. Live after the fix: coc launch 14.3 / 14.2 / 13.9 s (was ~190 s), save launch through fnv_restart 16.8 s (with the first 300-frame wait).
 - Status: fixed
 
 ## Round 2: Low
