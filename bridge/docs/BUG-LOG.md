@@ -1376,7 +1376,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | ID | Severity | Status | Bug | Where |
 |---|---|---|---|---|
 | R1 | high | fixed (live check pending) | Coverage: two threads that reach the same coverage line at once crash the game (B1 fix) | `native/engine/w6_cov.c:31-55` |
-| R2 | high | open | The F5 fix makes bisect unable to find a plugin that crashes the game while it loads (F5) | `geck_mcp/fnv_suite.py:75-83` |
+| R2 | high | fixed | The F5 fix makes bisect unable to find a plugin that crashes the game while it loads (F5) | `geck_mcp/fnv_suite.py:75-83` |
 | R3 | high | open | The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3) | `geck_mcp/fnv_suite.py:131-146` |
 | R4 | high | open | Hot reload kills a cancelled call that is still running in the old server (A5 fix) | `geck_mcp/supervisor.py:331-338` |
 | T1 | high | open | The engine_control gate is bypassed by tools registered as control or read | `fnv_live.py:167` |
@@ -1470,7 +1470,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - So round 0 (every mod on) returns "Inconclusive" and stops. Any half that contains the culprit stops the same way.
   - In the repro (4 mods, M2 crashes at load) the result is culprit None after 1 round.
 - **Fix idea:** Count GAME_EXITED, or any prepare failure whose evidence has `crash`, as a fail. Call a run inconclusive only when a master is missing: keep each half closed under its masters, or check `missingMasters` in the load order before launching.
-- Status: open
+- Status: fixed (S1.2). `BisectTools._classify` makes a run inconclusive only when every failure is in prepare and none is a crash or hang at load (`CRASH_CODES` GAME_EXITED, GAME_CRASHED, NOT_IN_GAME, or crash evidence); a load crash is a failure to bisect. When every run crashed, even with every candidate off, the verdict says so. At plugins level each tested half is closed under its masters (TES4 MAST), and suspects that are masters of each other stop the halving. Tests: `tests/test_stab_s1.py`.
 
 ### R3. The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3)
 

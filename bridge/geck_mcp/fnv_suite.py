@@ -24,6 +24,9 @@ from pathlib import Path
 from .fnv_conv import ConvError, verdict
 
 PROTECTED_MODS = ('fnvmcp engine companion', 'xnvse data', 'jip ln nvse plugin')
+# A prepare failure with one of these codes is the game crashing or hanging while it loads, which is exactly what a
+# bisect may be hunting (R2): it counts as a failure, not as a run that never got going.
+CRASH_CODES = ('GAME_EXITED', 'GAME_CRASHED', 'NOT_IN_GAME')
 BASE_PLUGINS = ('falloutnv.esm', 'deadmoney.esm', 'honesthearts.esm', 'oldworldblues.esm', 'lonesomeroad.esm',
                 'gunrunnersarsenal.esm', 'classicpack.esm', 'mercenarypack.esm', 'tribalpack.esm', 'caravanpack.esm')
 
@@ -36,6 +39,8 @@ class BisectTools:
         self.quit_game = quit_game or (lambda: self.live.game.quit())
         self._busy = threading.Lock()               # one bisect at a time: it owns the profile and the plugin file
         self.inconclusive = False
+        self._masters = {}                          # plugins level: name.lower() -> its masters
+        self._runs = []                             # classification and crash flag of every run of this bisect
 
     def _candidates(self, level, keep):
         if level == 'records':
@@ -72,15 +77,62 @@ class BisectTools:
         else:
             self.records.profile_set(None, changes, self.live.game, False)
 
+    @staticmethod
+    def _is_crash(report):
+        if report.get('crash'):
+            return True
+        for f in report.get('failures') or []:
+            evidence = f.get('evidence') if isinstance(f.get('evidence'), dict) else {}
+            if f.get('code') in CRASH_CODES or evidence.get('crash') or f.get('crash'):
+                return True
+        return False
+
+    @staticmethod
+    def _classify(report):
+        """pass, fail, or inconclusive. A run is inconclusive only when it never got going (every failure is in
+        prepare, e.g. the launch was blocked or a master was missing) and none of them is a crash or a hang at load:
+        a plugin that crashes the game while it loads is a culprit to find (R2), not noise."""
+        if report.get('passed'):
+            return 'pass'
+        failures = report.get('failures') or []
+        if failures and all(f.get('phase') == 'prepare' for f in failures) and not BisectTools._is_crash(report):
+            return 'inconclusive'
+        return 'fail'
+
     def _passes(self, scenario):
         report = self.runner_factory().run(data=dict(scenario))
-        passed = bool(report.get('passed'))
-        failures = report.get('failures') or []
-        # A run that never got going (launch failed, a master was switched off under its dependent) says nothing
-        # about the scenario: every failure is phase 'prepare'.
-        self.inconclusive = (not passed and bool(failures) and not report.get('crash')
-                             and all(f.get('phase') == 'prepare' for f in failures))
-        return passed, report.get('summary') or report.get('failures')
+        kind = self._classify(report)
+        self.inconclusive = kind == 'inconclusive'
+        self._runs.append((kind, self._is_crash(report)))
+        return kind == 'pass', report.get('summary') or report.get('failures')
+
+    def _plugin_masters(self, names):
+        """name.lower() -> the plugin's masters (TES4 MAST), for the plugins in the active load order."""
+        from .fnv_data import load_order, plugin_masters
+        entries = load_order(self.live.project, self.records.data._live_plugins())
+        paths = {e['name'].lower(): e.get('path') for e in entries}
+        out = {}
+        for name in names:
+            path = paths.get(name.lower())
+            try:
+                out[name.lower()] = plugin_masters(path) if path else []
+            except (OSError, ValueError):
+                out[name.lower()] = []
+        return out
+
+    def _close_under_masters(self, half, everything):
+        """half plus every candidate it needs as a master (transitively), in candidate order, so no tested set has a
+        plugin on without its master (which the game reports as a load failure, not as the plugin's fault)."""
+        lower = {x.lower(): x for x in everything}
+        on = {x.lower() for x in half}
+        todo = list(on)
+        while todo:
+            for master in self._masters.get(todo.pop(), []):
+                m = master.lower()
+                if m in lower and m not in on:
+                    on.add(m)
+                    todo.append(m)
+        return [x for x in everything if x.lower() in on]
 
     def _plugin_file(self):
         from .fnv_data import load_order
@@ -211,6 +263,11 @@ class BisectTools:
     def _bisect_rounds(self, level, steps, start, everything, max_rounds):
         scenario = {'name': 'bisect', 'start': start, 'steps': list(steps), 'relaunch_on_crash': True}
         rounds = []
+        self._runs = []
+        self._masters = self._plugin_masters(everything) if level == 'plugins' else {}
+
+        def closed(names):
+            return self._close_under_masters(names, everything) if level == 'plugins' else list(names)
         self._set(level, everything, [])
         ok, why = self._passes(scenario)
         rounds.append({'round': 0, 'off': [], 'passed': ok})
@@ -223,6 +280,10 @@ class BisectTools:
         self._set(level, [], everything)
         ok, why = self._passes(scenario)
         rounds.append({'round': 0, 'off': list(everything), 'passed': ok})
+        if not ok and self._runs and all(crash for _, crash in self._runs):
+            return verdict('Every tested set crashed the game, even with every candidate off: the crash does not '
+                           'come from one of the %ss' % level[:-1], str(why), rounds=rounds, candidates=everything,
+                           culprit=None)
         if not ok:
             return verdict('The scenario fails even with every candidate off: the cause is not one of them'
                            if not self.inconclusive else 'Inconclusive: the game did not run the scenario with '
@@ -230,7 +291,9 @@ class BisectTools:
         suspects = list(everything)
         n = 1
         while len(suspects) > 1 and n <= max_rounds:
-            half = suspects[:len(suspects) // 2]
+            half = closed(suspects[:len(suspects) // 2])     # plugins: with the masters they need
+            if all(x in half for x in suspects):
+                break                            # the suspects are masters of each other: no half splits them
             rest = [x for x in everything if x not in half]
             self._set(level, half, rest)         # only the first half of the suspects on
             ok, why = self._passes(scenario)
@@ -239,13 +302,14 @@ class BisectTools:
                 return verdict('Inconclusive at round %d: the game did not run the scenario with this half on '
                                '(a master switched off under its dependent?); %d suspects left' % (n, len(suspects)),
                                str(why), suspects=suspects, rounds=rounds, candidates=everything, culprit=None)
-            suspects = half if not ok else suspects[len(suspects) // 2:]
+            suspects = [x for x in suspects if (x in half) != ok]
             n += 1
         culprit = suspects[0] if len(suspects) == 1 else None
         confirmed = None
         if culprit and len(everything) > 1:
             # The last step was never observed: run with only the culprit on, and it must fail.
-            self._set(level, [culprit], [x for x in everything if x != culprit])
+            alone = closed([culprit])
+            self._set(level, alone, [x for x in everything if x not in alone])
             ok, why = self._passes(scenario)
             rounds.append({'round': 0, 'on': [culprit], 'confirm': True, 'passed': ok})
             confirmed = (not ok) and not self.inconclusive
