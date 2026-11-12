@@ -24,7 +24,8 @@ class Round2Tests(LiveCase):
         self.ok('fnv_undo')
         self.assertAlmostEqual(pose()[2], before[2], delta=1, msg='the export pose kept the undone nudge')
 
-    @unittest.expectedFailure                     # G4: open (the reply cap is S5.3, the journal part S2)
+    # G4: the journal part is fixed (S2.6: notUndoable is this game's {count, newest 50 ids}); the general reply
+    # cap is S5.4
     def test_g4_revert_all_reply_small(self):
         self.ok('fnv_spawn', form=CAPS, count=1, distance=100)
         envelope = self.call('fnv_revert_all')
