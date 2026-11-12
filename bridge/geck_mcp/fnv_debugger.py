@@ -164,6 +164,7 @@ class Debugger:
         self.next_number = 1
         self.frozen = []
         self.pending_to = set()          # temporary `to` sites left armed (a timeout, or another stop came first)
+        self.stop_breaks = {}            # stop seq -> the break number it was taken for (kept after a clear; G13)
         # One lock for everything that picks a bp id or a predicate slot and then sets it: shared with fnv_flow,
         # fnv_blame and the script debugger, since tool calls run on parallel worker threads.
         self.lock = threading.RLock()
@@ -284,7 +285,17 @@ class Debugger:
             raise ConvError('COMPANION_REFUSED', 'The engine companion did not list its stops (%s). Next: call '
                             'fnv_status; if the companion is old, call fnv_companion_install.'
                             % (result.get('error') or 'no reason given'), result)
-        return sorted(result['stops'], key=lambda s: s['seq'])
+        stops = sorted(result['stops'], key=lambda s: s['seq'])
+        for stop in stops:
+            if stop.get('seq') not in self.stop_breaks and stop.get('kind') in ('hook', 'bp'):
+                hit = self._break_of(stop)
+                if hit:
+                    self.stop_breaks[stop['seq']] = hit['number']
+        return stops
+
+    def _break_of(self, stop):
+        return next((b for b in self.breaks.values() if b.get('id') == stop.get('id')
+                     and b['mechanism'] in ('hook', 'hw', 'int3')), None)
 
     def _current(self):
         """The latest stop; the game must be stopped by the debugger."""
@@ -714,10 +725,15 @@ class Debugger:
     def _why(self, stop):
         kind = stop.get('kind')
         if kind in ('hook', 'bp'):
-            hit = next((b for b in self.breaks.values() if b.get('id') == stop.get('id')
-                        and b['mechanism'] in ('hook', 'hw', 'int3')), None)
-            return ('break %d' % hit['number'] if hit else 'break %s' % stop.get('id')) + \
-                   (' (hook on the function entry)' if kind == 'hook' else ' (trap)')
+            hit = self._break_of(stop)
+            if hit:
+                self.stop_breaks.setdefault(stop.get('seq'), hit['number'])
+                name = 'break %d' % hit['number']
+            elif stop.get('seq') in self.stop_breaks:      # the break was cleared while this stop stayed parked
+                name = 'break %d (cleared)' % self.stop_breaks[stop['seq']]
+            else:
+                name = 'a cleared break'
+            return name + (' (hook on the function entry)' if kind == 'hook' else ' (trap)')
         if kind == 'step':
             return 'single step'
         if kind == 'fault':

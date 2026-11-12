@@ -1402,7 +1402,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | G10 | low | fixed | fnv_globals set returns the whole unfiltered list, with the values from before the write | `geck_mcp fnv_globals` |
 | G11 | low | fixed | fnv_hook_set: with a limit, actionHits counts every call and read says every call was changed | `native/engine/fnvmcp_engine.c:580-581` |
 | G12 | low | fixed | fnv_mem_write: an out-of-range value is FNV_ERROR, and setting types show as mangled names | `geck_mcp fnv_mem_write` |
-| G13 | low | open | After break clear, a stop that is still parked is described as "break 0" | `geck_mcp/fnv_debugger.py` |
+| G13 | low | fixed | After break clear, a stop that is still parked is described as "break 0" | `geck_mcp/fnv_debugger.py` |
 | G14 | low | fixed | fnv_console runs qqq (and other quit/load lines) unguarded; the quit is then traced as not asked by the bridge | `geck_mcp/fnv_live.py:235` |
 | G15 | low | fixed | fnv_status fails with SEVERAL_GAMES while a game is exiting | `geck_mcp/fnv_game.py` |
 | G16 | low | fixed | fnv_engine_get ignores extra arguments | `geck_mcp/fnv_control.py:396-404` |
@@ -1879,7 +1879,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: break set on Actor::GetLevel (break 1), stopped, break op=clear, status -> "Stopped in Actor::GetLevel ...: break 0 (trap)". Break 0 does not exist.
 - Fix idea: keep the break number in the stop record when it is taken, or say "a cleared break".
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: the debugger remembers the break number of each stop when it is first listed; a stop whose break was cleared reads 'break N (cleared)', or 'a cleared break' when it was never seen before the clear (S6.5, test_stab_s6a).
 
 ### G14. fnv_console runs qqq (and other quit/load lines) unguarded; the quit is then traced as not asked by the bridge
 

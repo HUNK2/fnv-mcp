@@ -248,5 +248,30 @@ class HookReadNoteTests(unittest.TestCase):
         self.assertIn('2 of the 3', out['resultNote'])
 
 
+class StopBreakNumberTests(unittest.TestCase):
+    """G13: after break clear, a stop still parked was described as "break 0"."""
+
+    def setUp(self):
+        from test_fnv_debug import DebugTestBase
+        base = DebugTestBase('setUp')
+        base.setUp()
+        self.addCleanup(base.doCleanups)
+        self.dbg = base.dbg
+        self.dbg.breaks = {1: {'number': 1, 'id': 0, 'mechanism': 'int3', 'location': 'Actor::GetLevel'}}
+        self.stop = {'seq': 5, 'kind': 'bp', 'id': 0, 'eip': '0x00500000', 'thread': 7}
+        self.dbg.link.stops = [self.stop]
+
+    def test_stop_keeps_break_number_after_clear(self):
+        self.dbg._stops()                              # the stop is listed while break 1 exists
+        self.dbg.breaks = {}                           # break op=clear
+        self.assertEqual(self.dbg._why(self.stop), 'break 1 (cleared) (trap)')
+
+    def test_unknown_cleared_break_is_not_break_0(self):
+        self.dbg.breaks = {}
+        why = self.dbg._why(self.stop)
+        self.assertNotIn('break 0', why)
+        self.assertIn('cleared', why)
+
+
 if __name__ == '__main__':
     unittest.main()
