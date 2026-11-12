@@ -2252,3 +2252,57 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: `parse_start` checks cell and save names only on the launch path. With the game running, `start: {coc: "bad;cell"}` became the console line `coc bad;cell` (scheduled as is), so any text reached the console, and the run then waited for a cell that never loads.
 - Fix: `prepare` runs `parse_start` on the start before anything else: BAD_CELL, BAD_SAVE or SAVE_MISSING, and nothing is sent.
 - Status: fixed (S4 review pass)
+
+## Round 3 (PLAN-3 S7 exit-gate audit, 2026-11-13)
+
+Four fresh Opus reviewers, one per area, read-only. Full findings (file:line, sequence, fix idea) are in
+[audit3/](audit3/): state.md (U), companion.md (K), contract.md (W), parsers.md (X). N22 and N23 came from the
+gate's CI and suite runs. Entries get a detail section when they are fixed.
+
+| ID | Severity | Status | Bug | Where |
+|---|---|---|---|---|
+| N22 | medium | open | fnv_procmem / fnv_perf bind msvcrt and ctypes.WinDLL at import: the server cannot import on macOS/Linux (the upstream Wine path); posix CI red since fnv-mcp began | `geck_mcp/fnv_procmem.py:8, fnv_perf.py:27` |
+| N23 | low | open | test_supervisor BusyReloadTests fail under heavy CPU load (cancel reaches in_flight late); pass alone | `tests/test_supervisor.py:207` |
+| U1 | high | open | Out-of-order undo is guarded only for place_adjust, time fixed/speed and hot swaps: memory writes, patches, settings, AVs, positions on one target end with the wrong value | `audit3/state.md H1` |
+| U2 | medium | open | Undoing a clock pause made by another server is marked undone while the clock stays paused | `audit3/state.md M1` |
+| U3 | medium | open | A hot-swap undo whose reply times out after the swap landed stays open; a retry swaps the code back | `audit3/state.md M2` |
+| U4 | low | open | An undo between a change and its confirm is reopened by the confirm | `audit3/state.md L1` |
+| U5 | low | open | fnv_undo (count) is stuck on a newest pending entry with a non-repeatable op | `audit3/state.md L2` |
+| U6 | low | open | Compaction fallback rewrites journal.jsonl in place (not atomic) | `audit3/state.md L3` |
+| U7 | low | open | A journal line with a wrong field type breaks every journal read | `audit3/state.md L4` |
+| U8 | low | open | Probe-remove undo reads and writes probe_session.json outside one lock | `audit3/state.md L5` |
+| U9 | low | open | A speed change from an out-of-range multiplier is not journaled | `audit3/state.md L6` |
+| K1 | high | open | An int3 can land inside a hook's patched bytes or be copied into its trampoline: the game crashes | `audit3/companion.md H1` |
+| K2 | medium | open | A worker parked at a stop the main thread waits on cannot be released while the bridge keeps talking (dead-man reset by unserved requests) | `audit3/companion.md M1` |
+| K3 | medium | open | Hook stubs and record rings are never reused: ~1000 installs end every hook tool; each recording hook leaks 768 KB | `audit3/companion.md M2` |
+| K4 | medium | open | fnv_flow trace takes an old parked stop of a cleared break with the same bp id as its own hit | `audit3/companion.md M3` |
+| K5 | low | open | A thread=main trap break that falls to int3 parks every thread (E24 incomplete) | `audit3/companion.md L1` |
+| K6 | low | open | A failed unhook silently ends the action or hold; break clear drops the record anyway | `audit3/companion.md L2` |
+| K7 | low | open | op_hookact rewrites a live skip stub in place | `audit3/companion.md L3` |
+| K8 | low | open | Fault stops do not reload the thread's debug registers after the park | `audit3/companion.md L4` |
+| K9 | low | open | fnv_flow NOT_CALLED: a hit between the last poll and bp clear leaves a parked stop | `audit3/companion.md L5` |
+| K10 | low | open | fnv_flow _read_trace takes the lowest new step stop of any thread | `audit3/companion.md L6` |
+| K11 | low | open | ACT_RESULT counted as applied when the shadow stack was full | `audit3/companion.md L7` |
+| K12 | low | open | _store_pred keeps a claimed slot when pred set fails | `audit3/companion.md L8` |
+| K13 | low | open | A main-thread stop that closed the gate reopens it on release, dropping a hold sent meanwhile | `audit3/companion.md L9` |
+| W1 | high | open | Read-classed fnv_snapshot, fnv_diff and fnv_watch run caller console lines and xNVSE expressions (T1 incomplete) | `audit3/contract.md H1` |
+| W2 | high | open | resolve() evaluates any bare identifier as an xNVSE expression: fnv_ref ref=QuitGame runs QuitGame under read | `audit3/contract.md H2` |
+| W3 | medium | open | fnv_warnings capture start and fnv_window mouse/unpause change the game as 'control' without the engine_control check | `audit3/contract.md M1` |
+| W4 | medium | open | fnv_formid_live (read) pastes free text into a quoted xNVSE expression | `audit3/contract.md M2` |
+| W5 | low | open | After a launch where no game started, fnv_status says 'terminated from outside' | `audit3/contract.md L1` |
+| W6 | low | open | The audio-cache flag can stay off when its restore write fails (N21 incomplete) | `audit3/contract.md L2` |
+| W7 | low | open | fnv_run_script's quit guard is bypassed by (QuitGame) or a multi-line source | `audit3/contract.md L3` |
+| W8 | low | open | fnv_crawl cells moves the player with an unjournaled cow | `audit3/contract.md L4` |
+| W9 | low | open | fnv_snapshot items has no length cap; console items uncapped | `audit3/contract.md L5` |
+| X1 | high | open | fnv_name_export writes to any path the call names, under a read-only annotation | `audit3/parsers.md H1` |
+| X2 | medium | open | fnv_asset_check's folder check is lexical: Data\..\.. escapes it (T7 incomplete) | `audit3/parsers.md M1` |
+| X3 | medium | open | The record index keeps rows of a plugin path that left the load order; lookups serve them | `audit3/parsers.md M2` |
+| X4 | low | open | records.text accepts U+0080..U+009F and writes other characters | `audit3/parsers.md L1` |
+| X5 | low | open | P9 incomplete: generic text fields and dialogue responses write an embedded NUL | `audit3/parsers.md L2` |
+| X6 | low | open | codec.parse RecursionError on deeply nested groups (P3 incomplete) | `audit3/parsers.md L3` |
+| X7 | low | open | scan_references raises raw struct.error on truncated subrecords | `audit3/parsers.md L4` |
+| X8 | low | open | Build asset check ignores BSAs inside enabled MO2 mods | `audit3/parsers.md L5` |
+| X9 | low | open | BSA readers raise raw struct.error on a truncated archive | `audit3/parsers.md L6` |
+| X10 | low | open | fnv_profile_set writes unchecked plugin names into plugins.txt | `audit3/parsers.md L7` |
+
+### Round 3 details
