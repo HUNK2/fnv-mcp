@@ -1,6 +1,7 @@
 """PLAN-3 S1: the round-2 high bugs R2 and R3 (bisect)."""
 import sys
 import tempfile
+import os
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -225,6 +226,7 @@ class PendingRestoreTests(unittest.TestCase):                # R3
         self.assertEqual(cm.exception.code, 'BUSY')
         self.assertEqual(stat_ids(self.path), {self.ids[0]})
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows processes and structures')
     def test_reused_pid_is_not_busy(self):
         # Windows reuses pids quickly: a marker whose pid now belongs to another process (different start time)
         # is a dead bisect, not a running one.

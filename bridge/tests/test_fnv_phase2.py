@@ -127,6 +127,7 @@ class Helpers(unittest.TestCase):
             self.assertFalse(world.window('status', persist=True)['ini']['changed'])
             self.assertTrue((profile / 'Fallout.ini.fnvmcp-backup').exists())
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows processes and structures')
     def test_address_space_of_this_process(self):
         space = address_space(os.getpid())
         self.assertIsNotNone(space)

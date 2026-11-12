@@ -17,6 +17,7 @@ CHILD = Path(os.environ.get('SYSTEMROOT', r'C:\Windows')) / 'SysWOW64' / 'ping.e
 
 
 class StructureTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows processes and structures')
     def test_sizes(self):
         self.assertEqual(ctypes.sizeof(fnv_procmem.THREADENTRY32), 28)
         # pointer, DWORD, pointer: 24 bytes in a 64-bit bridge (the game's side is 32-bit, the bridge is not)

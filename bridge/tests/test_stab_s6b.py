@@ -334,6 +334,8 @@ class LintVanillaTests(unittest.TestCase):
         from geck_mcp import fnv_engine
         from geck_mcp.config import Project
         root = Path(__file__).resolve().parents[1] / 'projects' / 'hellowasteland.windows.json'
+        if not root.exists():       # a local project file (CI has none)
+            raise unittest.SkipTest('needs the local project file and the engine map')
         paths = fnv_engine.default_paths(Project.load(str(root)))
         if not paths[0].exists():
             raise unittest.SkipTest('needs the engine map')

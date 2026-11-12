@@ -181,7 +181,8 @@ class SupervisorTests(unittest.TestCase):
             project.write_text(json.dumps({'state_dir': 'st'}), encoding='utf-8')
             saved = supervisor.os.environ.pop('GECK_SUPERVISOR_LOG', None)
             try:
-                self.assertEqual(supervisor.log_path(ROOT, project), state / 'supervisor.log')
+                # resolved on both sides: a temp folder can have an 8.3 short name (Windows CI) or a symlink (macOS)
+                self.assertEqual(supervisor.log_path(ROOT, project).resolve(), (state / 'supervisor.log').resolve())
                 supervisor.os.environ['GECK_SUPERVISOR_LOG'] = ''
                 self.assertIsNone(supervisor.log_path(ROOT, project))
             finally:

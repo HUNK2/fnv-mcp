@@ -5,6 +5,7 @@ iAudioCacheSize raised to 16 MB; at the 2 MB default it churned for ~3 min). Wit
 coc at the menu's frame 21 was in the cell at once. The launch turns the cache off for the start load and back on
 after it (no menu wait)."""
 import sys
+import os
 import unittest
 from pathlib import Path
 
@@ -108,6 +109,7 @@ class FastPollTests(unittest.TestCase):
             out = self.game.wait_in_game(10 ** 12, pid=4242, settle=0.0)
         self.assertEqual(out['phase'], 'in_game')
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows processes and structures')
     def test_process_alive_of_this_process_and_a_dead_pid(self):
         import os
         self.assertTrue(fnv_game.process_alive(os.getpid()))
