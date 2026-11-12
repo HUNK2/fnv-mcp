@@ -167,7 +167,8 @@ class FieldWatchTools:
             release_debug_register(self.link, slot)
             raise
         seq = r['seq']
-        entry = self.live.journal.add({'kind': 'watchpoint', 'address': hx(address), 'undo': {'op': 'dbg_clear'}})
+        entry = self.live.journal.add({'kind': 'watchpoint', 'address': hx(address),
+                                       'undo': {'op': 'dbg_clear', 'slot': slot, 'address': hx(address)}})
         try:
             ran = self._lines(trigger, self._ptr(trigger_ref) if trigger_ref else (self._ptr(ref) if ref else 0))
             if seconds:

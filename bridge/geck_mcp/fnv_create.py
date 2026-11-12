@@ -958,7 +958,12 @@ class FormTools:
         self.live.changing('form delete')
         self.link.write(f['ptr'] + 8, struct.pack('<I', flags | FORM_DELETED_FLAGS))
         self.created.remove(mine)
-        self.live.journal.add({'kind': 'form_delete', 'formId': f['formId'], 'undo': None})
+        made = next((e for e in reversed(self.live.journal.entries(process=self.live.game_identity()))
+                     if e['kind'] == 'form_create' and not e['undone']
+                     and (e.get('formId') or '').upper() == f['formId'].upper()), None)
+        # supersedes: export leaves the deleted form out (N4)
+        self.live.journal.add({'kind': 'form_delete', 'formId': f['formId'], 'supersedes': made and made['id'],
+                               'undo': None})
         return {'deleted': f['formId'], 'flagsBefore': '0x%08X' % flags,
                 'how': 'form flags |= 0x20 (deleted) and 0x4000 (temporary: no record in a save, no change entry). '
                        'The engine has no "remove from the data handler" function that was found, so the object '
@@ -983,11 +988,22 @@ class PlaceTools:
         return [e for e in self.live.journal.entries(process=self.live.game_identity())
                 if e['kind'] == 'place' and not e['undone']]
 
-    def _pose(self, ptr):
+    def _pose_exact(self, ptr):
+        """The pose as the game reports it, unrounded: what the journal stores (an undo restores it exactly)."""
         v = self.live.values(['GetPos X', 'GetPos Y', 'GetPos Z', 'GetAngle X', 'GetAngle Y', 'GetAngle Z', 'GetScale'],
                              ptr)
-        return {'position': [round(x, 2) for x in v[0:3]], 'rotation': [round(x, 2) for x in v[3:6]],
-                'scale': round(v[6], 3)}
+        return {'position': list(v[0:3]), 'rotation': list(v[3:6]), 'scale': v[6]}
+
+    @staticmethod
+    def _rounded(pose):
+        """A pose for display: position and rotation to 2 places, scale to 3."""
+        def r(x, n):
+            return round(x, n) if isinstance(x, (int, float)) else x
+        return {'position': [r(x, 2) for x in pose.get('position') or []],
+                'rotation': [r(x, 2) for x in pose.get('rotation') or []], 'scale': r(pose.get('scale'), 3)}
+
+    def _pose(self, ptr):
+        return self._rounded(self._pose_exact(ptr))
 
     def _set(self, ptr, position=None, rotation=None, scale=None):
         lines = []
@@ -1013,10 +1029,10 @@ class PlaceTools:
                                        'undo': {'op': 'console_ref', 'ref': element.get('formId'),
                                                 'lines': ['Disable', 'MarkForDelete']}})
         self._set(ptr, position, rotation or [0, 0, 0], scale)
-        pose = self._pose(ptr)
+        pose = self._pose_exact(ptr)
         cell = value_of(self.link.eval('GetParentCell', ptr))
         self.live.journal.confirm(entry['id'], {'cell': cell, **pose})
-        return {'ref': element.get('formId'), 'base': base['formId'], **pose, 'journalId': entry['id']}
+        return {'ref': element.get('formId'), 'base': base['formId'], **self._rounded(pose), 'journalId': entry['id']}
 
     def _ground(self, x, y, z, ignore=0):
         """Height of the first surface under (x, y) from above z, or None; hits on `ignore` (the reference being
@@ -1090,7 +1106,7 @@ class PlaceTools:
     def adjust(self, ref, move=None, rotate=None, scale=None, local=False):
         self.live.in_game()
         r = self.live.resolve(ref)
-        before = self._pose(r['ptr'])
+        before = self._pose_exact(r['ptr'])
         position = rotation = None
         if move:
             dx, dy, dz = move
@@ -1107,16 +1123,18 @@ class PlaceTools:
         entry = self.live.journal.add({'kind': 'place_adjust', 'state': 'pending', 'ref': r['formId'], 'before': before,
                                        'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': undo}})
         self._set(r['ptr'], position, rotation, scale)
-        after = self._pose(r['ptr'])
+        after = self._pose_exact(r['ptr'])
         self.live.journal.confirm(entry['id'], {'after': after})
-        self._update_placed(r['formId'], after)
-        return {'ref': r['formId'], 'before': before, 'after': after, 'journalId': entry['id']}
+        self._update_placed(r['formId'], after, entry['id'])
+        return {'ref': r['formId'], 'before': self._rounded(before), 'after': self._rounded(after),
+                'journalId': entry['id']}
 
-    def _update_placed(self, form_id, pose):
-        """Keep the newest pose of a placed reference in the journal (export reads it)."""
+    def _update_placed(self, form_id, pose, source):
+        """Keep the newest pose of a placed reference in the journal (export reads it). `source` is the adjust
+        entry that made it: when that adjust is undone, the pose before it counts again (G1)."""
         for e in self._placed():
             if e.get('ref') == form_id:
-                self.live.journal.add({'kind': 'place_pose', 'ref': form_id, **pose, 'undo': None})
+                self.live.journal.add({'kind': 'place_pose', 'ref': form_id, 'source': source, **pose, 'undo': None})
                 return
 
     def _surface(self, x, y, z, ignore=0, d=24.0):
@@ -1235,15 +1253,24 @@ class PlaceTools:
         return {'formId': ref.get('formId') if isinstance(ref, dict) else None,
                 'distance': out.get('distanceToHit') or 0.0}
 
-    def list(self):
+    def list(self, exact=False):
+        """Placed refs of this game with the pose the game shows: the newest pose whose adjust was not undone, else
+        the pose at placement (G1). exact: unrounded (export); otherwise rounded for display."""
+        entries = self.live.journal.entries(process=self.live.game_identity())
+        undone = {e['id'] for e in entries if e['undone']}
         latest = {}
-        for e in self.live.journal.entries(process=self.live.game_identity()):
+        for e in entries:
             if e['kind'] == 'place' and not e['undone']:
                 latest[e['ref']] = dict(e)
-            elif e['kind'] == 'place_pose' and e['ref'] in latest:
+            elif e['kind'] == 'place_pose' and e['ref'] in latest and e.get('source') not in undone:
                 latest[e['ref']].update({k: e[k] for k in ('position', 'rotation', 'scale') if k in e})
-        return {'placed': [{k: e.get(k) for k in ('ref', 'base', 'cell', 'position', 'rotation', 'scale', 'id')}
-                           for e in latest.values()], 'changed': False}
+        out = []
+        for e in latest.values():
+            row = {k: e.get(k) for k in ('ref', 'base', 'cell', 'position', 'rotation', 'scale', 'id')}
+            if not exact:
+                row.update(self._rounded(row))
+            out.append(row)
+        return {'placed': out, 'changed': False}
 
     def remove(self, ref=None):
         self.live.in_game()
@@ -1319,9 +1346,10 @@ class AuthorTools:
                 self.data._index = None
 
     def export(self, cell=None, name=None):
-        placed = self.place.list()['placed'] if self.place else []
-        created = [e for e in self.live.journal.entries(process=self.live.game_identity())
-                   if e['kind'] == 'form_create' and not e['undone']]
+        placed = self.place.list(exact=True)['placed'] if self.place else []
+        mine = self.live.journal.entries(process=self.live.game_identity())
+        deleted = {e.get('supersedes') for e in mine if e['kind'] == 'form_delete'}     # N4
+        created = [e for e in mine if e['kind'] == 'form_create' and not e['undone'] and e['id'] not in deleted]
         records, objects, problems = {}, [], []
         new_ids = {}
         for k, c in enumerate(created):

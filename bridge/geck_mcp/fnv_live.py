@@ -1455,9 +1455,51 @@ def _undo_probe_disarm(live, entry, undo):
         live.link.one('probe', 'disarm')
 
 
-@undo_op('dbg_clear')
+@undo_op('writes', repeatable=True)
+def _undo_writes(live, entry, undo):
+    for address, data in undo['writes']:
+        live.link.write(int(address, 16), bytes.fromhex(data))
+
+
+@undo_op('probe_remove', repeatable=True)
+def _undo_probe_remove(live, entry, undo):
+    """Disarm (the companion puts every patched entry and site back) and mark the session file not armed (N5). The
+    stub code stays in the companion's heap, unreachable; the next install starts a new code area."""
+    from .fnv_probe import ProbeTools
+    info = live.link.one('probe', 'info')
+    if info.get('ok') and info.get('armed'):
+        r = live.link.one('probe', 'disarm')
+        if not r.get('ok'):
+            return {'undone': False, 'reason': 'probe disarm failed: %s' % r.get('error')}
+    probes = ProbeTools(live)
+    session = probes._load('probe_session.json', None)
+    here = GameIdentity.parse(live.game_identity())
+    if session and session.get('armed') and here and here.same_game(GameIdentity.parse(session)):
+        session['armed'] = False
+        probes._save('probe_session.json', session)
+    return None
+
+
+@undo_op('dbg_clear', repeatable=True)
 def _undo_dbg_clear(live, entry, undo):
-    live.link.one('dbg', 'clear', 'f')
+    """Clear only this watch's debug register, and only while it still holds this watch (N6): a watch releases its
+    register when its call ends, and another tool may have it now."""
+    slot = undo.get('slot')
+    if slot is None:
+        return {'note': 'an entry from before slots were journaled: its register was released when the watch ended'}
+    info = live.link.one('dbg', 'info')
+    slots = info.get('slots') or [] if info.get('ok') else []
+    s = slots[int(slot)] if int(slot) < len(slots) else None
+    try:
+        same = bool(s and s.get('on')) and int(str(s.get('address')), 16) == int(str(undo.get('address')), 16)
+    except (TypeError, ValueError):
+        same = False
+    if not same:
+        return {'note': 'debug register %s no longer holds this watch (released, or another tool has it)' % slot}
+    r = live.link.one('dbg', 'clear', str(int(slot)))
+    if not r.get('ok'):
+        return {'undone': False, 'reason': 'dbg clear %s failed: %s' % (slot, r.get('error'))}
+    return None
 
 
 def _undo_ref(live, undo):
@@ -1544,5 +1586,12 @@ def _undo_item_count(live, entry, undo):
 
 @undo_op('swap_script')
 def _undo_swap_script(live, entry, undo):
+    """A swap exchanges two code buffers: it is only right in reverse order, so a swap with a later open swap of
+    the same script is refused."""
     from .fnv_data import swap_script_code
+    later = [e for e in live.journal.entries(process=live.game_identity())
+             if e.get('kind') == 'script_hot_swap' and not e['undone'] and e['id'] != entry['id']
+             and (e.get('undo') or {}).get('target') == undo['target'] and (e.get('seq') or 0) > (entry.get('seq') or 0)]
+    if later:
+        return {'undone': False, 'reason': 'undo the later swap first', 'later': [e['id'] for e in later]}
     swap_script_code(live, int(undo['target'], 16), int(undo['holder'], 16))

@@ -394,7 +394,7 @@ class ProbeTools:
             probes = keep
         # Intent first (S3.2): a failure in add/site/arm leaves patched probes that undo must still see.
         entry = self.live.journal.add({'kind': 'probe', 'state': 'pending', 'probes': len(probes), 'sites': len(sites),
-                                       'undo': {'op': 'probe_disarm'}})
+                                       'undo': {'op': 'probe_remove'}})
         r = self.link.one('probe', 'init', word(len(probes)), word(samples), word(exit_samples), word(every))
         if not r.get('ok'):
             raise ProbeError('PROBE_INIT_FAILED', 'probe init failed: %s' % r.get('error'), r)

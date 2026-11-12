@@ -1407,11 +1407,14 @@ class AgentTools:
             raise ValueError('seed is required')
         self.live.changing('rng seed')
         old = self.live.reads([(instance + 8, 624 * 4)])[0]
+        # The state array and the index (N7), journaled before the write (S3.2).
+        undo = {'op': 'writes', 'writes': [['0x%08X' % (instance + 8), old.hex()],
+                                           ['0x%08X' % (instance + 0x9C8), mti_raw.hex()]]} if old and mti_raw else None
+        entry = self.live.journal.add({'kind': 'rng_seed', 'state': 'pending', 'seed': int(seed), 'undo': undo})
         results = self.link.batch(self._seed_ops(instance, int(seed)))
         if not all(r.get('ok') for r in results):
             raise LiveError('WRITE_FAILED', 'Could not write the RNG state', {'results': results})
-        entry = self.live.journal.add({'kind': 'rng_seed', 'seed': int(seed), 'undo': {
-            'op': 'write', 'address': '0x%08X' % (instance + 8), 'hex': old.hex()} if old else None})
+        self.live.journal.confirm(entry['id'])
         return {**state, 'seeded': int(seed), 'journalId': entry['id'],
                 'note': 'Seeded like MersenneTwister::Seed (state written directly). Rolls made in the same request are '
                         'repeatable (fnv_leveled_roll does that). Across frames other systems keep drawing numbers, so '
