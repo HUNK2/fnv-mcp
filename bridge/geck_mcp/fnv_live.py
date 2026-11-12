@@ -58,6 +58,9 @@ def _fid(value):
 UNDO_LOCK_TIMEOUT = 30.0     # an undo waits this long for the journal lock (see fnv_journal.ADD_TIMEOUT)
 
 
+PLAYER_FORM_ID = '00000014'     # the player reference (PlayerREF)
+
+
 class LiveService:
     def __init__(self, project):
         self.project = project
@@ -173,8 +176,19 @@ class LiveService:
                 return [('mem', int(a, 16), int(a, 16) + len(h) // 2) for a, h in undo['writes']]
         except (KeyError, TypeError, ValueError):
             return []
-        if op in ('console_ref', 'ref_enabled', 'actor_flag', 'item_count') and undo.get('ref'):
-            return [('ref', str(undo['ref']).upper())]
+        ref = str(undo.get('ref') or '').upper()
+        if op == 'console_ref' and ref:
+            lines = [str(line).split() for line in undo.get('lines') or []]
+            verbs = {words[0].lower() for words in lines if words}
+            if 'markfordelete' in verbs:
+                return []       # a delete: later changes to the ref become moot, so it may run first (review I2)
+            return [cls._line_target(words, ref) for words in lines if words]
+        if op == 'ref_enabled' and ref:
+            return [('ref', ref, 'enabled')]
+        if op == 'actor_flag' and ref:
+            return [('ref', ref, 'flag', str(undo.get('flag')).lower())]
+        if op == 'item_count' and ref:
+            return [('ref', ref, 'item', str(undo.get('item')).upper())]
         if op == 'console':
             words = str(undo.get('line') or '').split()
             if not words:
@@ -182,12 +196,25 @@ class LiveService:
             verb = words[0].lower()
             if verb.split('.')[-1] in cls.WEATHER_VERBS:
                 return [('weather',)]
-            return [('console', verb, words[1].lower() if len(words) > 1 else '')]
+            if verb.startswith('player.'):      # the player's ref, as console_ref entries name it
+                return [cls._line_target([words[0][7:]] + words[1:], PLAYER_FORM_ID)]
+            return [cls._line_target(words, None)]
         if op == 'time_restore' and undo.get('what') in ('fixed', 'speed'):
             return [('time', undo['what'])]
         if op in ('fly_set', 'hud_set'):
             return [(op,)]
         return []
+
+    # Commands whose second argument also names the value (an objective index, a quest stage).
+    INDEXED_VERBS = {'setobjectivecompleted', 'setobjectivedisplayed', 'setstage', 'setquestobject'}
+
+    @classmethod
+    def _line_target(cls, words, ref):
+        """One undo line's target: the command and the value it names (SetAV Health, SetPos X, SetGS name, an
+        objective index), on a ref or in the global console."""
+        verb = words[0].lower()
+        key = [w.lower() for w in words[1:3 if verb in cls.INDEXED_VERBS else 2]]
+        return ('ref', ref, verb, *key) if ref else ('console', verb, *key)
 
     @staticmethod
     def _targets_meet(a, b):

@@ -186,6 +186,36 @@ class UndoOrderTests(unittest.TestCase):
                                                               'lines': ['SetAV Health 50']}}
         self.assertTrue(self.refused(older, newer)[0])
 
+    # S7 batch-1 review I2: the target is the value, not the whole ref
+    def ref_entry(self, ref, *lines, op='console_ref'):
+        return {'kind': 'actor', 'ref': ref, 'undo': {'op': op, 'ref': ref, 'lines': list(lines)}}
+
+    def test_different_values_of_one_ref_are_free(self):
+        self.assertFalse(self.refused(self.ref_entry('00000014', 'SetAV Health 100'),
+                                      self.ref_entry('00000014', 'SetAV Strength 5'))[0])
+        self.assertTrue(self.refused(self.ref_entry('00000014', 'SetAV Health 100'),
+                                     self.ref_entry('00000014', 'SetAV Health 50'))[0])
+
+    def test_items_are_per_item(self):
+        older = {'kind': 'item', 'undo': {'op': 'item_count', 'ref': '00000014', 'item': '0000000F', 'count': 1}}
+        newer = {'kind': 'item', 'undo': {'op': 'item_count', 'ref': '00000014', 'item': '00015169', 'count': 1}}
+        self.assertFalse(self.refused(older, newer)[0])
+        self.assertTrue(self.refused(older, dict(newer, undo=dict(older['undo'])))[0])
+
+    def test_a_spawn_can_be_deleted_after_a_move(self):
+        self.assertFalse(self.refused(self.ref_entry('FF000900', 'Disable', 'MarkForDelete'),
+                                      self.ref_entry('FF000900', 'SetPos X 0', 'SetPos Y 0', 'SetPos Z 0'))[0])
+
+    def test_objectives_keep_their_index(self):
+        def objective(index):
+            return {'kind': 'quest', 'undo': {'op': 'console', 'line': 'SetObjectiveCompleted 0001A2B3 %d 0' % index}}
+        self.assertFalse(self.refused(objective(10), objective(20))[0])
+        self.assertTrue(self.refused(objective(10), objective(10))[0])
+
+    def test_a_player_console_line_meets_the_players_ref(self):
+        older = {'kind': 'input', 'undo': {'op': 'console', 'line': 'player.SetAngle Z 90.000'}}
+        self.assertTrue(self.refused(older, self.ref_entry('00000014', 'SetAngle Z 10.000'))[0])
+
     def test_weather_lines_share_one_target(self):
         older = {'kind': 'world_edit', 'undo': {'op': 'console', 'line': 'ForceWeather 0001A2B3 1'}}
         newer = {'kind': 'world_edit', 'undo': {'op': 'console', 'line': 'ReleaseWeatherOverride'}}
