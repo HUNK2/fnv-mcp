@@ -1,0 +1,20 @@
+{
+  "busy": false,
+  "companion": 2,
+  "deferredInit": true,
+  "frame": 18,
+  "held": false,
+  "hooks": 0,
+  "lastFrameTick": 12520656,
+  "lastMessage": "new_game",
+  "loaded": true,
+  "mainThreadId": 35632,
+  "msSinceFrame": 0,
+  "parked": 0,
+  "pid": 41284,
+  "pipeThread": 38996,
+  "pong": true,
+  "started": "134389454814564344",
+  "stepLeft": 0,
+  "wire": 2
+}

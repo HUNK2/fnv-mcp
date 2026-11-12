@@ -1,0 +1,11 @@
+{
+  "called": true,
+  "frame": 21,
+  "ok": true,
+  "result": {
+    "formId": "0000ABCD",
+    "ptr": "0x00515004",
+    "type": "form"
+  },
+  "scriptErrors": 0
+}

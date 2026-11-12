@@ -1,0 +1,15 @@
+{
+  "bps": [
+    {
+      "addr": "0x004e10a8",
+      "after": 0,
+      "flags": 0,
+      "hits": 0,
+      "id": 1,
+      "kind": "int3",
+      "passed": 0,
+      "pred": "ff"
+    }
+  ],
+  "frame": 24
+}

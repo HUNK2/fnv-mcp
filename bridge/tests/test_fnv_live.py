@@ -143,73 +143,8 @@ class GameHelperTests(unittest.TestCase):
         self.assertIn('-Built', (self.mo2 / 'profiles/Dev/modlist.txt').read_text(encoding='utf-8'))
 
 
-class FakeLink(fnv_link.EngineLink):
-    """Answers the companion ops from a small model: memory, expressions and console lines. The typed helpers
-    (read, write, eval, console...) are the real EngineLink ones on top of this batch()."""
-
-    def __init__(self):
-        super().__init__('fnvmcp-fake')
-        self.memory = {}
-        self.expressions = {}
-        self.console_log = []
-        self.hello = {'pid': 4242, 'started': '1', 'frame': 10, 'deferredInit': True, 'loaded': True}
-        self.calls = []
-
-    def put(self, address, data):
-        for i, b in enumerate(data):
-            self.memory[address + i] = b
-
-    def get(self, address, length):
-        if any(address + i not in self.memory for i in range(length)):
-            return None
-        return bytes(self.memory[address + i] for i in range(length))
-
-    def ping(self, timeout=3.0):
-        return self.hello
-
-    def close(self):
-        pass
-
-    def batch(self, ops, timeout=None):
-        return [self._op(op[0], [str(a) for a in op[1:]]) for op in ops]
-
-    def _op(self, name, args):
-        if name == 'rd':
-            data = self.get(int(args[0], 16), int(args[1], 16))
-            return {'ok': True, 'hex': data.hex()} if data is not None else {'ok': False, 'error': 'unreadable'}
-        if name == 'wr':
-            address, data = int(args[0], 16), bytes.fromhex(args[1])
-            old = self.get(address, len(data))
-            if old is None:
-                return {'ok': False, 'error': 'unreadable'}
-            self.put(address, data)
-            return {'ok': True, 'old': old.hex()}
-        if name == 'ls':
-            return {'ok': False, 'error': 'unknown_op'}
-        if name == 'rs':
-            return {'ok': False, 'error': 'unreadable'}
-        if name in ('eval', 'run'):
-            text = bytes.fromhex(args[0]).decode('cp1252')
-            element = self.expressions.get(text)
-            if element is None:
-                return {'ok': False, 'error': 'compile_failed'}
-            return {'ok': True, 'called': True, 'scriptErrors': 0, 'result': element}
-        if name == 'con':
-            line = bytes.fromhex(args[0]).decode('cp1252')
-            flags = (self.get(FACTS['verbose_print_flag']['address'], 1), self.get(FACTS['console_visible_flag']['address'], 1))
-            self.console_log.append((line, flags))
-            if line.startswith('SetNumericGameSetting'):
-                value = float(line.split()[-1])
-                self.expressions['GetNumericGameSetting "fJumpHeightMin"'] = {'type': 'number', 'value': value}
-            return {'ok': True, 'accepted': True, 'scriptErrors': 0, 'captured': True, 'output': 'echo %s\r\n' % line}
-        if name == 'call':
-            self.calls.append(args)
-            return {'ok': True, 'eax': '0x00000001', 'edx': '0x00000000', 'scriptErrors': 0}
-        if name == 'events':
-            return {'ok': True, 'seq': 0, 'events': []}
-        if name == 'sched':
-            return {'ok': True, 'slot': 0}
-        return {'ok': False, 'error': 'unknown_op'}
+# The shared fake companion (PLAN-3 S4.4); its replies are checked against the real DLL by test_wire_contract.
+from fakes import FakeLink  # noqa: E402,F401
 
 
 class LiveServiceTests(GameHelperTests):

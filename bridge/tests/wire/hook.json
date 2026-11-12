@@ -1,0 +1,33 @@
+{
+  "frame": 26,
+  "hook": {
+    "action": 0,
+    "actionAux": 0,
+    "actionHits": 0,
+    "actionLimit": 0,
+    "actionValue": "0x00000000",
+    "active": true,
+    "calls": 0,
+    "callsAddress": "0x026a9ed8",
+    "filter": 0,
+    "filterValue": "0x00000000",
+    "flags": 0,
+    "hook": "0x026a9ea0",
+    "id": 1,
+    "label": "wire",
+    "qpcFrequency": 10000000,
+    "recordWords": 48,
+    "records": "0x00000000",
+    "ring": 4096,
+    "seq": 0,
+    "seqAddress": "0x026a9ed4",
+    "stolen": 6,
+    "table": "0x00000000",
+    "tableFull": 0,
+    "tableSize": 2048,
+    "tableUsed": 0,
+    "target": "0x004e1090",
+    "trampoline": "0x02660010"
+  },
+  "ok": true
+}
