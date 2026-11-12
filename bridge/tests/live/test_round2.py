@@ -54,8 +54,12 @@ class Round2Tests(LiveCase):
         try:
             self.ok('fnv_wait_for', frames=120, timeout=30)
             read = self.ok('fnv_hook_set', function='Actor::GetLevel', action='read')
-            hits = read.get('actionHits', read.get('hook', {}).get('actionHits'))
-            self.assertLessEqual(hits, 5, 'actionHits %s past a limit of 5' % hits)
+            # S6.4: actionHits counts every call, actionApplied only the calls the action changed
+            applied = read['hook']['actionApplied']
+            self.assertLessEqual(applied, 5, 'actionApplied %s past a limit of 5' % applied)
+            calls = read.get('calls') or []
+            self.assertLessEqual(sum(1 for c in calls if c.get('applied')), 5)
+            self.assertIn('of the %d calls listed' % len(calls), read['resultNote'])
         finally:
             self.call('fnv_hook_set', function='Actor::GetLevel', action='remove')
 
