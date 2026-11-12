@@ -26,6 +26,50 @@ from .fnv_inspect import AnimTools, AudioTools, PhysicsTools, SystemsTools
 from .fnv_crawl import CrawlTools
 from .fnv_suite import BisectTools, SelfTest
 
+# Tool -> the actions that change the running game (PLAN-3 decision D2, bug T1): anything that writes game memory or
+# code, changes behaviour, or leaves something installed (a hook, a probe, a sampler, a subscription, a held gate)
+# runs as kind 'act', which needs fnv.engine_control = "full". '*' is every call of the tool. invoke() derives the kind
+# from this table, so a tool cannot pass a weaker kind by mistake; a listed tool that passes no action is treated as
+# changing the game.
+MUTATING_ACTIONS = {
+    'fnv_probe': {'install', 'remove', 'clear', 'config', 'harvest'},
+    'fnv_name_oracle': {'run', 'calibrate', 'sweep'},
+    'fnv_name_test': {'test', 'battery'},
+    'fnv_field_watch': '*',
+    'fnv_atlas': {'run', 'import_frida'},
+    'fnv_hooks': {'remove'},
+    'fnv_trace': {'start', 'stop'},
+    'fnv_tracepoint': {'start', 'stop'},
+    'fnv_script_profile': {'start', 'stop'},
+    'fnv_script_trace': {'start', 'stop'},
+    'fnv_damage_log': {'start', 'stop'},
+    'fnv_frame_profile': '*',
+    'fnv_crash_context': {'enable', 'disable'},
+    'fnv_memory': {'alloc_trace'},
+    'fnv_events': {'subscribe', 'unsubscribe'},
+    'fnv_watch': {'frames'},
+    'fnv_systems': {'formula', 'sweep'},
+    'fnv_leveled_roll': {'seed'},
+    'fnv_test_run': '*',
+    'fnv_test_run_all': '*',
+    'fnv_do': '*',
+    'fnv_session': {'start', 'end'},
+    'fnv_crawl': '*',
+    'fnv_bisect': '*',
+    'fnv_replay': {'record', 'stop', 'play'},
+}
+
+
+def gated_kind(name, action, kind):
+    """The kind a call runs as: 'act' when MUTATING_ACTIONS lists the tool's action (or the whole tool), else kind."""
+    rule = MUTATING_ACTIONS.get(name)
+    if rule is None:
+        return kind
+    if rule == '*' or action is None or action in rule:
+        return 'act'
+    return kind
+
+
 FNV_LIVE_TOOLS = {
     # milestone 4: game control, tests, logs
     'fnv_status': ('read', 'game running? phase (main menu, loading, in game), cell, loaded plugins, companion'),
@@ -52,7 +96,7 @@ FNV_LIVE_TOOLS = {
     'fnv_inventory': ('read', 'items of an actor or container with counts and equipped state'),
     'fnv_vars': ('read', 'script variables of a quest or reference, by name'),
     'fnv_script_errors': ('read', 'script errors (script, mod, message) since the last call'),
-    'fnv_events': ('read', 'xNVSE events seen by the companion: loads, saves, new game, script errors; subscribe to game events (onactivate, onhit, ondeath...) recorded in the game'),
+    'fnv_events': ('act', 'xNVSE events seen by the companion: loads, saves, new game, script errors; subscribe to game events (onactivate, onhit, ondeath...) recorded in the game'),
     'fnv_formid_live': ('read', "a plugin's load-order prefix in the running game"),
     'fnv_mem_read': ('read', 'memory at an address or Class field path, decoded with the decomp layouts'),
     # milestones 5-6: act
@@ -69,13 +113,13 @@ FNV_LIVE_TOOLS = {
     'fnv_undo': ('act', 'undo the last journaled change(s) or one by id'),
     'fnv_revert_all': ('act', 'undo every undoable change of this game process'),
     # milestone 7: watch hooks and deep tools
-    'fnv_script_profile': ('read', 'calls and time per script (quest, object, effect) from watch hooks on Script::Run'),
-    'fnv_script_trace': ('read', 'the statements of one script as they run, with branches taken and failures'),
-    'fnv_damage_log': ('read', 'recent hits broken down: base, health, limb, armor damage, flags, applied damage'),
-    'fnv_crash_context': ('read', 'what was running when the game faulted: hooked engine calls, scripts, request'),
+    'fnv_script_profile': ('act', 'calls and time per script (quest, object, effect) from watch hooks on Script::Run'),
+    'fnv_script_trace': ('act', 'the statements of one script as they run, with branches taken and failures'),
+    'fnv_damage_log': ('act', 'recent hits broken down: base, health, limb, armor damage, flags, applied damage'),
+    'fnv_crash_context': ('act', 'what was running when the game faulted: hooked engine calls, scripts, request'),
     'fnv_hang_doctor': ('read', 'sample the call stacks of the game threads and name the functions a hang is stuck in'),
     'fnv_patch_map': ('read', 'engine code and pointers other plugins changed, by owner module, with chains'),
-    'fnv_hooks': ('read', 'list the watch hooks of the engine companion, or remove them'),
+    'fnv_hooks': ('act', 'list the watch hooks of the engine companion, or remove them'),
     # milestone 8: data and authoring
     'fnv_loadorder': ('read', 'the dev profile load order: plugins, index, real file, MO2 mod, masters, problems'),
     'fnv_record_find': ('read', 'records in every active plugin by EditorID, name, form id or type'),
@@ -95,8 +139,8 @@ FNV_LIVE_TOOLS = {
     'fnv_ai_packages': ('read', "an actor's packages in order with schedule and conditions: which runs now and why"),
     'fnv_form_live_diff': ('read', 'a form in memory now versus its winning plugin record: what changed at runtime'),
     # agent wave: unattended testing and debugging
-    'fnv_trace': ('read', 'calls to any proven engine function: decoded arguments, results, callers (watch hook)'),
-    'fnv_watch': ('read', 'values sampled over time: expressions, memory fields, actor values, positions; frames=N samples memory every frame inside the game'),
+    'fnv_trace': ('act', 'calls to any proven engine function: decoded arguments, results, callers (watch hook)'),
+    'fnv_watch': ('act', 'values sampled over time: expressions, memory fields, actor values, positions; frames=N samples memory every frame inside the game'),
     'fnv_screenshot': ('read', "the game's frame as PNG (engine back buffer, else the window), shown to the agent"),
     'fnv_test_save': ('act', 'named test saves kept apart from other saves: save, load, list, delete'),
     'fnv_crash_history': ('read', 'crash logs grouped by signature across runs, new ones flagged'),
@@ -109,7 +153,7 @@ FNV_LIVE_TOOLS = {
     'fnv_menu_control': ('act', 'press a message box button through the engine, close a menu, close all menus'),
     'fnv_rng': ('act', "the game's random number generator: state, or seed it for repeatable rolls"),
     'fnv_time': ('act', 'read the calendar, jump to an hour, advance hours, change the timescale'),
-    'fnv_leveled_roll': ('read', "roll a leveled list many times with the game's own code: chances per form"),
+    'fnv_leveled_roll': ('act', "roll a leveled list many times with the game's own code: chances per form"),
     # engine AI wave (decomp-built)
     'fnv_detection': ('read', 'why an NPC sees (or does not see) someone: detection records and the formula inputs'),
     'fnv_reaction': ('read', 'how two actors relate: hostile or not, fight reaction, faction pair, disposition, the rule'),
@@ -121,7 +165,7 @@ FNV_LIVE_TOOLS = {
     # phase 2: behaviour control and engine calls
     'fnv_hook_set': ('act', 'change an engine function: skip it with a result, replace its result, change an argument, run a script'),
     'fnv_patch': ('act', "write bytes, NOPs, ret or jmp/call into the game's code, journaled, checked against the clean exe"),
-    'fnv_tracepoint': ('read', 'record calls of a function when conditions hold: arguments as objects, caller, call stack'),
+    'fnv_tracepoint': ('act', 'record calls of a function when conditions hold: arguments as objects, caller, call stack'),
     'fnv_engine_get': ('read', 'call a proven read-only engine getter with typed arguments (no full control needed)'),
     'fnv_globals': ('act', 'global variables from the data handler, filtered; set values (journaled)'),
     'fnv_dialogue': ('read', 'the conversation now: speaker, spoken topic and line, the choices shown and their state'),
@@ -131,7 +175,7 @@ FNV_LIVE_TOOLS = {
     'fnv_ui_tiles': ('read', "a menu's live UI tile tree with trait values named by the game's trait table"),
     'fnv_vats_odds': ('read', 'VATS hit chance per target and limb from the game formula, term by term, with perks'),
     'fnv_window': ('control', 'free or recapture the mouse (DirectInput background mode), close the pause menu, persist it'),
-    'fnv_frame_profile': ('read', 'time per frame by subsystem (scripts, AI wait, render, audio, cells...) from timing hooks'),
+    'fnv_frame_profile': ('act', 'time per frame by subsystem (scripts, AI wait, render, audio, cells...) from timing hooks'),
     # naming from the running game (NAMING-PLAN N1-N3)
     'fnv_probe': ('act', 'count calls of thousands of functions at once (entry jumps, vtable slots, call sites): plan, install, read, remove'),
     'fnv_atlas': ('act', 'run scripted game actions with doses against the probe set: which functions run per action, and how often'),
@@ -171,13 +215,13 @@ FNV_LIVE_TOOLS = {
     'fnv_plugin_build': ('control', 'ship a native module as its own xNVSE plugin (no companion needed): scaffold, build with hook prologues planned, install into the dev profile, read its log'),
     'fnv_profile': ('read', 'where the time goes: sample thread stacks from outside the game, self and inclusive time per function and source line, callers, a flame-graph file; diff two profiles'),
     'fnv_threads': ('read', 'every game thread with its start routine and current function, and the known locks with their owner'),
-    'fnv_memory': ('read', 'memory pools with exact numbers, live NiRefObject count, allocation counts by call site, who changes an object\'s reference count'),
+    'fnv_memory': ('act', 'memory pools with exact numbers, live NiRefObject count, allocation counts by call site, who changes an object\'s reference count'),
     'fnv_object': ('read', 'what a pointer is (pool block, class, form); every live object of a class; every place in memory that holds a pointer'),
     'fnv_coverage': ('act', 'which decomp source lines ran during a scenario: one-shot traps at every line start, then lines run and never run per file and function; diff two runs'),
     'fnv_anim': ('act', 'animation of an actor: current and queued groups with their sequences, every group it has, the idle the engine would pick and why others fail, equipment slots, face values, animation actions over time; play a group or an idle'),
     'fnv_audio': ('act', 'sounds playing now and every sound created for a while (form or file, and who asked); play and stop; music channels and why; radio stations; subtitles shown; would a sound be heard; voice and lip files of an NPC\'s lines'),
     'fnv_physics': ('act', 'character controller of an actor (state, fall time and distance), the Havok body of a reference with its velocity (and set it), trigger enter and leave events, projectiles in flight, is a spot free, collision layers'),
-    'fnv_systems': ('read', 'call game formulas (catalog or any function) and sweep an argument; level and XP progression; hardcore needs; can a perk be taken and why not; barter prices; encounter zone levels; karma'),
+    'fnv_systems': ('act', 'call game formulas (catalog or any function) and sweep an argument; level and XP progression; hardcore needs; can a perk be taken and why not; barter prices; encounter zone levels; karma'),
     'fnv_replay': ('control', 'record the input sent through the bridge frame by frame from a save, and play it again frame-exact under the frame gate'),
     'fnv_render': ('act', 'render toggles that still work in retail (wireframe, sky, grass, trees, LOD, menus, borders, trigger volumes, collision, test light...), image-space modifiers, shader reload, the scene lights'),
     'fnv_overlay': ('act', 'text drawn on screen and visible markers placed in the world, for a person watching; clear removes them'),
@@ -303,7 +347,8 @@ def register(server, project, annotations, result_type):
             return live.run(name, fn, kind)
         return call
 
-    async def invoke(name, fn, kind='read'):
+    async def invoke(name, fn, kind='read', action=None):
+        kind = gated_kind(name, action, kind)      # MUTATING_ACTIONS decides, not the call site (T1)
         with anyio.CancelScope(shield=kind != 'read'):
             result = await anyio.to_thread.run_sync(partial(live.run, name, fn, kind), abandon_on_cancel=kind == 'read')
         return CallToolResult(content=[TextContent(type='text', text=json.dumps(result, default=str))],
@@ -493,7 +538,7 @@ def register(server, project, annotations, result_type):
         and the error message."""
         return await invoke('fnv_script_errors', lambda: live.script_errors(0 if since == 'start' else 'last'))
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_events(since: Annotated[int, Field(ge=0)] = 0,
                          subscribe: list[Annotated[str, Field(max_length=40)]] | None = None,
                          unsubscribe: list[Annotated[str, Field(max_length=40)]] | None = None,
@@ -515,7 +560,8 @@ def register(server, project, annotations, result_type):
                 return live.events(since)
             out['events'] = live.events(since)
             return out
-        return await invoke('fnv_events', action)
+        return await invoke('fnv_events', action,
+                            action='subscribe' if subscribe else 'unsubscribe' if unsubscribe else 'read')
 
     @server.tool(annotations=read)
     async def fnv_formid_live(plugin: Annotated[str, Field(min_length=5, max_length=100)]) -> result_type:
@@ -648,7 +694,7 @@ def register(server, project, annotations, result_type):
     # ------------------------------------------------------------------ milestone 7
     Action = Literal['start', 'read', 'stop']
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_script_profile(action: Action = 'read', seconds: Annotated[float, Field(ge=0.2, le=60)] = 3.0,
                                  top: Annotated[int, Field(ge=1, le=200)] = 25) -> result_type:
         """Which scripts run and how long they take. Installs watch hooks on Script::Run and
@@ -656,9 +702,9 @@ def register(server, project, annotations, result_type):
         counters and returns; read gives the top scripts by total time since start (on first use it starts,
         waits `seconds`, then reads): calls per frame, ms per frame, average and worst call, owning quest. stop
         removes the hooks."""
-        return await invoke('fnv_script_profile', lambda: deep.script_profile(action, seconds, top))
+        return await invoke('fnv_script_profile', lambda: deep.script_profile(action, seconds, top), action=action)
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_script_trace(script: Annotated[str, Field(min_length=1, max_length=200, description=(
             'script EditorID or form id, or a quest / reference / base form whose script to trace'))],
                                action: Action = 'read', source: Annotated[str, Field(max_length=200000)] | None = None,
@@ -668,17 +714,18 @@ def register(server, project, annotations, result_type):
         command name...), the reference it ran on, whether it succeeded, time. Pass the script's source text to
         map statement numbers to source lines and list the lines that did not run (branches not taken). Calls
         after the first read return only new statements. stop removes the hook."""
-        return await invoke('fnv_script_trace', lambda: deep.script_trace(script, action, source, limit))
+        return await invoke('fnv_script_trace', lambda: deep.script_trace(script, action, source, limit),
+                            action=action)
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_damage_log(action: Action = 'read', limit: Annotated[int, Field(ge=1, le=1000)] = 50) -> result_type:
         """Each recent hit broken down: attacker, target, weapon, body part, health / limb / fatigue / armor
         damage, weapon base damage, multiplier, flags (critical, sneak attack, fatal, cripple, dismember), and the
         health damage the engine applied. A watch hook on
         Actor::DamageHealthAndFatigue (proven), which also copies the hit data its caller, the actor hit handler, passed on. start clears, stop removes the hook."""
-        return await invoke('fnv_damage_log', lambda: deep.damage_log(action, limit))
+        return await invoke('fnv_damage_log', lambda: deep.damage_log(action, limit), action=action)
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_crash_context(action: Literal['latest', 'enable', 'disable', 'status'] = 'latest',
                                 limit: Annotated[int, Field(ge=1, le=20)] = 3) -> result_type:
         """What the crash log cannot know. The engine companion's exception handler writes a context file at a
@@ -686,7 +733,7 @@ def register(server, project, annotations, result_type):
         and console line being run, recent events. enable adds watch hooks on the script entry points so the
         file names the running script and its reference; latest returns the newest files, named with the engine
         map. fnv_crash_explain attaches the matching file automatically."""
-        return await invoke('fnv_crash_context', lambda: deep.crash_context(action, limit))
+        return await invoke('fnv_crash_context', lambda: deep.crash_context(action, limit), action=action)
 
     @server.tool(annotations=read)
     async def fnv_hang_doctor(samples: Annotated[int, Field(ge=1, le=20)] = 5,
@@ -706,11 +753,11 @@ def register(server, project, annotations, result_type):
         slots."""
         return await invoke('fnv_patch_map', lambda: deep.patch_map(include_bytes, limit))
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_hooks(action: Literal['list', 'remove'] = 'list',
                         hook_id: Annotated[str, Field(max_length=10)] | None = None) -> result_type:
         """The engine companion's watch hooks (function, calls seen, records). remove takes a hook id or 'all'."""
-        return await invoke('fnv_hooks', lambda: deep.hooks_tool(action, hook_id))
+        return await invoke('fnv_hooks', lambda: deep.hooks_tool(action, hook_id), action=action)
 
     # ------------------------------------------------------------------ milestone 8
     @server.tool(annotations=read)
@@ -863,7 +910,7 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_form_live_diff', lambda: social.form_live_diff(form))
 
     # ------------------------------------------------------------------ agent wave
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_trace(function: Annotated[str, Field(max_length=200, description=(
             'proven engine function name (Actor::DamageHealthAndFatigue) or address'))] | None = None,
                         action: Literal['start', 'read', 'stop', 'list'] = 'start',
@@ -876,9 +923,10 @@ def register(server, project, annotations, result_type):
         `this`. filter keeps only calls where this / caller / paramN equals a ref ({on: this, ref: MyNPC}) or a value
         ({on: param1, value: 5}). Answers "does the engine run X for my object, from where, with what". stop removes
         the hook; list shows running traces."""
-        return await invoke('fnv_trace', lambda: agent.trace(function, action, filter, limit, include_calls))
+        return await invoke('fnv_trace', lambda: agent.trace(function, action, filter, limit, include_calls),
+                            action=action)
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_watch(items: list[Any],
                         seconds: Annotated[float, Field(gt=0, le=120)] = 5.0,
                         interval_ms: Annotated[int, Field(ge=0, le=10000)] = 100,
@@ -894,8 +942,9 @@ def register(server, project, annotations, result_type):
         frame, inside the game (the companion sampler): items are then memory reads in predicate text
         ("[[0x011DEA3C]+0x30]:f32") or player.x, player.y, player.z, player.yaw, frame; at most 16."""
         if frames:
-            return await invoke('fnv_watch', lambda: frame_sampler.sample(items, frames, every))
-        return await invoke('fnv_watch', lambda: agent.watch(items, seconds, interval_ms, until, keep_unpaused))
+            return await invoke('fnv_watch', lambda: frame_sampler.sample(items, frames, every), action='frames')
+        return await invoke('fnv_watch', lambda: agent.watch(items, seconds, interval_ms, until, keep_unpaused),
+                            action='sample')
 
     @server.tool(annotations=read)
     async def fnv_screenshot(name: Annotated[str, Field(max_length=60)] | None = None,
@@ -1029,7 +1078,7 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_time', lambda: agent.time_control(set_hour, advance_hours, timescale, mode,
                                                                    evaluate_packages, allow_unproven), 'act')
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_leveled_roll(form: Ref, level: Annotated[int, Field(ge=1, le=255)] | None = None,
                                rolls: Annotated[int, Field(ge=1, le=5000)] = 200,
                                seed: Annotated[int, Field(ge=0, le=0xFFFFFFFF)] | None = None) -> result_type:
@@ -1037,7 +1086,8 @@ def register(server, project, annotations, result_type):
         (TESLeveledList::CalculateCurrentForm, proven) at a level (default the player's): how often each form and
         count comes out and how often nothing, next to the list's entries, chance none and flags. With seed the
         rolls repeat exactly. Changes nothing in the world (it only draws random numbers)."""
-        return await invoke('fnv_leveled_roll', lambda: agent.leveled_roll(form, level, rolls, seed))
+        return await invoke('fnv_leveled_roll', lambda: agent.leveled_roll(form, level, rolls, seed),
+                            action='seed' if seed is not None else 'roll')
 
     # ------------------------------------------------------------------ engine AI wave
     @server.tool(annotations=read)
@@ -1147,7 +1197,7 @@ def register(server, project, annotations, result_type):
         Journaled with the original bytes: fnv_undo restores them."""
         return await invoke('fnv_patch', lambda: control_tools.patch(address, bytes, nop, ret, jmp, call, expect, force), 'act')
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_tracepoint(function: Annotated[str, Field(min_length=1, max_length=300)],
                              action: Literal['start', 'read', 'stop', 'list'] = 'start',
                              when: list[Filter] | None = None,
@@ -1158,7 +1208,7 @@ def register(server, project, annotations, result_type):
         the result, the time it took, the caller and the call stack (functions it came through). Read while it runs;
         commonStacks groups the hits by the path that led to them."""
         return await invoke('fnv_tracepoint', lambda: control_tools.tracepoint(function, action, when, limit, allow_unproven,
-                                                                               stack))
+                                                                               stack), action=action)
 
     @server.tool(annotations=read)
     async def fnv_engine_get(function: Annotated[str, Field(min_length=1, max_length=300, description=(
@@ -1247,7 +1297,7 @@ def register(server, project, annotations, result_type):
         and the settings involved. Without VATS open, pass target (and limb) to compute as if fully visible."""
         return await invoke('fnv_vats_odds', lambda: world.vats_odds(target, limb, include_terms))
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_frame_profile(seconds: Annotated[float, Field(ge=0.5, le=30)] = 3.0) -> result_type:
         """Where frame time goes: timing hooks on the main loop and its children (player update, input, IO, actor
         scripts, quest/cell scripts, process lists, cell streaming, culling, scene update, render, audio, AI wait,
@@ -1311,7 +1361,7 @@ def register(server, project, annotations, result_type):
             if action == 'clear':
                 return probe_tools.clear()
             return probe_tools.config(samples, exit_samples, every)
-        return await invoke('fnv_probe', action_fn, 'read' if action in ('plan', 'status', 'read', 'harvests') else 'control')
+        return await invoke('fnv_probe', action_fn, 'read', action=action)
 
     def _public(out):
         if isinstance(out, dict):
@@ -1355,7 +1405,7 @@ def register(server, project, annotations, result_type):
                 engine = live.engine()
                 return dict(oracle.purity().check(engine.resolve(function)), function=engine.summary(engine.resolve(function)))
             return _public(oracle.run(function, mode, harvest, radius))
-        return await invoke('fnv_name_oracle', action_fn, 'read' if action == 'purity' else 'control')
+        return await invoke('fnv_name_oracle', action_fn, 'read', action=action)
 
     @server.tool(annotations=act)
     async def fnv_name_test(action: Literal['test', 'battery', 'panels'] = 'test', hypothesis: dict | None = None,
@@ -1376,7 +1426,7 @@ def register(server, project, annotations, result_type):
             if not hypothesis:
                 raise ValueError('test needs hypothesis')
             return experiments.test(hypothesis)
-        return await invoke('fnv_name_test', action_fn, 'read' if action == 'panels' else 'control')
+        return await invoke('fnv_name_test', action_fn, 'read', action=action)
 
     @server.tool(annotations=read)
     async def fnv_name_export(path: Annotated[str, Field(max_length=500)] | None = None) -> result_type:
@@ -1434,7 +1484,7 @@ def register(server, project, annotations, result_type):
             if not path:
                 raise ValueError('import_frida needs path')
             return atlas.import_frida(path)
-        return await invoke('fnv_atlas', action_fn, 'read' if action in ('actions', 'runs', 'function', 'action') else 'control')
+        return await invoke('fnv_atlas', action_fn, 'read', action=action)
 
     @server.tool(annotations=control)
     async def fnv_warnings(action: Literal['status', 'enable', 'read', 'summary', 'clear', 'capture'] = 'status',
@@ -1548,7 +1598,7 @@ def register(server, project, annotations, result_type):
         return await invoke('fnv_session', lambda: session_tools.run(action, start=start, label=label,
                                                                      timeout_seconds=timeout_seconds,
                                                                      deterministic=deterministic,
-                                                                     quit_game=quit_game), 'control')
+                                                                     quit_game=quit_game), 'control', action=action)
 
     @server.tool(annotations=read)
     async def fnv_health() -> result_type:
@@ -1699,7 +1749,7 @@ def register(server, project, annotations, result_type):
         gate to each job's frame; the game is left held at the end (fnv_time_control release). list: saved
         replays."""
         return await invoke('fnv_replay', lambda: replay_tools.run(action, name=name, seed=seed, load=load),
-                            'read' if action == 'list' else 'control')
+                            'read' if action == 'list' else 'control', action=action)
 
     @server.tool(annotations=act)
     async def fnv_render(action: Literal['toggle', 'imagespace', 'shaders', 'lights'],
@@ -2013,7 +2063,7 @@ def register(server, project, annotations, result_type):
         known spin locks (process lists, garbage collector, global, script delayed actions) with their owner."""
         return await invoke('fnv_threads', lambda: thread_tools.list(), 'read')
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_memory(action: Literal['pools', 'alloc_trace', 'refcount'] = 'pools',
                          seconds: Annotated[float, Field(gt=0, le=60)] = 3.0,
                          top: Annotated[int, Field(ge=1, le=200)] = 20,
@@ -2023,7 +2073,7 @@ def register(server, project, annotations, result_type):
         after), with the function and source line of each caller. refcount pointer seconds: who increments and
         decrements an NiRefObject's reference count meanwhile (a write watchpoint on +4, any thread)."""
         return await invoke('fnv_memory', lambda: memory_tools.run(action, seconds=seconds, top=top, pointer=pointer),
-                            'read')
+                            'read', action=action)
 
     @server.tool(annotations=read)
     async def fnv_object(action: Literal['identify', 'find', 'referrers'] = 'identify',
@@ -2112,7 +2162,7 @@ def register(server, project, annotations, result_type):
                                                                      radius=radius),
                             'act' if action == 'set' else 'read')
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_systems(action: Literal['formulas', 'formula', 'sweep', 'progression', 'needs', 'perk', 'barter',
                                           'zone', 'crime'],
                           name: Annotated[str, Field(max_length=200)] | None = None,
@@ -2129,7 +2179,7 @@ def register(server, project, annotations, result_type):
         name=<ECZN>: the level the zone uses now, its minimum and maximum. crime: karma (New Vegas keeps no
         bounty)."""
         return await invoke('fnv_systems', lambda: systems_tools.run(action, name=name, args=args, index=index,
-                                                                     start=start, stop=stop, steps=steps), 'read')
+                                                                     start=start, stop=stop, steps=steps), 'read', action=action)
 
     @server.tool(annotations=control)
     async def fnv_crawl(action: Literal['cells', 'dialogue', 'quest', 'items'],

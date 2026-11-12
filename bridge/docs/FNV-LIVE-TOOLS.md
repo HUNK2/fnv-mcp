@@ -126,6 +126,20 @@ missing. In short:
    ```
 
    `engine_control` is `"read"` by default: the act tools then refuse. Set `"full"` to allow changes.
+   Since 2026-11-12 (PLAN-3 S1.5, bug T1) "act" covers every action that changes the running game or leaves
+   something installed in it, listed in `MUTATING_ACTIONS` in `geck_mcp/fnv_live_tools.py`. With `"read"` these
+   now refuse too (they used to run as read or control):
+   - `fnv_hooks remove`; `fnv_trace`, `fnv_tracepoint`, `fnv_script_profile`, `fnv_script_trace`, `fnv_damage_log`
+     start and stop; `fnv_frame_profile`; `fnv_crash_context` enable and disable; `fnv_memory alloc_trace`;
+     `fnv_events` subscribe and unsubscribe; `fnv_watch frames=`; `fnv_systems` formula and sweep;
+     `fnv_leveled_roll seed=`. These tools are now annotated as act (not read-only).
+   - `fnv_probe` install, remove, clear, config and harvest; `fnv_name_oracle` run, calibrate and sweep;
+     `fnv_name_test` test and battery; `fnv_field_watch`; `fnv_atlas` run and import_frida.
+   - The scenario runners, whose steps change the game: `fnv_test_run`, `fnv_test_run_all`, `fnv_do`,
+     `fnv_session` start and end, `fnv_crawl`, `fnv_bisect`, `fnv_replay` record, stop and play.
+
+   Reads in the same tools (list, read, status, report) still work with `"read"`. `fnv_launch`, `fnv_quit` and
+   the installs stay control.
    For `fnv_patch_map`, add `"clean_exe"`: your own unpacked FalloutNV.exe 1.4.0.525 (the Steam exe keeps its
    code encrypted on disk; Steamless unpacks it). It is read locally and never copied.
 3. With the game closed, `fnv_companion_install` builds the DLL with Zig and installs it as the MO2 mod

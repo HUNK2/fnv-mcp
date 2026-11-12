@@ -1379,7 +1379,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R2 | high | fixed | The F5 fix makes bisect unable to find a plugin that crashes the game while it loads (F5) | `geck_mcp/fnv_suite.py:75-83` |
 | R3 | high | fixed | The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3) | `geck_mcp/fnv_suite.py:131-146` |
 | R4 | high | fixed (live check pending) | Hot reload kills a cancelled call that is still running in the old server (A5 fix) | `geck_mcp/supervisor.py:331-338` |
-| T1 | high | open | The engine_control gate is bypassed by tools registered as control or read | `fnv_live.py:167` |
+| T1 | high | fixed | The engine_control gate is bypassed by tools registered as control or read | `fnv_live.py:167` |
 | G1 | medium | open | Undoing a nudge/rotate/scale leaves the export pose at the undone value | `geck_mcp/fnv_create.py:1109-1119` |
 | G4 | medium | open | fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit) | `geck_mcp/fnv_live.py:1419` |
 | G5 | medium | open | fnv_wait_for seconds with clock=game says "met" while the game clock is paused | `geck_mcp/fnv_time.py` |
@@ -1510,7 +1510,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: the docs say "Act tools change the running game and need fnv.engine_control full", but tools that install/remove hooks or write game memory are registered with kind 'control' or 'read' (and annotations=read), so they skip the gate. With the game running and engine_control="read", they would install hooks. Also read-only annotations mislead clients that auto-approve read tools.
 - Fix idea: gate kind in ('act','control') for mutating actions, or reclassify these tools as 'act'; set annotations to non-read for hook-installing tools.
 - Checked: fnv_hook_set is not affected (its changing actions are invoked as act). The hook-installing actions of fnv_probe, fnv_atlas, fnv_name_oracle, fnv_name_test and fnv_field_watch are invoked as 'control', and fnv_hooks remove as 'read'; LiveService.run gates only kind == 'act' (fnv_live.py:167).
-- Status: open
+- Status: fixed (S1.5). `fnv_live_tools.MUTATING_ACTIONS` lists every tool and action that changes the game or leaves something installed (decision D2); `invoke()` derives the kind from it (`gated_kind`), so a call site cannot pass a weaker kind, and a listed tool that passes no action counts as changing. 13 tools moved from read to act annotations; the scenario runners (fnv_test_run, fnv_do, fnv_session, fnv_crawl, fnv_bisect, fnv_replay) are gated too. Tests: `tests/test_stab_gate.py` (44 mutating actions refused under engine_control read with no pipe op; their reads still allowed).
 
 ## Round 2: Medium
 
