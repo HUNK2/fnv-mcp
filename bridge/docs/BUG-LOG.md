@@ -1,6 +1,6 @@
 # Bug log
 
-Audit and stress test of the geck MCP bridge, 2026-11-12, the fix pass the same day, and a second pass that ran every remaining check in the game (L entries are bugs that second pass found and fixed). Every entry has a Resolution line; the table status says where it stands.
+Audit and stress test of the geck MCP bridge, 2026-11-12, the fix pass the same day, and a second pass that ran every remaining check in the game (L entries are bugs that second pass found and fixed). Every entry has a Resolution line; the table status says where it stands. A later hunt the same day found 54 more bugs, all still open: see "Round 2" at the end.
 
 **How it was found.** Six read-only audits, one per area (about 47,000 lines of Python and C), each looking for bugs that break normal use: thread safety, state left behind in the game, wrong offsets or layouts, error paths, protocol handling. Then stress tests: 208 parallel offline tool calls with odd inputs (no cross-talk found), parallel live calls on the running game, parallel placements and undo, supervisor reloads during long calls, and two full test-suite runs (867 tests pass).
 
@@ -17,7 +17,7 @@ Totals: 120 bugs, 21 high, 51 medium, 48 low.
 - fixed (diagnosis), old cause unknown: 1
 - open (client side): 1
 
-Tests: all 1002 pass with GECK_MCP_ZIG set (4 skipped: Wine-only, symlink rights, MSVC9 tools), including 135 regression tests in tests/test_bugfix_*.py. The rebuilt engine companion is installed in the dev profile; every fix with a game part was exercised in the running game (debugger holds, return, step out, until and temporary sites, long waits, crawl of interior and exterior cells, screenshots, save backup, guarded calls into code with its own SEH frame, saves made with moving objects, quit tracing). The exterior crawl uses a one-cell test plugin, HelloExterior.esp, installed in the dev profile. Nothing is committed.
+Tests: all 1002 pass with GECK_MCP_ZIG set (4 skipped: Wine-only, symlink rights, MSVC9 tools), including 135 regression tests in tests/test_bugfix_*.py. The rebuilt engine companion is installed in the dev profile; every fix with a game part was exercised in the running game (debugger holds, return, step out, until and temporary sites, long waits, crawl of interior and exterior cells, screenshots, save backup, guarded calls into code with its own SEH frame, saves made with moving objects, quit tracing). The exterior crawl uses a one-cell test plugin, HelloExterior.esp, installed in the dev profile. The first round is committed as 133ed0e.
 
 | ID | Severity | Status | Bug | Where |
 |---|---|---|---|---|
@@ -1357,3 +1357,772 @@ IDs: A server core, B native companion, C offline data, D world and photos, E de
 - What happens: After the game exited, every error envelope still carried game {pid 15192, frame 20329} while fnv_status said not_running.
 - Fix idea: Clear the cached game info when the process is gone, or mark it stale.
 - Resolution (fixed, verified live): The link forgets its hello on close and on disconnect. Live: the envelope after a quit says game null.
+
+# Round 2: open bugs (2026-11-12)
+
+A second hunt the same day, after the fix pass was committed (133ed0e). Nothing in this part is fixed yet; every entry is open. IDs start with the way the bug was found:
+
+- G: live stress test in the running game
+- R: review of the fix-pass diff (036b4c8..133ed0e)
+- T: tool-contract sweep (every tool called offline with odd arguments)
+- P: parsers run over all real data
+
+The parser sweep ran 16 plugins (about 630,000 records), the record index (866,000 references), 3,719 scripts, 58 saves (1.4 million change forms), 21 BSAs and the engine map; everything not listed here checked clean. Findings that did not hold up when checked were dropped (fnv_window persist writes the dev profile's Fallout.ini, as designed, with a backup; fnv_hook_set is gated). R entries that name an earlier ID are fixes from the first pass that are incomplete or wrong.
+
+Totals: 66 bugs, 5 high, 19 medium, 42 low. N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
+
+Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m unittest discover -s tests` from `bridge`, ran 1,011 tests: all passed, 4 skipped, 0 failures. That includes the 54 engine companion tests, which now find Zig from the project files instead of being skipped without `GECK_MCP_ZIG`. Before S0 the same run with `GECK_MCP_ZIG` set was 1,002 tests, 4 skipped. No C test failed, so no N13.
+
+| ID | Severity | Status | Bug | Where |
+|---|---|---|---|---|
+| R1 | high | open | Coverage: two threads that reach the same coverage line at once crash the game (B1 fix) | `native/engine/w6_cov.c:31-55` |
+| R2 | high | open | The F5 fix makes bisect unable to find a plugin that crashes the game while it loads (F5) | `geck_mcp/fnv_suite.py:75-83` |
+| R3 | high | open | The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3) | `geck_mcp/fnv_suite.py:131-146` |
+| R4 | high | open | Hot reload kills a cancelled call that is still running in the old server (A5 fix) | `geck_mcp/supervisor.py:331-338` |
+| T1 | high | open | The engine_control gate is bypassed by tools registered as control or read | `fnv_live.py:167` |
+| G1 | medium | open | Undoing a nudge/rotate/scale leaves the export pose at the undone value | `geck_mcp/fnv_create.py:1109-1119` |
+| G4 | medium | open | fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit) | `geck_mcp/fnv_live.py:1419` |
+| G5 | medium | open | fnv_wait_for seconds with clock=game says "met" while the game clock is paused | `geck_mcp/fnv_time.py` |
+| G9 | medium | open | fnv_globals rounds short/long globals that hold fractions (GameHour), and its undo restores the rounded value | `geck_mcp fnv_globals read and set` |
+| R5 | medium | open | `fnv_flow call` leaves its breakpoint armed (and its predicate slot freed) when the call cannot be armed (E4 incomplete; new path from the B10 fix) | `geck_mcp/fnv_flow.py:171-191 arms the breakpoint` |
+| R6 | medium | open | `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite) | `geck_mcp/fnv_inspect.py:671-681` |
+| R7 | medium | open | After a server restart the camera journal entry still undoes with a blind `tfc`, so fnv_revert_all turns the fly camera ON (D2 incomplete) | `geck_mcp/fnv_eyes.py:271-292` |
+| R8 | medium | open | Journal: `mark_undone`'s `os.replace` fails while any other handle has `journal.jsonl` open, so an undo that already ran is not recorded and undo/revert_all stops (A1 fix, A7 again) | `geck_mcp/fnv_live.py:104-115` |
+| R9 | medium | open | C5 is only partly fixed: some form-id references are still skipped as text (C5) | `geck_mcp/fnv_records.py:96` |
+| R10 | medium | open | `save_session` rewrites `session.json` with no lock: parallel act tools lose changes or corrupt it, and a corrupt file then breaks every act tool in a new server (D8 incomplete) | `geck_mcp/fnv_game.py:239-253` |
+| R11 | medium | open | Step over, step out and `step line` leave their temporary `to` site armed and unrecorded when another stop of the same thread comes first (E15 / L5 incomplete) | `geck_mcp/fnv_debugger.py _run_to` |
+| T2 | medium | open | fnv_input: invalid key_name raises outside invoke() | `fnv_live_tools.py:618` |
+| P2 | medium | open | Vanilla compressed LAND with bad Adler-32 breaks full parse | `esp/codec.py decompress` |
+| P5 | medium | open | record_find reports the wrong version's name and editor ID | `fnv_data.py record_find` |
+| G2 | low | open | fnv_spawn with a reference spec (player, crosshair, a ref form id) fails with a script compile error | `geck_mcp/fnv_agent.py:808` |
+| G3 | low | open | A placed ref whose SetPos/SetAngle fails is never journaled | `geck_mcp/fnv_create.py:1005-1019` |
+| G6 | low | open | fnv_wait_for seconds with clock=real uses the fixed step as the real frame rate | `geck_mcp/fnv_time.py:450-455` |
+| G7 | low | open | fnv_time_control status says "The game is running" while the clock is paused | `geck_mcp/fnv_time.py status verdict` |
+| G8 | low | open | The envelope's game.frame is the frame of the last ping, minutes old | `geck_mcp/fnv_live.py:190-192` |
+| G10 | low | open | fnv_globals set returns the whole unfiltered list, with the values from before the write | `geck_mcp fnv_globals` |
+| G11 | low | open | fnv_hook_set: with a limit, actionHits counts every call and read says every call was changed | `native/engine/fnvmcp_engine.c:580-581` |
+| G12 | low | open | fnv_mem_write: an out-of-range value is FNV_ERROR, and setting types show as mangled names | `geck_mcp fnv_mem_write` |
+| G13 | low | open | After break clear, a stop that is still parked is described as "break 0" | `geck_mcp/fnv_debugger.py` |
+| G14 | low | open | fnv_console runs qqq (and other quit/load lines) unguarded; the quit is then traced as not asked by the bridge | `geck_mcp/fnv_live.py:235` |
+| G15 | low | open | fnv_status fails with SEVERAL_GAMES while a game is exiting | `geck_mcp/fnv_game.py` |
+| G16 | low | open | fnv_engine_get ignores extra arguments | `geck_mcp/fnv_control.py:396-404` |
+| R12 | low | open | `fnv_session start` rollback leaves prepare's crash-context hooks on, and stops a warning capture it did not start (A11 incomplete) | `geck_mcp/fnv_session.py:77-117` |
+| R13 | low | open | `fnv_debug thaw` with nothing on record resumes every thread of the game once (E1/E6 fix) | `geck_mcp/fnv_debugger.py thaw()` |
+| R14 | low | open | C2 is only partly fixed: a failed refs index build keeps the SQLite write lock (C2) | `geck_mcp/fnv_records.py:175-208` |
+| R15 | low | open | C3 is fixed within one process only: two server processes still collide (C3) | `geck_mcp/fnv_data.py:168-210` |
+| R16 | low | open | C13 is only partly fixed: strict cp1252 decodes remain in other readers (C13) | `geck_mcp/fnv_create.py:64, 71, 745, 751, 767, 818` |
+| R17 | low | open | The F16 fix leaves its own error path open: an item that fails mid-test stays in the player's inventory (F16) | `geck_mcp/fnv_crawl.py:483-517` |
+| R18 | low | open | The new "terminated from outside" note in `fnv_status` is wrong with an older companion and when the bridge itself force-quit (S4 diagnosis) | `geck_mcp/fnv_game.py:305-313` |
+| R19 | low | open | Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix) | `geck_mcp/fnv_live.py:89-96` |
+| R20 | low | open | E6 state file: one save with a different `start` drops every other section (ProcState) | `geck_mcp/fnv_pred.py:400-421` |
+| T3 | low | open | fnv_name_export writes a trace file even when it has nothing to export | `fnv naming export tool` |
+| T4 | low | open | Inconsistent error codes for "game not running" | `fnv_live.py ready()/in_game(), fnv_link.py EngineLink.connect, fnv_game.game_pro` |
+| T5 | low | open | Raw int(...,16) ValueError text in fnv_probe and fnv_events arguments | `fnv_live_tools.py` |
+| T6 | low | open | Short form ids (no leading zeros / no load-order prefix) not accepted consistently | `fnv_live.py resolve()` |
+| T7 | low | open | fnv_asset_check accepts arbitrary paths and surfaces a raw parse error | `fnv_asset_check registration` |
+| T8 | low | open | Parameters documented/required but ignored | `several fnv_* registrations` |
+| T9 | low | open | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
+| P3 | low | open | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
+| P4 | low | open | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
+| P6 | low | open | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
+| P7 | low | open | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
+| P8 | low | open | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
+| P9 | low | open | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
+| P10 | low | open | Save parser: FLT_MAX rotation sentinel passed through | `fnv_save.py ACHR/ACRE initial block decode` |
+| N1 | medium | open | An unknown undo op is marked undone without running | `geck_mcp/fnv_live.py:1347-1382` |
+| N2 | medium | open | A console undo is marked undone even when the game rejected the line | `geck_mcp/fnv_live.py:1356-1357, 1380-1381` |
+| N3 | medium | open | After an undo the camera keeps its saved state, so later camera changes are not journaled | `geck_mcp/fnv_eyes.py:273-274` |
+| N4 | low | open | `form_delete` does not supersede `form_create`, so export keeps deleted forms | `geck_mcp/fnv_create.py:962` |
+| N5 | low | open | Undoing a probe only disarms it: the stubs stay patched and `probe_session.json` still says armed | `geck_mcp/fnv_probe.py:432` |
+| N6 | low | open | The `dbg_clear` undo clears every debug register, including other tools' | `geck_mcp/fnv_watch.py:170` |
+| N7 | low | open | The rng seed undo does not restore the index at +0x9C8 | `geck_mcp/fnv_agent.py:1386, 1409` |
+| N8 | medium | open | About a dozen tools change the game with no journal entry at all | `fnv_deep.py, fnv_debugger.py, fnv_time.py, fnv_naming.py, fnv_agent.py and others (see details)` |
+| N9 | low | open | actor_control enable, disable, unconscious, restrain and add_item have blind undos | `geck_mcp/fnv_live.py:1245` |
+| N10 | medium | open | 8 tool families journal after the change, so a failure leaves an unjournaled change | `fnv_live.py, fnv_code.py, fnv_probe.py, fnv_watch.py, fnv_create.py, fnv_world.py, fnv_eyes.py (see details)` |
+| N11 | low | open | The game's identity is chosen six different ways, and `tasklist` runs on every `game.process()` call | `geck_mcp/fnv_game.py:~33-52; fnv_code.py:89 and four other pickers` |
+| N12 | low | open | Nothing under `state/fnv` is pruned, and none of it has a cross-process lock | `state/fnv/*` |
+
+## Round 2: High
+
+### R1. Coverage: two threads that reach the same coverage line at once crash the game (B1 fix)
+
+**Where:** `native/engine/w6_cov.c:31-55` (`cov_on_breakpoint`, the new `else if (*at == 0xCC) return false;` branch) and `native/engine/w6_cov.c:64-77` (`cov_release_range`).
+- **Severity:** high (crash).
+- **Confidence:** likely (from reading the code; there is no offline harness for the companion).
+- **What happens:**
+  - Thread A traps on an armed coverage line. Its `InterlockedCompareExchange(&cov_state[i], 2, 1)` wins, then it calls `VirtualProtect` (a system call) before it writes the original byte back.
+  - Thread B traps at the same address inside that window. Its exchange fails because the state is already 2, and `*at` is still 0xCC. The new branch then returns false ("not ours").
+  - `on_trap` then tries `bp_on_breakpoint`, which finds no site, and the probe table, which finds nothing. It returns `EXCEPTION_CONTINUE_SEARCH`, so the int3 is unhandled and the game crashes.
+  - Before the fix, thread B set `Eip = address` and ran the trap again until A had restored the byte. That loop was harmless.
+  - `cov_release_range` has the same window in the other order. It sets the state from 1 to 0 first, then calls `VirtualProtect`, then restores the byte. It is called without the other threads suspended, from `op_hook` (`fnvmcp_engine.c:751`) and from `op_code patch` (`w5_code.c:56`). Any thread that traps in between sees state 0 with 0xCC and crashes the same way.
+  - Code that worker threads share (Havok, audio, task threads) makes a simultaneous first hit realistic.
+- **Fix idea:** Add a transient "restoring" state (3). The hit path claims it with an exchange from 1 to 3, restores the byte, then sets 2. The release path also goes through 3 (or restores the byte before it changes the state). In the handler, state 3 means "in flight: set Eip = address and run it again". Only state 0 or 2 with 0xCC should be treated as foreign.
+- Status: open
+
+### R2. The F5 fix makes bisect unable to find a plugin that crashes the game while it loads (F5)
+
+**Where:** `geck_mcp/fnv_suite.py:75-83` (`_passes` sets `inconclusive`) and `:213-216` (round 0 returns "Inconclusive"). The failure is tagged at `geck_mcp/fnv_scenario.py:441-446`.
+- **Severity:** high (wrong result in normal use; "the game crashes on load" is the usual reason to bisect).
+- **Confidence:** confirmed by repro (`repro_bisect_crash_at_load.py`).
+- **What happens:**
+  - A culprit that makes the game exit at startup or load raises `GameError('GAME_EXITED', ..., {'crash': ...})` inside `prepare`.
+  - `_run_once` records that as a phase-'prepare' failure, and `_passes` calls any run whose failures are all 'prepare' inconclusive.
+  - So round 0 (every mod on) returns "Inconclusive" and stops. Any half that contains the culprit stops the same way.
+  - In the repro (4 mods, M2 crashes at load) the result is culprit None after 1 round.
+- **Fix idea:** Count GAME_EXITED, or any prepare failure whose evidence has `crash`, as a fail. Call a run inconclusive only when a master is missing: keep each half closed under its masters, or check `missingMasters` in the load order before launching.
+- Status: open
+
+### R3. The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3)
+
+**Where:** `geck_mcp/fnv_suite.py:131-146` (`_backup_original`), and `:96-101` with `:161` (`_original` is reset and the file on disk is taken as the original). Nothing reads `*.restore.json` or the `.orig` backup.
+- **Severity:** high (data loss in the user's plugin). It needs the server to die mid-bisect; a supervisor reload can cause that (see finding 4) and so can a client restart.
+- **Confidence:** confirmed by repro (`repro_bisect_dead_server.py`).
+- **What happens:**
+  1. The server dies between rounds, so A.esp stays a pruned variant (1 of 4 records in the repro). Nothing restores it on restart and nothing warns.
+  2. The next `fnv_bisect level=records` on that plugin reads the variant as the original and backs it up.
+  3. It then points `A.esp.restore.json` at that backup, which loses the only pointer to the real one.
+  4. At the end it "restores" the variant, so the plugin is left with 1 of 4 records.
+- **Fix idea:**
+  - At bisect start (and at server start), check for an existing `restore.json`. If the plugin's sha differs from the recorded one and the backup's sha matches, restore the backup, or refuse with RESTORE_PENDING.
+  - Delete `restore.json` after a successful restore.
+  - Never overwrite an existing `restore.json` whose backup differs from the current file.
+- Status: open
+
+### R4. Hot reload kills a cancelled call that is still running in the old server (A5 fix)
+
+**Where:** `geck_mcp/supervisor.py:331-338` (the cancel handling pops `in_flight`), `:420-426` (`watch_loop` reloads when `in_flight` is empty), and `:186-199` (`Child.close`, grace 10 s, then `kill()`).
+- **Severity:** high. The game or the user's files are left half changed. It needs a cancel and then a code change, but with the supervisor that is ordinary development.
+- **Confidence:** confirmed by repro (`regress\sup\repro_cancel_reload.py`).
+- **What happens:**
+  - Tool calls are shielded from cancellation: `server.py:139-141` and `fnv_live_tools.py:307-308` use `CancelScope(shield=True)` and `abandon_on_cancel=False`. The service docstring says that killing a running call is unsafe.
+  - The A5 fix drops a cancelled request from `in_flight` at once, although the old child is still running it.
+  - The next code change then reloads: `old.close()` closes stdin, waits 10 s and kills the process.
+  - In the repro, a 14 s call that the client cancelled after 1 s was killed (exit code 1 after 10.8 s), and its work never finished.
+  - Calls that can be cut this way include `fnv_wait_for` (gate held between rounds), `fnv_crawl` (hooks and file log on), `fnv_bisect records` (the user's plugin left pruned; see finding 3) and any debugger or act tool mid-change. A `notifications/cancelled` from the client is enough.
+- **Fix idea:** Keep cancelled requests in a separate "draining" set, owned by the child, and don't reload while it is non-empty. Or reload without killing: when the old child still has draining calls, let it exit on its own once they finish, with no 10 s kill (or a kill only after a much longer bound). Clear the drained id when the child's late response arrives or when it exits.
+- Status: open
+
+### T1. The engine_control gate is bypassed by tools registered as control or read
+
+- Where: fnv_live.py:167 (only kind == 'act' is gated); fnv_live_tools.py (fnv_probe, fnv_name_oracle, fnv_name_test, fnv_field_watch, fnv_atlas invoked as 'control'; fnv_probe uses 'read' for plan/status/read/harvests and 'control' otherwise); fnv_deep.py:628 crash_context and :676 hooks_tool
+- Severity: high
+- Confidence: confirmed by a call (project with engine_control="read": these tools were not refused with CONTROL_DISABLED; they proceeded to the not-running/pipe stage, while true act tools returned CONTROL_DISABLED)
+- What happens: the docs say "Act tools change the running game and need fnv.engine_control full", but tools that install/remove hooks or write game memory are registered with kind 'control' or 'read' (and annotations=read), so they skip the gate. With the game running and engine_control="read", they would install hooks. Also read-only annotations mislead clients that auto-approve read tools.
+- Fix idea: gate kind in ('act','control') for mutating actions, or reclassify these tools as 'act'; set annotations to non-read for hook-installing tools.
+- Checked: fnv_hook_set is not affected (its changing actions are invoked as act). The hook-installing actions of fnv_probe, fnv_atlas, fnv_name_oracle, fnv_name_test and fnv_field_watch are invoked as 'control', and fnv_hooks remove as 'read'; LiveService.run gates only kind == 'act' (fnv_live.py:167).
+- Status: open
+
+## Round 2: Medium
+
+### G1. Undoing a nudge/rotate/scale leaves the export pose at the undone value
+
+- Where: geck_mcp/fnv_create.py:1109-1119 (adjust, _update_placed; place_pose entries have undo None)
+- Severity: medium
+- Confidence: confirmed live
+- What happens: place array -> nudge FF001319 by +50 z -> fnv_undo that nudge. The ref is back at z 6364.31 in the game (fnv_ref), but fnv_place list still says z 6414.31: the place_pose entry written by the nudge is not undone with it, and the export (fnv_author) reads the newest place_pose.
+- Fix idea: tie the place_pose to its place_adjust entry (store the adjust id, skip poses whose adjust is undone), or write a new place_pose with the before pose when a place_adjust is undone.
+- Status: open
+
+### G4. fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit)
+
+- Where: geck_mcp/fnv_live.py:1419 (skipped ignores same_process and since)
+- Severity: medium
+- Confidence: confirmed live
+- What happens: after 8 changes in this game, fnv_revert_all reverted 8 and returned notUndoable with 3,761 ids from every earlier game process (journal.jsonl has 5,291 lines). The reply was 56,996 characters, too big for the client, so the agent cannot see the result without reading a dump file. fnv_session end (revert since) has the same list.
+- Fix idea: filter skipped with the same same_process/since test as the undo list, and cap it (count plus the newest 50).
+- Status: open
+
+### G5. fnv_wait_for seconds with clock=game says "met" while the game clock is paused
+
+- Where: geck_mcp/fnv_time.py (seconds -> estimatedFrames from the real frame rate; the clock counter is not consulted)
+- Severity: medium
+- Confidence: confirmed live
+- What happens: fnv_time_control pause (clock counter 1), then fnv_wait_for seconds=1 clock=game -> "Condition met at frame 441880 after 60 frames", although no game time passed. The description promises game seconds scaled by the time multiplier; a paused clock (multiplier effectively 0) should never meet it, or the tool should refuse/warn.
+- Fix idea: when the clock counter is above 0 (or the multiplier is 0), refuse with CLOCK_PAUSED, or wait on the game clock itself (a predicate over the game-time global) instead of a frame estimate.
+- Status: open
+
+### G9. fnv_globals rounds short/long globals that hold fractions (GameHour), and its undo restores the rounded value
+
+- Where: geck_mcp fnv_globals read and set (the type char decides rounding; the engine stores every global as a float at +0x24)
+- Severity: medium
+- Confidence: confirmed live
+- What happens: GameHour is FNAM short in FalloutNV.esm, but the engine keeps the fraction (console GetGlobalValue GameHour -> 9.12). fnv_globals shows 9; set {"GameHour": 9.5} writes 9 and reports old 9 new 9. The journaled old value is the rounded one, so fnv_undo cannot restore 9.12. Time of day cannot be set to a half hour with this tool.
+- Fix idea: read and journal the raw float; round only on write, and not for GameHour/GameDaysPassed (or only when the value is integral), and say when a value was rounded.
+- Status: open
+
+### R5. `fnv_flow call` leaves its breakpoint armed (and its predicate slot freed) when the call cannot be armed (E4 incomplete; new path from the B10 fix)
+
+**Where:** `geck_mcp/fnv_flow.py:171-191` arms the breakpoint, then `_trace_armed` at `:193-195` calls `_arm_call`. `_arm_call` (`:258-291`) can raise `OLD_MODULE` (new, from `_slot_has_edx(required=True)`), `BAD_ARGUMENTS` (more than 12 words) or a resolve error for an argument name.
+- **Severity:** medium (the game hangs in a less common case).
+- **Confidence:** confirmed by repro (`regress\flow\repro_flow_bp_left.py`: OLD_MODULE raised, `bp set` sent, no `bp clear`).
+- **What happens:**
+  - The exception propagates out of `trace()`. Its `finally` frees and clears the `when` predicate slot, but nothing clears the FLAG_ONCE breakpoint.
+  - The next time the game calls that function, the thread parks at a breakpoint stop that no tool waits for. On the main thread this freezes the game.
+  - Any later tool call resets the dead-man clock, so the stop stays parked while the agent keeps working.
+  - The freed slot can then be claimed by another break, and the stale breakpoint would then use that break's condition.
+  - The OLD_MODULE message says "fnv_native unload ..., then call again", which arms a second breakpoint on a new id.
+- **Fix idea:** Call `_arm_call` before the breakpoint is armed, or wrap everything after `_set_bp` in try/except that sends `bp clear <id>` (and zeroes the call slot) before re-raising. Run the argument checks (12 words, resolving names, `_slot_has_edx`) before anything is armed.
+- Status: open
+
+### R6. `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite)
+
+**Where:** `geck_mcp/fnv_inspect.py:671-681`: `seen = max(seen, rec[0] + 1)` with `self.deep.records(hook, since=seen)`. `DeepTools.records` (`fnv_deep.py:303-327`) returns records in (since, current], so `since` is exclusive.
+- **Severity:** medium (wrong result in normal use of that action).
+- **Confidence:** confirmed by repro (`regress\subtitle\repro_subtitles_skip.py`: 8 subtitles shown, 4 caught, lines 1, 3, 5 and 7).
+- **What happens:** After reading record N, the next poll asks for records above N+1, so record N+1 is never read. When subtitles arrive one per poll (0.15 s), every second line is lost. Lines that arrive within one poll are all kept, apart from the one after the last of each batch.
+- **Fix idea:** Use `seen = max(seen, rec[0])`, or use the sequence number that `records()` returns (as `fnv_blame` does).
+- Status: open
+
+### R7. After a server restart the camera journal entry still undoes with a blind `tfc`, so fnv_revert_all turns the fly camera ON (D2 incomplete)
+
+**Where:** `geck_mcp/fnv_eyes.py:271-292` (`_remember` journals `{'op': 'console', 'line': 'tfc'}`) and `:405-421` (`restore`). The entry is marked undone only when `self.saved`, which lives in server memory, still holds the journal id.
+- **Severity:** medium (the game is left changed in normal use: the supervisor restarts the server on every code change).
+- **Confidence:** confirmed by repro (`regress\camera\repro_camera_tfc_after_restart.py`: after restart, restore, then revert, the fly camera is on).
+- **What happens:**
+  1. Server 1 turns the fly camera on, and the journal gets the undo `tfc`.
+  2. After a reload, server 2 has no saved state. `restore()` takes the "No saved state: turned fly mode off" path and does not touch the journal.
+  3. `fnv_revert_all` (or `fnv_session end`) then runs the blind `tfc` and turns the fly camera back on.
+  - The same happens when the user turns the fly camera off by hand, or another tool does.
+- **Fix idea:** Make the undo depend on the current state, for example a new undo op `fly_off` that runs `tfc` only while `fly_state()['fly']` is on. Also mark open `camera` journal entries of this game process as undone in the no-saved-state branch of `restore()`.
+- Status: open
+
+### R8. Journal: `mark_undone`'s `os.replace` fails while any other handle has `journal.jsonl` open, so an undo that already ran is not recorded and undo/revert_all stops (A1 fix, A7 again)
+
+**Where:** `geck_mcp/fnv_live.py:104-115` (`mark_undone`: write the tmp file, then `os.replace`) and `:1395-1408` (`_apply_undos`, where the `try` covers only `_apply_undo`, not `mark_undone`).
+- **Severity:** medium. It needs a second reader: another server process on the same state folder (two sessions on one game, as now), or an indexer or antivirus scan.
+- **Confidence:** confirmed by repro (`regress\journal\repro_mark_undone_sharing.py`).
+- **What happens:**
+  - On Windows, `os.replace` onto a file that another handle has open without FILE_SHARE_DELETE fails with `PermissionError [WinError 5]`. Python's own `open()` handles are like that.
+  - The A1 lock is per process, so another server reading `entries()` at that moment, or a scanner, makes it fail.
+  - By then the undo has already run in the game. The error escapes `_apply_undos`, so that entry is not marked and the remaining undos do not run.
+  - A retry applies the same undo twice, which is exactly A7. In the repro the undo was applied in the game and nothing was marked undone.
+  - The old in-place `write_text` did not fail this way.
+- **Fix idea:** Retry `os.replace` briefly on PermissionError and fall back to an in-place rewrite. Catch and report mark failures in `_apply_undos` per entry rather than aborting. For two processes, use an OS file lock (for example `msvcrt.locking` on a lock file) around read-modify-write, and give each process its own tmp name.
+- Status: open
+
+### R9. C5 is only partly fixed: some form-id references are still skipped as text (C5)
+
+**Where:** `geck_mcp/fnv_records.py:96` with `_is_text` at `:128-130`. `geck_mcp/fnv_data.py:760` (`decode_subrecord`) uses the same check.
+- **Severity:** medium (as C5).
+- **Confidence:** confirmed by repro on the real FalloutNV.esm (`regress\data\c5_text_formids.py`).
+- **What happens:**
+  - A 4-byte field counts as text when it ends in 0x00 and its other bytes are printable.
+  - FalloutNV.esm ids 0x0009xxxx, 0x000Axxxx and 0x000Dxxxx with printable low bytes pass that test.
+  - The scan drops 81 real references in FalloutNV.esm alone: NPC_ RNAM races 000987DC to 000987DF (31), SCOL ONAM (29), TERM TNAM (11) and others.
+  - `fnv_record_users` misses them, and `fnv_record_show` shows them as garbage text.
+- **Fix idea:** Treat a 4-byte field as a form id when that id exists as a record, and check that before the text test. Or key the skip by record type and field. Apply the same change in `decode_subrecord`, then bump `REFS_VERSION`.
+- Also found by the parser sweep: NPC_ RNAM on NVDLC01Elijah (01001300) decodes as text, so fnv_record_users misses that race reference.
+- Status: open
+
+### R10. `save_session` rewrites `session.json` with no lock: parallel act tools lose changes or corrupt it, and a corrupt file then breaks every act tool in a new server (D8 incomplete)
+
+**Where:** `geck_mcp/fnv_game.py:239-253` (`save_session`) and `:232-236` (`session()` calls `json.loads` unguarded).
+- **Severity:** medium.
+- **Confidence:** confirmed by repro (`repro_save_session_race.py`, 3 runs).
+- **What happens:**
+  - Two threads each read the file, `clear()` and `update()` the shared in-memory dict, and write back only their own change.
+  - In 1 of 3 runs `savesBackedUpFor` was lost. In 2 of 3 runs the two unsynchronised writes interleaved and left invalid JSON.
+  - A fresh server process (after any reload) then raises inside `session()`, so `fnv_status`, `changing()`/`backup_saves` (every act tool) and `save_session` all fail until the file is deleted.
+- **Fix idea:** Hold a lock around the read-modify-write, write through a temp file and `os.replace` (see finding 8 for the sharing caveat), and treat a corrupt file as {} with a log line.
+- Status: open
+
+### R11. Step over, step out and `step line` leave their temporary `to` site armed and unrecorded when another stop of the same thread comes first (E15 / L5 incomplete)
+
+**Where:** `geck_mcp/fnv_debugger.py` `_run_to` (about `:1171-1190`): when `_addr(new['eip']) != address` it returns at once. `pending_to` is added only on STOP_TIMEOUT (`_await`) and in `until()`. Callers are `step` mode out (`:1153`), `_over` (`:1193-1199`) and `_step_line` (`:1226-1231`).
+- **Severity:** medium (a surprise stop parks the thread, possibly the main thread, with nothing in status to say why).
+- **Confidence:** likely (from reading the code; the companion keeps a SITE_TO until that thread reaches it, `w2_bp.c:404-414`).
+- **What happens:**
+  - A user steps over a call (or steps out), and a break inside the called code fires first.
+  - The debugger shows that break. The `to` site after the call stays armed for that thread, but it is not in `pending_to` or the state file.
+  - After `continue`, the thread parks again when the call returns, as a "step" stop the user did not ask for.
+  - `fnv_debug status` does not list the site, so only "break op=clear" with no id removes it.
+- **Fix idea:** In `_run_to`, when the stop that comes back is not at `address`, add the address to `pending_to` and persist it (as `until` does), and say so in the verdict. Or send `bp clear` for that site.
+- Status: open
+
+### T2. fnv_input: invalid key_name raises outside invoke()
+
+- Where: fnv_live_tools.py:618 (key = scan_code(key_name) before invoke)
+- Severity: medium
+- Confidence: confirmed by a call (fnv_input with key_name="nokey")
+- What happens: scan_code raises ValueError before the envelope wrapper, so the client gets a raw "Error executing tool" text instead of {ok:false, error.code:INVALID_ARGUMENT}; no operationId or game identity.
+- Fix idea: move the scan_code call inside the lambda passed to invoke.
+- Status: open
+
+### P2. Vanilla compressed LAND with bad Adler-32 breaks full parse
+
+- Where: esp/codec.py `decompress` (line 171-175, strict zlib.decompress).
+- Severity: medium (high if FalloutNV.esm full parse is ever needed)
+- Confidence: confirmed
+- What happens: FalloutNV.esm LAND 00150FC0 (declared 4385, payload 4088) has a valid deflate stream but a wrong checksum. parse(lazy=False), validate.validate, diff.diff on FalloutNV.esm and record_show('FalloutNV.esm:150FC0') raise `Error -3 ... incorrect data check`. RecordIndex and scan_plugin are fine (decompressobj, fnv_data.py:252).
+- Fix idea: inflate raw (`decompressobj(-15)` on payload[6:]) or tolerate checksum failure; wrap zlib.error in FormatError.
+- Checked: zlib.decompress on that record payload fails with "incorrect data check".
+- Status: open
+
+### P5. record_find reports the wrong version's name and editor ID
+
+- Where: fnv_data.py `record_find` (line 331, about 355-372); same pattern in record_users names (setdefault) and conflicts EDID.
+- Severity: medium
+- Confidence: confirmed
+- What happens: `max(file)` with SQLite bare columns picks the highest file id, not the load-order winner. After FalloutNV.esm was re-indexed (new, higher file id), record_find('0015EDAC') returned `VDialogueVeronicaAbeMsgRefuse` while the winner is DeadMoney.esm ("It's better you don't...").
+- Fix idea: select fields from the row of the file with the highest load-order index.
+- Status: open
+
+### N1. An unknown undo op is marked undone without running
+
+- Where: geck_mcp/fnv_live.py:1347-1382 (_apply_undo).
+- Severity: medium
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: `_apply_undo` handles 7 ops and has no else branch: an entry whose op it does not know falls through and is marked undone, so fnv_undo and fnv_revert_all report a change as reverted that was never touched.
+- Fix idea: Raise on an unknown op (UNDO_UNKNOWN_OP) and leave the entry pending; one registry of undo ops (PLAN-3 S3.1).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (Executor, item 17)`.
+- Status: open
+
+### N2. A console undo is marked undone even when the game rejected the line
+
+- Where: geck_mcp/fnv_live.py:1356-1357 (console), 1380-1381 (console_ref loop).
+- Severity: medium
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: `console` and `console_ref` undo lines are sent and the entry is marked undone without checking `accepted` or `compileError` in the reply, so a rejected or non-compiling undo line counts as a successful undo.
+- Fix idea: Check the console reply; a rejected undo leaves the entry pending with the reason.
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (Executor, item 2)`.
+- Status: open
+
+### N3. After an undo the camera keeps its saved state, so later camera changes are not journaled
+
+- Where: geck_mcp/fnv_eyes.py:273-274.
+- Severity: medium
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: `fnv_undo`/`fnv_revert_all` run the camera entry's undo but leave `CameraTools.saved` in place. `_remember` returns early while `saved` is set, so the next set/orbit/pov/photo makes a camera change with no journal entry.
+- Fix idea: Undo of a camera entry clears `saved` (the camera entry and `saved` are one record, PLAN-3 S3.3).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 36; STATE-MAP.md (EyesTools.saved)`.
+- Status: open
+
+### N8. About a dozen tools change the game with no journal entry at all
+
+- Where: fnv_deep.py (trace, tracepoint, profile hooks), fnv_debugger.py:615-624 (hold hooks), fnv_time.py (pause, gate), anim/audio/physics, fnv_naming.py (name_test, name_oracle), fnv_agent.py:1559-1572 (leveled_roll seed), `fnv_hooks remove all`.
+- Severity: medium
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: These tools install hooks, hold gates, pause the clock or overwrite game state (leveled_roll with a seed rewrites the RNG while its docstring says it changes nothing) without a journal entry, so fnv_undo and fnv_revert_all cannot see or revert them.
+- Fix idea: Journal every installed thing as an act change (D2, PLAN-3 S3.6).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (unjournaled list, tool kinds table)`.
+- Status: open
+
+### N10. 8 tool families journal after the change, so a failure leaves an unjournaled change
+
+- Where: memory and patch writes (fnv_live.py, fnv_code.py), probe install, field watch, form delete, world_edit, camera, script_set.
+- Severity: medium
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: The journal entry is written after the game was changed. A timeout or exception between the change and the journal write (for example COMPANION_TIMEOUT on a memory write) leaves a change that undo cannot see; the tool reports outcome_unknown.
+- Fix idea: Journal the intent as pending before the change and confirm after (D5, PLAN-3 S3.2).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (journal sites table, before/after column; item 9)`.
+- Status: open
+
+## Round 2: Low
+
+### G2. fnv_spawn with a reference spec (player, crosshair, a ref form id) fails with a script compile error
+
+- Where: geck_mcp/fnv_agent.py:808 (base_form does not exist, so live.resolve(form) returns the reference itself)
+- Severity: low
+- Confidence: confirmed live
+- What happens: fnv_spawn form=player -> SPAWN_FAILED "PlaceAtMe did not return a reference" with "Could not parse this line" output. The schema advertises player | crosshair | ref ids for form. A ref should map to its base form (copy of that object) or be refused with a clear BAD_FORM error. The `hasattr(self.live, 'base_form')` branch is dead code.
+- Fix idea: if the resolved form is a reference (formType 58-60 etc.), use its base (GetBaseObject) or refuse.
+- Status: open
+
+### G3. A placed ref whose SetPos/SetAngle fails is never journaled
+
+- Where: geck_mcp/fnv_create.py:1005-1019 (_place_one journals after _set, _pose and GetParentCell)
+- Severity: low
+- Confidence: likely (code reading; same shape as F10 for spawn)
+- What happens: PlaceAtMe creates the ref first; any failure in _set/_pose/GetParentCell (a link timeout, a load starting) raises before journal.add, so fnv_undo / revert_all / place remove cannot remove that ref.
+- Fix idea: journal right after PlaceAtMe (as spawn does since F10), then update the entry's pose.
+- Status: open
+
+### G6. fnv_wait_for seconds with clock=real uses the fixed step as the real frame rate
+
+- Where: geck_mcp/fnv_time.py:450-455 (rate returns fixedFps first, for both clocks)
+- Severity: low
+- Confidence: likely (code reading)
+- What happens: with fnv_time_control fixed fps=30 on a machine that renders 60 fps, seconds=10 clock=real waits 300 frames, which take 5 real seconds. The fixed step sets game time per frame, not frames per real second; only the game clock should use it.
+- Fix idea: clock=real -> measured real fps (or wall time); clock=game -> fixed fps when set, else measured.
+- Status: open
+
+### G7. fnv_time_control status says "The game is running" while the clock is paused
+
+- Where: geck_mcp/fnv_time.py status verdict
+- Severity: low
+- Confidence: confirmed live
+- What happens: after pause, status gave verdict "The game is running at frame 10319" with clockCounter 1 and pausedByUs true. The verdict only looks at the gate.
+- Fix idea: verdict "The game clock is paused (frames still run)" when clockCounter > 0.
+- Status: open
+
+### G8. The envelope's game.frame is the frame of the last ping, minutes old
+
+- Where: geck_mcp/fnv_live.py:190-192 (identity prefers link.hello, whose frame is only refreshed by a ping)
+- Severity: low
+- Confidence: confirmed live
+- What happens: after one fnv_player call every reply's envelope said frame 441444 for several minutes, while data.frame moved to 442345. Agents read the envelope frame as "now".
+- Fix idea: report max(hello frame, link.last_frame), or name the field pingFrame.
+- Status: open
+
+### G10. fnv_globals set returns the whole unfiltered list, with the values from before the write
+
+- Where: geck_mcp fnv_globals (set without query)
+- Severity: low
+- Confidence: confirmed live
+- What happens: set {"GameHour": 13} with no query returned 200 of 258 globals (a large reply), and a listed value is the one read before the write (set 9 -> globals[] still says 13 while changed says new 9).
+- Fix idea: with set and no query, list only the changed globals; re-read after writing.
+- Status: open
+
+### G11. fnv_hook_set: with a limit, actionHits counts every call and read says every call was changed
+
+- Where: native/engine/fnvmcp_engine.c:580-581 (act_hits incremented before the limit test); geck_mcp/fnv_control.py:168 (resultNote)
+- Severity: low
+- Confidence: confirmed live
+- What happens: hook_set result value=7 limit=5 on Actor::GetLevel. The limit itself works (console player.GetLevel after it -> 1.00), but the hook then reports actionHits 3272 with actionLimit 5, and read's resultNote says "callers got 0x00000007 instead" over a list of 30 calls that were all past the limit. An agent reading it concludes the change is still active on every call.
+- Fix idea: count only applied actions (or report applied = min(hits, limit)), flag each record whether the action applied, and word the note from that.
+- Status: open
+
+### G12. fnv_mem_write: an out-of-range value is FNV_ERROR, and setting types show as mangled names
+
+- Where: geck_mcp fnv_mem_write (struct.pack errors not mapped; type name from RTTI not demangled)
+- Severity: low
+- Confidence: confirmed live
+- What happens: as_type u8 value 300 -> FNV_ERROR "'B' format requires 0 <= number <= 255" (not INVALID_ARGUMENT); writing a game setting by address without as_type -> "Cannot write a value of type '?$SettingT@VGameSettingCollection@@'".
+- Fix idea: range-check per type and raise INVALID_ARGUMENT; demangle or name the class (Setting).
+- Status: open
+
+### G13. After break clear, a stop that is still parked is described as "break 0"
+
+- Where: geck_mcp/fnv_debugger.py (status: why text from the freed bp slot)
+- Severity: low
+- Confidence: confirmed live
+- What happens: break set on Actor::GetLevel (break 1), stopped, break op=clear, status -> "Stopped in Actor::GetLevel ...: break 0 (trap)". Break 0 does not exist.
+- Fix idea: keep the break number in the stop record when it is taken, or say "a cleared break".
+- Status: open
+
+### G14. fnv_console runs qqq (and other quit/load lines) unguarded; the quit is then traced as not asked by the bridge
+
+- Where: geck_mcp/fnv_live.py:235 (console has no deny list; geck_mcp/console.py has one for the GECK console)
+- Severity: low
+- Confidence: confirmed live
+- What happens: fnv_console line=qqq quit the game ("Bye."). fnv_status lastExit then says how=console, servingRequest=true, askedByBridge=false, although the bridge sent it, so the S4 diagnosis points away from the bridge. Game.quit (session bookkeeping, quit-log) is bypassed.
+- Fix idea: refuse qqq/quitgame/load/coc-style lines in fnv_console with a pointer to fnv_quit / fnv_move / fnv_launch, or route them through those; at least log a quit-log entry when the line is a quit.
+- Status: open
+
+### G15. fnv_status fails with SEVERAL_GAMES while a game is exiting
+
+- Where: geck_mcp/fnv_game.py (process() refuses when two FalloutNV.exe exist)
+- Severity: low
+- Confidence: confirmed live (seen once)
+- What happens: right after qqq, fnv_status returned SEVERAL_GAMES with pids [17324, 28984]; a second later both were gone and status worked. A short-lived second FalloutNV.exe appears during shutdown (xNVSE/CrashLogger exit path; unknown which). Any tool called in that window fails.
+- Fix idea: when one of the pids is the session's game and it is exiting (or the other one is younger than a few seconds), report not_running/exiting instead of failing; retry once after a short wait.
+- Status: open
+
+### G16. fnv_engine_get ignores extra arguments
+
+- Where: geck_mcp/fnv_control.py:396-404 (engine_get types args by position and never compares the count with the signature)
+- Severity: low
+- Confidence: confirmed live (extra args); too few by code reading
+- What happens: Actor::GetLevel (no parameters) with args [1,2,3] returned 1, ok. With too few args the callee reads its missing parameters from whatever lies on the stack above the pushed ones (the companion restores esp afterwards, so no corruption, but the answer is computed from garbage and reported as a result).
+- Fix idea: refuse when len(args) differs from the signature's parameter count (TOO_MANY_ARGS).
+- Status: open
+
+### R12. `fnv_session start` rollback leaves prepare's crash-context hooks on, and stops a warning capture it did not start (A11 incomplete)
+
+**Where:** `geck_mcp/fnv_session.py:77-117`; the rollback is at `:105-117`. `crash_context('enable')` is in `fnv_scenario.py:539-547`.
+- **Severity:** low.
+- **Confidence:** confirmed by repro (`repro_session_start_rollback.py`).
+- **What happens:**
+  - If `snapshot`, `mark` or `_refs` raise, the rollback stops only the capture and the fixed step. The script hooks that `prepare` turned on stay on, with no session to end them.
+  - `warnings_state['capture']` is also True when the capture was already running ("Already capturing.", `started` False), so the rollback stops the user's own earlier capture.
+- **Fix idea:** Call `crash_context('disable')` in the rollback, and stop the capture only when `start()` reported `started: True`.
+- Status: open
+
+### R13. `fnv_debug thaw` with nothing on record resumes every thread of the game once (E1/E6 fix)
+
+**Where:** `geck_mcp/fnv_debugger.py` `thaw()` (about `:1390-1404`): `proc.resume_all(proc.threads())` when `self.frozen` is empty.
+- **Severity:** low.
+- **Confidence:** possible.
+- **What happens:**
+  - This also runs on a plain double thaw, or a thaw when nothing is frozen.
+  - `ResumeThread` decrements the suspend count of every thread. A thread the game, a plugin or the companion holds suspended at that moment is released.
+  - The companion's own `probe_suspend` is one case. It now runs for every hook, unhook and code patch (`code_write_frozen`, B2 fix) and every coverage arm, so a thread could be released while code is half written.
+  - The comment "a thread that was not suspended is unaffected" holds only for threads with suspend count 0.
+- **Fix idea:** Force-resume only when the game is actually stalled (for example every thread suspended, or no frame advance), and only threads whose suspend count is at least 1 and that `suspend_all` would have frozen (skip the companion's pipe thread). Or require an explicit `force=true`.
+- Status: open
+
+### R14. C2 is only partly fixed: a failed refs index build keeps the SQLite write lock (C2)
+
+**Where:** `geck_mcp/fnv_records.py:175-208` (`_ensure_refs`: delete at `:202`, commit at `:208`, no rollback). Also `geck_mcp/fnv_data.py:177-178`: when the plugin is already up to date, `ensure` returns before its rollback.
+- **Severity:** low (the triggers are rare: disk full, an I/O error, "database is locked" at commit).
+- **Confidence:** the mechanism is confirmed by repro (`regress\data\c2_refs_no_rollback.py`; the failure is forced).
+- **What happens:** If `_ensure_refs` fails after its DELETE, that thread's connection keeps an open transaction holding the write lock. Every other thread's write then fails with "database is locked", and a later `ensure()` on the same thread does not clear it.
+- **Fix idea:** Put the delete, insert and commit in `with db:`, and roll back any leftover transaction at the start of `_ensure_refs` and in `ensure`'s up-to-date path.
+- Status: open
+
+### R15. C3 is fixed within one process only: two server processes still collide (C3)
+
+**Where:** `geck_mcp/fnv_data.py:168-210`. `_ensure_lock` is a threading lock, and the re-check at `:182` can run before the other process commits.
+- **Severity:** low (one call fails; calling again works).
+- **Confidence:** confirmed by repro (`regress\data\c3_two_processes.py`).
+- **What happens:** Two MCP clients share `state/fnv/records.sqlite`, as with two sessions on one game. After a plugin rebuild, both processes rebuild it, and the second insert fails with `IntegrityError: UNIQUE constraint failed: files.path`.
+- **Fix idea:** Check again inside the write transaction, once the lock is held, and return the existing id. Or delete by path rather than by the old id.
+- Status: open
+
+### R16. C13 is only partly fixed: strict cp1252 decodes remain in other readers (C13)
+
+**Where:** `geck_mcp/fnv_create.py:64, 71, 745, 751, 767, 818`; `geck_mcp/compilation.py:25, 39`; `geck_mcp/authoring.py:126`; `geck_mcp/fnv_data.py:511`; `esp/assets.py` and `esp/scripts.py`. Only `codec.cstring` was changed.
+- **Severity:** low.
+- **Confidence:** likely.
+- **What happens:** A plugin string with an undefined cp1252 byte still raises UnicodeDecodeError, for example from `fnv_form reload` reading FULL/MODL/MAST, from BSA folder names, or from compiling an in-game script.
+- **Fix idea:** Use the same `cp1252-bytes` error handler (or `errors='replace'` for display) at these sites.
+- Status: open
+
+### R17. The F16 fix leaves its own error path open: an item that fails mid-test stays in the player's inventory (F16)
+
+**Where:** `geck_mcp/fnv_crawl.py:483-517` (`_items_rows`).
+- **Severity:** low.
+- **Confidence:** likely.
+- **What happens:** After `player.AddItem`, an exception from EquipItem, UnequipItem or GetItemCount goes to the per-item `except`. The count-based RemoveItem never runs, so the test copy stays.
+- **Fix idea:** Wrap the AddItem to RemoveItem(count - had) step in its own try/finally.
+- Status: open
+
+### R18. The new "terminated from outside" note in `fnv_status` is wrong with an older companion and when the bridge itself force-quit (S4 diagnosis)
+
+**Where:** `geck_mcp/fnv_game.py:305-313`.
+- **Severity:** low (the diagnosis text is wrong).
+- **Confidence:** likely.
+- **What happens:**
+  - The note appears whenever there is neither an exit note nor a crash log since launch.
+  - A companion built before this commit never writes `exit-*.json`, so every normal quit is blamed on "outside".
+  - `quit(force=True)` (TerminateProcess) is blamed on "outside" too, although `quit-log.jsonl` records that the bridge did it.
+- **Fix idea:** Show the note only when the companion is new enough to write exit notes, and check `quit-log.jsonl` for a bridge quit first.
+- Status: open
+
+### R19. Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix)
+
+**Where:**
+  - `geck_mcp/fnv_live.py:89-96`: `Journal.add` stamps a pid only when `'pid' not in entry`.
+  - The callers that pass `'pid': (self.link.hello or {}).get('pid')`: `fnv_live.py:1003`, `fnv_control.py:239, 295`, `fnv_world.py:398, 402`, `fnv_data.py:546, 612, 708`.
+  - `fnv_link.py:95, 75, 152`: `close()` and connect errors now null `hello`.
+- **Severity:** low.
+- **Confidence:** possible (needs the link to close between the tool's ping and its journal write).
+- **What happens:**
+  - Since the S11 fix, any `close()` clears `hello`. If a change is journaled after a reconnect with no ping, the entry has an explicit `pid: None`.
+  - `add()` then skips its own stamping, and `same_process` returns False for an entry without a pid. The change shows as "made in another game process (unknown)" and `fnv_undo` / `fnv_revert_all` never revert it.
+  - Before the fix, entries without a pid were undone.
+- **Fix idea:** In `add()`, stamp when `not entry.get('pid')` (drop a None pid). Or have the callers use `self.live.identity()`, which falls back to the process.
+- Status: open
+
+### R20. E6 state file: one save with a different `start` drops every other section (ProcState)
+
+**Where:** `geck_mcp/fnv_pred.py:400-421` (`ProcState.save` keeps only records whose pid and start equal the caller's), with `fnv_game.process_started` returning None when `OpenProcess` fails.
+- **Severity:** low.
+- **Confidence:** possible.
+- **What happens:**
+  - All sections share `debug_state.json`: time pause, script freeze, debugger breaks, frozen threads and pending `to` sites.
+  - If one caller sees `start=None` for the same pid (a transient `OpenProcess`/`GetProcessTimes` failure, or a `tasklist` row read during process start), its save deletes every other section.
+  - That loses the pause, freeze and break records E6 meant to keep, so a restarted server can no longer undo them (E6 again).
+  - The write is also not atomic, and a torn file reads as {}.
+- **Fix idea:** Drop other sections only when their pid differs, or their start differs and both starts are known. Write through a temp file.
+- Status: open
+
+### T3. fnv_name_export writes a trace file even when it has nothing to export
+
+- Where: fnv naming export tool (fnv_live_tools.py, fnv_name_export registration)
+- Severity: low
+- Confidence: confirmed by a call (offline call created fnvsym/traces/fnvmcp-<date>.json with an empty payload)
+- What happens: a read-looking export tool creates a file in the decomp tree with zero entries, and does not report that nothing was exported; repeated calls overwrite.
+- Fix idea: return changed:false / NO_DATA without writing when there are no entries.
+- Status: open
+
+### T4. Inconsistent error codes for "game not running"
+
+- Where: fnv_live.py ready()/in_game(), fnv_link.py EngineLink.connect, fnv_game.game_processes users
+- Severity: low
+- Confidence: confirmed by a call (offline sweep)
+- What happens: depending on tool, the same condition returns different codes (a LiveError not-running code, COMPANION_* connect failure, or generic FNV_ERROR). Agents cannot branch on one code. Non-ValueError unexpected exceptions also map to FNV_ERROR with retrySafe true even for act/control kinds, which may claim retry is safe after a possible change.
+- Fix idea: one GAME_NOT_RUNNING code from ready(); treat FNV_ERROR in act/control kinds as outcome unknown (retrySafe false).
+- Status: open
+
+### T5. Raw int(...,16) ValueError text in fnv_probe and fnv_events arguments
+
+- Where: fnv_live_tools.py (fnv_probe, fnv_events address/id parsing)
+- Severity: low
+- Confidence: confirmed by a call (non-hex string input)
+- What happens: error message is Python's "invalid literal for int() with base 16: 'zz'" with no mention of which parameter; code is INVALID_ARGUMENT.
+- Fix idea: wrap with a helper naming the parameter and expected format.
+- Status: open
+
+### T6. Short form ids (no leading zeros / no load-order prefix) not accepted consistently
+
+- Where: fnv_live.py resolve(); record tools in fnv_tools.py
+- Severity: low
+- Confidence: likely (some tools accept "0x14", others require 8 hex digits or an EditorID)
+- What happens: the same form id string works in one tool and gives not-found in another; docs do not state the accepted forms.
+- Fix idea: one shared parser; document the accepted forms.
+- Status: open
+
+### T7. fnv_asset_check accepts arbitrary paths and surfaces a raw parse error
+
+- Where: fnv_asset_check registration (fnv_live_tools.py) and its asset reader
+- Severity: low
+- Confidence: confirmed by a call (malformed/non-asset path)
+- What happens: the path is not restricted to the game Data directory, and a malformed file returns a parser exception string rather than a structured BAD_ASSET code.
+- Fix idea: confine to Data/, catch parse errors into a named code.
+- Status: open
+
+### T8. Parameters documented/required but ignored
+
+- Where: several fnv_* registrations (fuzz found calls where the parameter changed nothing)
+- Severity: low
+- Confidence: possible
+- What happens: some parameters are accepted and ignored, or required by the schema but unused by the implementation, so an agent cannot tell its argument had no effect.
+- Fix idea: drop them or reject when set.
+- Status: open
+
+### T9. geck_compile_status vs geck_compile_resume return different codes for unknown operation
+
+- Where: geck_* compile tools in server.py
+- Severity: low
+- Confidence: likely
+- What happens: the same unknown/finished-operation condition gives different error codes in status and resume.
+- Fix idea: share one code.
+- Status: open
+
+### P3. Corrupt input raises raw exceptions rather than FormatError
+
+- Where: esp/codec.py lines 207 and 224 (`tag.decode('ascii')` -> UnicodeDecodeError), `iter_records` (struct.error on truncated group/record header), `decompress` (zlib.error), `Group.label_text` (non-ASCII type-0 label).
+- Severity: low
+- Confidence: confirmed by fuzz
+- What happens: validate, which is documented never to raise for content problems, raised UnicodeDecodeError / zlib.error / struct.error on mutated plugins.
+- Fix idea: catch and convert to FormatError, or decode with latin-1 as fnv_data does.
+- Status: open
+
+### P4. XXXX round trip not byte exact
+
+- Where: esp/codec.py `encode_subrecords` (line 293).
+- Severity: low
+- Confidence: confirmed (synthetic; no real plugin triggers it)
+- What happens: a subrecord preceded by XXXX but with size <= 0xFFFF (even XXXX=0) is re-encoded without the XXXX, so write(parse(b)) != b despite the docstring claiming exactness.
+- Fix idea: remember that the XXXX was present, or document the normalisation.
+- Status: open
+
+### P6. `_form` off-by-one
+
+- Where: fnv_data.py:430 `high >= len(own) + 1`.
+- Severity: low
+- Confidence: likely
+- What happens: a top byte equal to len(own) (invalid, one past the master count) resolves to the plugin itself, so non-form 4-byte values can show as forms.
+- Fix idea: `high > len(own)` is the self index; check the intended boundary (masters count = len(own), self index = len(own), so anything above must be rejected, but `>= len(own)+1` is right only if self is len(own); verify against 0-based masters).
+- Status: open
+
+### P7. Index and lookup gaps
+
+- Where: fnv_data.py `SKIP_EDID` (LAND, NAVM, PGRE, PMIS, NAVI) and `record_find`; lint `_check_call` (line 989).
+- Severity: low
+- Confidence: confirmed
+- What happens: named placed grenades/mines/NAVM are not found by EditorID. `FiendMineRef` (PGRE) is not in the index, so lint warns UNKNOWN_REFERENCE for `FiendMineRef.enable` in FiendAmbushTriggerScript. NAVM `NVDLC04ElevNav02REF` (LonesomeRoad) is also missing. Hard-coded forms such as PlayerREF (0x14) are not in the index. Huge offset/limit raise OverflowError; limit=-1 returns unlimited results.
+- Fix idea: index EDIDs for PGRE/PMIS (only skip LAND/NAVI if cost matters); seed engine forms; clamp offset/limit.
+- Status: open
+
+### P8. Lint false positives on vanilla scripts
+
+- Where: fnv_data.py `_split_args` (line 969), `_check_call` (line 989).
+- Severity: low to medium
+- Confidence: confirmed (3,719 SCPT; 12 scripts report errors)
+- What happens:
+  - UNKNOWN_COMMAND '' error for `VStripSS1SecuritronBREF. StopLook X` (VStripSS1ControlScript, lines 183-184); the game accepts a space after the dot.
+  - UNKNOWN_REFERENCE for `PlayerREF` (8 hits); `_check_call` does not consult KNOWN_NAMES.
+  - TOO_MANY_ARGUMENTS 237 warnings: ShowMessage is variadic (66 false positives, e.g. `ShowMessage Msg rank` in ChallengeBugSCRIPT); the game ignores trailing tokens on zero-parameter commands (RemoveScriptPackage 89, StopCombat 62, StopLook 11, EvaluatePackage 5).
+  - DUPLICATE_VARIABLE / VARIABLE_SHADOWS_COMMAND on declarations followed by prose (weak; possibly stale source).
+- Fix idea: trim whitespace after `.`; consult KNOWN_NAMES in `_check_call`; mark ShowMessage variadic; downgrade extra args on zero-parameter commands to info.
+- Status: open
+
+### P9. Spec validation regexes accept a trailing newline
+
+- Where: esp/records.py:14 `EDID_RE` (`^...$` with re.match); build.py `check_spec` for project_id, plugin, REF_ID_RE.
+- Severity: low
+- Confidence: confirmed
+- What happens: `'x.esp\n'` passes check_spec; pydantic `config.Record` correctly rejects it. model_path accepts NUL, newline, `*`, tab and `con.nif`; `text()` accepts an embedded NUL.
+- Fix idea: use `fullmatch` or `\Z`; reject control characters and reserved device names.
+- Status: open
+
+### P10. Save parser: FLT_MAX rotation sentinel passed through
+
+- Where: fnv_save.py ACHR/ACRE initial block decode.
+- Severity: low
+- Confidence: likely
+- What happens: 25,228 occurrences across all saves of `rotation.x = 3.4028234663852886e+38` (bytes ffff7f7f), e.g. autosave.fos ACHR 0200CFF3 and 0011253F. It appears unflagged and shows in save diffs as noise.
+- Fix idea: map the sentinel to None or flag it as "unset". Also theoretical: `global_variables`/`inspect` with a namer would hit `int(None, 16)` if a global form were unresolved (never occurred in the data).
+- Status: open
+
+### N4. `form_delete` does not supersede `form_create`, so export keeps deleted forms
+
+- Where: geck_mcp/fnv_create.py:962.
+- Severity: low
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: Deleting a created form only removes it from `FormTools.created`; the `form_create` journal entry is not marked undone, so `export` (which reads the journal) still lists the deleted form.
+- Fix idea: A `form_delete` entry supersedes its `form_create` entry (PLAN-3 S3.4).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 31`.
+- Status: open
+
+### N5. Undoing a probe only disarms it: the stubs stay patched and `probe_session.json` still says armed
+
+- Where: geck_mcp/fnv_probe.py:432.
+- Severity: low
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: The probe journal entry's undo is `probe_disarm`. The patched call sites and stubs stay in the game, and `probe_session.json` is not updated, so the next server reads the probe as armed.
+- Fix idea: A `probe_remove` undo op that unpatches the sites and updates the session file (PLAN-3 S3.4).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 44`.
+- Status: open
+
+### N6. The `dbg_clear` undo clears every debug register, including other tools'
+
+- Where: geck_mcp/fnv_watch.py:170.
+- Severity: low
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: A field-watch entry undoes with `dbg clear f`, which clears all four hardware debug registers, so an fnv_debug hardware break or another watch is removed too.
+- Fix idea: Record the slot and clear only that slot (PLAN-3 S3.4).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md rows 37 and 48`.
+- Status: open
+
+### N7. The rng seed undo does not restore the index at +0x9C8
+
+- Where: geck_mcp/fnv_agent.py:1386, 1409.
+- Severity: low
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: fnv_rng seed writes the 624-word state and the index at instance+0x9C8; the undo restores only the state array, so the generator resumes at the wrong position.
+- Fix idea: Journal the old index with the state and restore both (PLAN-3 S3.4).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 17, item 15`.
+- Status: open
+
+### N9. actor_control enable, disable, unconscious, restrain and add_item have blind undos
+
+- Where: geck_mcp/fnv_live.py:1245.
+- Severity: low
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: The undo is a fixed console line (`enable`/`disable`, unconscious off, restrain off, RemoveItem) that does not look at the state before the change: undoing a disable of an actor that was already disabled enables it.
+- Fix idea: Record the prior state and undo to it (PLAN-3 S3.3).
+- Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 9`.
+- Status: open
+
+### N11. The game's identity is chosen six different ways, and `tasklist` runs on every `game.process()` call
+
+- Where: geck_mcp/fnv_game.py:~33-52; fnv_code.py:89 and four other pickers.
+- Severity: low
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: Start time is an int in some pickers, a string in others and absent in several; match rules range from strict to pid-only. `game.process()` shells out to `tasklist` on every call, and `CodeTools._game_id` calls it on every property access.
+- Fix idea: One GameIdentity(pid, start) with one match rule and a 1 s cache (D4, PLAN-3 S2.2).
+- Evidence: `fnv-mcp/research/stabilize/STATE-MAP.md (identity pickers, item 8)`.
+- Status: open
+
+### N12. Nothing under `state/fnv` is pruned, and none of it has a cross-process lock
+
+- Where: state/fnv/* (journal.jsonl, quit-log.jsonl, code/, session.json, probe files, oracle and experiment outputs).
+- Severity: low
+- Confidence: confirmed by reading the code (stabilization research, not yet reproduced)
+- What happens: Six projects share `state/fnv`. The writers use per-process locks only (or none), and the journal (5,314 entries), quit log, crash contexts and experiment outputs grow without bound.
+- Fix idea: One state module with a cross-process lock and atomic writes, plus pruning (PLAN-3 S2.1, S2.6).
+- Evidence: `fnv-mcp/research/stabilize/STATE-MAP.md`.
+- Status: open
