@@ -1533,7 +1533,8 @@ def register(server, project, annotations, result_type, maintain=True):
         return await invoke('fnv_warnings', lambda: warnings_for_live(live).run(
             action, mode=mode, since=since, category=category, text=text, plugin=plugin, source=source, limit=limit,
             offset=offset, brief=brief, top=top), 'control' if action in ('enable', 'capture') else 'read',
-            action=action if action != 'capture' or mode in ('start', 'stop') else 'capture_status')
+            # capture with no mode starts the capture: only mode=status is a read (S7 review I1)
+            action='capture_status' if action == 'capture' and mode == 'status' else action)
 
     @server.tool(annotations=act)
     async def fnv_time_control(action: Literal['pause', 'resume', 'force_resume', 'hold', 'release', 'step', 'fixed',

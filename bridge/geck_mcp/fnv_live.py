@@ -1881,6 +1881,16 @@ def _undo_swap_script(live, entry, undo):
              and (e.get('undo') or {}).get('target') == undo['target'] and (e.get('seq') or 0) > (entry.get('seq') or 0)]
     if later:
         return {'undone': False, 'reason': 'undo the later swap first', 'later': [e['id'] for e in later]}
+    spans = undo.get('spans')
+    if spans:   # write both scripts' fields from before the swap: repeatable, and repairs a half-done undo (U3, I3)
+        from .fnv_data import SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
+        offsets = (SCRIPT_HEADER, SCRIPT_DATA, SCRIPT_REFS, SCRIPT_VARS)
+        ops = [('wr', '%x' % (int(undo[name], 16) + off), data)
+               for name in ('target', 'holder') for off, data in zip(offsets, spans[name])]
+        results = live.link.batch(ops)      # one request: within one frame
+        if not all(r.get('ok') for r in results):
+            return {'undone': False, 'reason': 'writing the script fields failed; fnv_undo again repeats it safely'}
+        return None
     if undo.get('data'):     # the target already holds its code from before the swap: an earlier undo landed (U3)
         from .fnv_data import SCRIPT_DATA
         now = live.reads([(int(undo['target'], 16) + SCRIPT_DATA, 4)])[0]

@@ -32,7 +32,7 @@ KNOWN_NAMES = {v.lower() for v in ACTOR_VALUES} | {'x', 'y', 'z', 'player', 'pla
 VARIADIC_COMMANDS = {'showmessage'}   # the message's %g values follow it (ShowMessage Msg rank; P8)
 BLOCK_ALIASES = {'onpackageend'}  # short names in g_scriptBlocks (OnPackageDone = OnPackageEnd)
 
-INDEX_VERSION = 2   # 2: EditorIDs of PGRE, PMIS and NAVM are indexed (P7)
+INDEX_VERSION = 3   # 2: EditorIDs of PGRE, PMIS and NAVM are indexed (P7); 3: one copy per plugin name (X3)
 SKIP_EDID = {b'LAND', b'NAVI'}  # no EditorIDs, many of them (PGRE/PMIS/NAVM can be named and scripts use them; P7)
 # Forms the engine makes itself, with no record in any plugin (P7: lint warned on PlayerREF).
 HARDCODED_EDIDS = {'playerref': 'ACHR'}
@@ -723,15 +723,20 @@ class DataTools:
                             'variables in the same order (append new ones at the end) or pass force=true',
                             {'moved': moved, 'dropped': dropped, 'added': added})
         live.changing('script hot swap')
-        # the target's code pointer before the swap: the undo checks it, so a retry after a lost reply does not swap
-        # the code back again (U3)
-        before = live.reads([(target + SCRIPT_DATA, 4)])[0]
+        # both scripts' fields before the swap: the undo writes them back (U3, S7 review I3), so it is safe to repeat
+        # and also repairs a half-done earlier undo
+        spans = [(SCRIPT_HEADER, 0x10), (SCRIPT_DATA, 4), (SCRIPT_REFS, 8), (SCRIPT_VARS, 8)]
+        saved = {name: live.reads([(base + off, n) for off, n in spans]) for name, base in (('target', target),
+                                                                                           ('holder', fresh))}
+        before = saved['target'][1]
         old_data = struct.unpack('<I', before)[0] if before else 0
         swapped = swap_script_code(live, target, fresh)
         entry = live.journal.add({'kind': 'script_hot_swap', 'script': target_info.get('formId'), 'target': '0x%08X' % target,
                                   'holder': '0x%08X' % fresh,
                                   'undo': {'op': 'swap_script', 'target': '0x%08X' % target, 'holder': '0x%08X' % fresh,
-                                           'data': '0x%08X' % old_data}})
+                                           'data': '0x%08X' % old_data,
+                                           'spans': None if any(v is None for vs in saved.values() for v in vs)
+                                           else {k: [v.hex() for v in vs] for k, vs in saved.items()}}})
         return {'script': target_info, 'owner': owner, 'swapped': swapped, 'variablesAdded': added,
                 'variablesMoved': moved or None, 'variablesDropped': dropped or None,
                 'statements': len(compiled.get('statements') or []), 'journalId': entry['id'],

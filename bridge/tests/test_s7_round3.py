@@ -426,5 +426,49 @@ class SwapUndoTests(unittest.TestCase):
         self.assertIn("'data': '0x%08X' % old_data", source)
 
 
+class Batch2ReviewTests(unittest.TestCase):
+    """S7 batch-2 review I1-I3."""
+
+    def test_i1_capture_without_a_mode_is_act(self):
+        fn = tool_source('fnv_warnings')
+        text = ast.unparse(fn)
+        self.assertIn("mode == 'status'", text)
+        self.assertNotIn("mode in ('start', 'stop')", text)
+
+    def test_i2_the_index_version_rebuilds_old_two_copy_indexes(self):
+        from geck_mcp import fnv_data
+        self.assertGreaterEqual(fnv_data.INDEX_VERSION, 3)
+
+    def test_i3_a_half_done_undo_is_repaired_by_its_retry(self):
+        import struct
+        from fakes import FakeLive
+        from geck_mcp.fnv_data import SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
+        spans = [(SCRIPT_HEADER, 0x10), (SCRIPT_DATA, 4), (SCRIPT_REFS, 8), (SCRIPT_VARS, 8)]
+        target, holder = 0x9000, 0x9800
+
+        def put(base, fill):
+            for off, n in spans:
+                fake.link.put(base + off, bytes([fill]) * n)
+
+        def get(base):
+            return [fake.link.get(base + off, n) for off, n in spans]
+        with FakeLive() as fake:
+            put(target, 0x11)
+            put(holder, 0x22)
+            before = {'target': [b.hex() for b in get(target)], 'holder': [b.hex() for b in get(holder)]}
+            # after the swap, then an undo that wrote header and data but not refs and vars
+            put(target, 0x22)
+            put(holder, 0x11)
+            fake.link.put(target + SCRIPT_HEADER, b'\x11' * 0x10)
+            fake.link.put(target + SCRIPT_DATA, b'\x11' * 4)
+            entry = fake.live.journal.add({'kind': 'script_hot_swap', 'undo': {
+                'op': 'swap_script', 'target': '0x%08X' % target, 'holder': '0x%08X' % holder,
+                'data': '0x' + before['target'][1], 'spans': before}})
+            r = fake.live.undo(journal_id=entry['id'])['results'][0]
+            self.assertTrue(r['undone'], r)
+            self.assertEqual([b.hex() for b in get(target)], before['target'])
+            self.assertEqual([b.hex() for b in get(holder)], before['holder'])
+
+
 if __name__ == '__main__':
     unittest.main()
