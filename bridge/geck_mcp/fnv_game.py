@@ -55,6 +55,11 @@ def process_started(pid):
         kernel32.CloseHandle(handle)
 
 
+# Setting bEnableAudioCache:Audio (0x011F6EBC; its value at +4). Owner::AddSound 0x00ADCD80 copies each new sound into
+# the engine's audio cache unless it is 0 (N21).
+AUDIO_CACHE_FLAG = 0x011F6EC0
+
+
 def process_alive(pid):
     """Is process `pid` still running? Through its handle (microseconds), for the launch loops that used tasklist
     on every poll. A process that refuses the query is counted as alive."""
@@ -575,59 +580,45 @@ class Game:
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return 'explorer_shortcut (overlays such as Discord may inject into Explorer-started games)'
 
-    # N21 (measured 2026-11-13): a coc sent in the main menu's first frames (frame ~2-20, what the launch did) took
-    # ~190-200 s, three times: the main thread sat ~170 s in DirectSound calls (Owner::AddSound ->
-    # BSWin32GameSound::CopyFrom). Sent at frame 149 (3 s) or 506 (10 s) it was in the cell at once; disk reads had
-    # settled in both cases. So a coc or save start lets the menu run MENU_SETTLE_FRAMES frames first (at most
-    # MENU_SETTLE_SECONDS).
-    MENU_SETTLE_FRAMES = 200          # coc at the menu's frame 133 stalled, at 149 it did not (single runs)
-    MENU_SETTLE_SECONDS = 10.0
-    MENU_SETTLE_POLL = 0.5
-
-    def wait_menu_settled(self, deadline, clock=time.monotonic, sleep=time.sleep):
-        """Let the main menu run MENU_SETTLE_FRAMES frames (or MENU_SETTLE_SECONDS, or until the deadline). Returns
-        {settled, frames, seconds}; never raises."""
-        began = clock()
-
-        def frame():
-            value = self.ping().get('frame')
-            return value if isinstance(value, int) else None
-        first = frame()
-        last = first
-        while True:
-            if first is not None and last is not None and last - first >= self.MENU_SETTLE_FRAMES:
-                return {'settled': True, 'frames': last - first, 'seconds': round(clock() - began, 1)}
-            now = clock()
-            if now - began >= self.MENU_SETTLE_SECONDS or now >= deadline:
-                return {'settled': False, 'frames': (last - first) if first is not None and last is not None else None,
-                        'seconds': round(now - began, 1)}
-            sleep(max(0.0, min(self.MENU_SETTLE_POLL, deadline - now, self.MENU_SETTLE_SECONDS - (now - began))))
-            last = frame()
-            if first is None:
-                first = last
-
     def start_from_menu(self, kind, value, deadline, pid):
         if kind == 'menu':
             return {'phase': 'main_menu', 'start': 'menu'}
-        settle = self.wait_menu_settled(deadline)
         line = 'load "%s"' % value if kind == 'save' else 'coc %s' % value
-        # Scheduled so the reply is sent before the game starts loading.
-        closer = None
-        if kind == 'coc':
-            # Queue the arrival closer in the same request as the coc: once the cell loads, the main loop is
-            # busy and a separate request would wait for it.
-            ops = [('every', '12C', '%X' % 90000, fnv_link.hexs(self.ARRIVAL_CLOSER)), ('sched', '0', fnv_link.hexs(line))]
-            first, result = self.link.batch(ops)
-            closer = {'closing': bool(first.get('ok')), 'seconds': 90, 'slot': first.get('slot'), 'reason': first.get('error')}
-        else:
-            result = self.link.schedule(0, line)
-        if not result.get('ok'):
-            raise GameError('START_FAILED', 'Could not queue "%s"' % line, result)
-        ready = self.wait_in_game(deadline, pid, start='%s:%s' % (kind, value))
+        # N21: the engine's audio cache is off while the start loads (a load begun in the menu's first frames copied
+        # each sound into the cache at ~1 s a copy: ~3 min); it is turned back on once the game is in gameplay.
+        try:
+            cache_was = self.link.read(AUDIO_CACHE_FLAG, 1)
+        except LinkError:
+            cache_was = None
+        cache_off = cache_was is not None and cache_was != b'\x00'
+        first_ops = [('wr', fnv_link.word(AUDIO_CACHE_FLAG), '00')] if cache_off else []
+        restored = False
+        try:
+            # Scheduled so the reply is sent before the game starts loading.
+            closer = None
+            if kind == 'coc':
+                # Queue the arrival closer in the same request as the coc: once the cell loads, the main loop is
+                # busy and a separate request would wait for it.
+                ops = first_ops + [('every', '12C', '%X' % 90000, fnv_link.hexs(self.ARRIVAL_CLOSER)),
+                                   ('sched', '0', fnv_link.hexs(line))]
+                first, result = self.link.batch(ops)[-2:]
+                closer = {'closing': bool(first.get('ok')), 'seconds': 90, 'slot': first.get('slot'),
+                          'reason': first.get('error')}
+            else:
+                result = self.link.batch(first_ops + [('sched', '0', fnv_link.hexs(line))])[-1]
+            if not result.get('ok'):
+                raise GameError('START_FAILED', 'Could not queue "%s"' % line, result)
+            ready = self.wait_in_game(deadline, pid, start='%s:%s' % (kind, value))
+        finally:
+            if cache_off:
+                try:
+                    self.link.write(AUDIO_CACHE_FLAG, cache_was)
+                    restored = True
+                except LinkError:
+                    pass
         if closer:
             ready['arrivalMessages'] = closer
-        if settle is not None:
-            ready['menuSettle'] = settle
+        ready['audioCache'] = {'offDuringLoad': cache_off, 'restored': restored}
         return ready
 
     def wait_in_game(self, deadline, pid=None, start=None, settle=1.5, dismiss_messages=True):
