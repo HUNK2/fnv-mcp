@@ -432,9 +432,9 @@ class DataTools:
         """A raw form id inside a plugin -> its load-order form id and EditorID (when indexed)."""
         own = plugin_entry.get('masters', []) + [plugin_entry['name']]
         high = raw >> 24
-        if raw == 0 or high >= len(own) + 1:
+        if raw == 0 or high >= len(own):      # 0..len(masters)-1: a master; len(masters): the plugin itself (P6)
             return None
-        owner = own[min(high, len(own) - 1)].lower()
+        owner = own[high].lower()
         row = self.index.db.execute('select type, edid from records where owner = ? and local = ? limit 1',
                                     (owner, raw & 0xFFFFFF)).fetchone()
         if not row:

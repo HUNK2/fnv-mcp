@@ -265,5 +265,23 @@ class RecordFindWinnerTests(unittest.TestCase):
         self.assertEqual(out['name'], "It's better you don't...")
 
 
+class FormIndexTests(unittest.TestCase):
+    """P6: a top byte one past the plugin's own index resolved to the plugin itself."""
+
+    def test_form_index_bounds(self):
+        import sqlite3
+        from types import SimpleNamespace
+        from geck_mcp.fnv_data import DataTools
+        db = sqlite3.connect(':memory:')
+        db.execute('create table records(file integer, owner text, local integer, type text, edid text, full text)')
+        db.execute("insert into records values (1, 'mymod.esp', 0x800, 'MISC', 'Thing', null)")
+        tools = DataTools.__new__(DataTools)
+        tools._index = SimpleNamespace(db=db)
+        entries = [{'name': 'FalloutNV.esm', 'index': 0}, {'name': 'MyMod.esp', 'index': 1}]
+        plugin_entry = {'name': 'MyMod.esp', 'masters': ['FalloutNV.esm']}
+        self.assertEqual(tools._form(entries, plugin_entry, 0x01000800)['editorId'], 'Thing')   # index 1: itself
+        self.assertIsNone(tools._form(entries, plugin_entry, 0x02000800))                         # past it: no form
+
+
 if __name__ == '__main__':
     unittest.main()

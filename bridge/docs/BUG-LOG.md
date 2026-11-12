@@ -1424,7 +1424,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | T9 | low | open | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
 | P3 | low | fixed | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
 | P4 | low | fixed | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
-| P6 | low | open | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
+| P6 | low | fixed | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
 | P7 | low | open | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
 | P8 | low | open | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
 | P9 | low | open | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
@@ -2110,7 +2110,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: likely
 - What happens: a top byte equal to len(own) (invalid, one past the master count) resolves to the plugin itself, so non-form 4-byte values can show as forms.
 - Fix idea: `high > len(own)` is the self index; check the intended boundary (masters count = len(own), self index = len(own), so anything above must be rejected, but `>= len(own)+1` is right only if self is len(own); verify against 0-based masters).
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: _form accepts top bytes 0..len(masters) (len(masters) is the plugin itself) and rejects anything above (S6.12, test_stab_s6b).
 
 ### P7. Index and lookup gaps
 
