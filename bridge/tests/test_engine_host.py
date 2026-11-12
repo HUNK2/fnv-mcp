@@ -40,6 +40,19 @@ class ZigPathTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {'GECK_MCP_ZIG': ''}):
             self.assertEqual(Path(engine_host.zig_path(self.root)), self.zig)
 
+    def test_zig_path_expands_home(self):
+        write_project(self.root, 'a.windows.json', '~/zig.exe')
+        with mock.patch.dict(os.environ, {'GECK_MCP_ZIG': '', 'USERPROFILE': str(self.root), 'HOME': str(self.root)}):
+            self.assertEqual(Path(engine_host.zig_path(self.root)), self.zig)
+
+    def test_defines_string_is_one_define(self):
+        from geck_mcp import fnv_link
+        self.assertEqual(fnv_link.check_defines('FNVMCP_TEST_SEAM'), ['FNVMCP_TEST_SEAM'])
+        self.assertEqual(fnv_link.check_defines(['B', 'A', 'A']), ['A', 'B'])
+        for bad in ('éX', '1X', 'A-B', ''):
+            with self.assertRaises(fnv_link.LinkError, msg=bad):
+                fnv_link.check_defines([bad])
+
     def test_zig_path_none_without_any(self):
         write_project(self.root, 'a.windows.json', str(self.root / 'missing.exe'))
         (self.root / 'broken.json').write_text('{not json', encoding='utf-8')

@@ -32,6 +32,7 @@ def zig_path(projects_dir: Path | str | None = None) -> str | None:
         except (OSError, ValueError, AttributeError):
             continue
         if isinstance(zig, str) and zig:
+            zig = os.path.expanduser(zig)
             candidate = Path(zig) if Path(zig).is_absolute() else path.parent / zig
             if candidate.is_file():
                 return str(candidate)
