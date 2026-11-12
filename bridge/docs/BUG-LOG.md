@@ -1390,7 +1390,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R8 | medium | fixed | Journal: `mark_undone`'s `os.replace` fails while any other handle has `journal.jsonl` open, so an undo that already ran is not recorded and undo/revert_all stops (A1 fix, A7 again) | `geck_mcp/fnv_live.py:104-115` |
 | R9 | medium | open | C5 is only partly fixed: some form-id references are still skipped as text (C5) | `geck_mcp/fnv_records.py:96` |
 | R10 | medium | fixed | `save_session` rewrites `session.json` with no lock: parallel act tools lose changes or corrupt it, and a corrupt file then breaks every act tool in a new server (D8 incomplete) | `geck_mcp/fnv_game.py:239-253` |
-| R11 | medium | open | Step over, step out and `step line` leave their temporary `to` site armed and unrecorded when another stop of the same thread comes first (E15 / L5 incomplete) | `geck_mcp/fnv_debugger.py _run_to` |
+| R11 | medium | fixed | Step over, step out and `step line` leave their temporary `to` site armed and unrecorded when another stop of the same thread comes first (E15 / L5 incomplete) | `geck_mcp/fnv_debugger.py _run_to` |
 | T2 | medium | fixed | fnv_input: invalid key_name raises outside invoke() | `fnv_live_tools.py:618` |
 | P2 | medium | open | Vanilla compressed LAND with bad Adler-32 breaks full parse | `esp/codec.py decompress` |
 | P5 | medium | open | record_find reports the wrong version's name and editor ID | `fnv_data.py record_find` |
@@ -1659,7 +1659,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - After `continue`, the thread parks again when the call returns, as a "step" stop the user did not ask for.
   - `fnv_debug status` does not list the site, so only "break op=clear" with no id removes it.
 - **Fix idea:** In `_run_to`, when the stop that comes back is not at `address`, add the address to `pending_to` and persist it (as `until` does), and say so in the verdict. Or send `bp clear` for that site.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: _run_to records the temporary site in pending_to (persisted) when another stop of the thread comes first; step says the site is still armed and returns pendingTo (S6.2, test_stab_s6a).
 
 ### T2. fnv_input: invalid key_name raises outside invoke()
 

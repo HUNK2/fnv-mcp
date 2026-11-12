@@ -1139,6 +1139,7 @@ class Debugger:
         if mode not in STEP_MODES:
             raise ConvError('BAD_ARGUMENTS', 'mode must be one of %s.' % ', '.join(STEP_MODES))
         stop = self._current()
+        pending_before = set(self.pending_to)
         if stop['kind'] == 'hook':
             raise ConvError('BAD_MODE', 'A hook stop cannot be stepped. Next: continue, or return <value> from the '
                             'function; to step the function, set a break on a line inside it.')
@@ -1153,8 +1154,13 @@ class Debugger:
             new = self._run_to(stop, self._return_address(stop), self._esp_of(stop) + 4)
         else:
             new = self._step_line(stop)
-        return verdict('Stopped at %s (%s).' % (_hx(_addr(new['eip'])), self._why(new)),
-                       'Mode %s.' % mode, stop=self.status_view(new))
+        left = sorted(self.pending_to - pending_before)
+        reason = 'Mode %s.' % mode
+        if left:
+            reason += (' %s came first; the temporary stop at %s is still armed (continue runs on to it, break clear '
+                       'removes it).' % (self._why(new), ', '.join(_hx(a) for a in left)))
+        return verdict('Stopped at %s (%s).' % (_hx(_addr(new['eip'])), self._why(new)), reason,
+                       stop=self.status_view(new), pendingTo=', '.join(_hx(a) for a in left) or None)
 
     def status_view(self, stop):
         sym = self._symbol(_addr(stop['eip']))
@@ -1185,7 +1191,13 @@ class Debugger:
             if _addr(new['eip']) == address and address in self.pending_to:
                 self.pending_to.discard(address)
                 self._persist()
-            if min_esp is None or _addr(new['eip']) != address or self._esp_of(new) >= min_esp:
+            if _addr(new['eip']) != address:
+                # Another stop of the thread came first: the companion keeps the `to` site armed for it, so it is
+                # recorded (status lists it, a server restart keeps it) (R11).
+                self.pending_to.add(address)
+                self._persist()
+                return new
+            if min_esp is None or self._esp_of(new) >= min_esp:
                 return new
             cur = new
         raise ConvError('STEP_LIMIT', 'The return was not reached within %d recursive calls. Next: continue.' % STEP_LIMIT)

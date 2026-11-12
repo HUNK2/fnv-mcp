@@ -130,5 +130,40 @@ class FlowCallSetupTests(unittest.TestCase):
         self.assert_no_bp_left(link)
 
 
+class StepInterruptedTests(unittest.TestCase):
+    """R11: a step over / out whose temporary `to` site is not reached (another stop of the thread came first)."""
+
+    def setUp(self):
+        from test_fnv_debug import DebugTestBase
+        base = DebugTestBase('setUp')
+        base.setUp()
+        self.addCleanup(base.doCleanups)
+        self.dbg = base.dbg
+        self.target = 0x00500010
+        here = {'seq': 1, 'kind': 'bp', 'eip': '0x00500000', 'thread': 7}
+        other = {'seq': 2, 'kind': 'bp', 'eip': '0x00600000', 'thread': 7}
+        self.dbg._current = lambda: here
+        self.dbg._return_address = lambda stop: self.target
+        self.dbg._esp_of = lambda stop: 0x1000 if stop['seq'] == 1 else 0x1008     # back in the caller
+        self.dbg._resume = lambda cur, *a, **kw: other
+        self.dbg._why = lambda stop: 'break 2'
+        self.dbg.status_view = lambda stop: {'seq': stop['seq']}
+        self.saved = []
+        self.dbg._persist = lambda: self.saved.append(sorted(self.dbg.pending_to))
+
+    def test_step_over_interrupted_lists_pending_site(self):
+        out = self.dbg.step('out')
+        self.assertIn(self.target, self.dbg.pending_to)
+        self.assertEqual(self.saved[-1], [self.target], 'persisted for a server restart')
+        self.assertEqual(out['pendingTo'], '0x%08X' % self.target)
+        self.assertIn('still armed', out['reason'])
+
+    def test_reached_site_is_not_pending(self):
+        self.dbg._resume = lambda cur, *a, **kw: {'seq': 2, 'kind': 'to', 'eip': '0x%08X' % self.target, 'thread': 7}
+        out = self.dbg.step('out')
+        self.assertNotIn(self.target, self.dbg.pending_to)
+        self.assertIsNone(out.get('pendingTo'))
+
+
 if __name__ == '__main__':
     unittest.main()
