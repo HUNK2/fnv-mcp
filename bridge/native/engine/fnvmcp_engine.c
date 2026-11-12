@@ -38,9 +38,17 @@
 #ifdef FNVMCP_TEST_SEAM
 __declspec(dllexport) volatile LONG fnvmcp_seam = 0;
 #define SEAM(n) do { while (fnvmcp_seam == (n)) SwitchToThread(); } while (0)
+__declspec(dllexport) volatile LONG fnvmcp_hook_reuse_ms = 60000;
+#define HOOK_REUSE_MS ((ULONGLONG)fnvmcp_hook_reuse_ms)
 #else
 #define SEAM(n) ((void)0)
 #endif /* FNVMCP_TEST_SEAM */
+
+/* A removed hook's stub, ring and table are reused this long after the unhook (K3): calls that entered before the
+ * unhook have long finished by then. */
+#ifndef HOOK_REUSE_MS
+#define HOOK_REUSE_MS 60000ull
+#endif
 
 #define COMPANION_VERSION 3 /* 3: writes exit notes (exit-*.json); fnv_status trusts their absence only from 3 on */
 #define WIRE_VERSION 2
@@ -432,12 +440,15 @@ typedef struct {
     volatile LONG *native_busy;
     unsigned char *native_skip;
     volatile LONG act_applied; /* calls the action changed (act_hits also counts the calls past act_limit; G11) */
+    ULONGLONG removed_at; /* GetTickCount64 of the unhook (or of a failed install); 0 while live (K3) */
 } Hook;
 /* A frame is a watch hook's (hook set) or a mass probe's (probe = index + 1, sample = its sample record). */
 typedef struct { uint32_t ret_slot, ret; Hook *hook; uint64_t t0; LONG seq; uint32_t ecx, a0, a1, override, probe; uint32_t *sample; } ShadowFrame;
 typedef struct { int count; ShadowFrame frames[SHADOW]; } Shadow;
 static Hook *hooks[HOOKS];
 static int hook_count;
+static Hook *hook_spare[HOOKS]; /* removed hooks no longer listed, kept for reuse (K3) */
+static int hook_spare_count;
 static unsigned char *hook_code;
 static uint32_t hook_code_used;
 static DWORD shadow_tls = TLS_OUT_OF_INDEXES;
@@ -748,6 +759,47 @@ static void emit_hook(const Hook *h) {
 }
 /* hook <target> <stolen> <relocs: comma list of rel32 offsets or -> <flags> <filter_sel> <filter_value>
  *      <key_sel> <nargs> <deref0_sel> <deref1_sel> <snap_sel> <snap_len> <label hex> */
+/* K3: a removed hook's memory (stub, ring, table) for a new hook. Only after HOOK_REUSE_MS since the unhook, and
+ * never while a parked stop is inside its stub or trampoline or a native handler still runs on it. */
+static bool stop_holds_hook(uint32_t id, uint32_t lo, uint32_t hi);
+static bool hook_reusable(Hook *h, ULONGLONG now) {
+    uint32_t lo = (uint32_t)(uintptr_t)h->entry;
+    return !h->stolen && h->removed_at && now - h->removed_at >= HOOK_REUSE_MS &&
+           !(h->native_busy && *h->native_busy) && !stop_holds_hook(h->id, lo, lo + 64);
+}
+static Hook *hook_reuse(void) {
+    ULONGLONG now = GetTickCount64();
+    Hook *h = NULL;
+    for (int i = 0; i < hook_spare_count && !h; i++)
+        if (hook_reusable(hook_spare[i], now)) {
+            h = hook_spare[i];
+            hook_spare[i] = hook_spare[--hook_spare_count];
+        }
+    for (int i = 0; i < hook_count && !h; i++)
+        if (hook_reusable(hooks[i], now)) {
+            h = hooks[i];
+            memmove(&hooks[i], &hooks[i + 1], (size_t)(hook_count - i - 1) * sizeof(Hook *));
+            hook_count--;
+        }
+    if (!h) return NULL;
+    unsigned char *entry = h->entry, *skip = h->skip_stub, *native_skip = h->native_skip;
+    uint32_t (*records)[HOOK_WORDS] = h->records;
+    HookStat *table = h->table;
+    memset(h, 0, sizeof(*h));
+    h->entry = entry;
+    h->skip_stub = skip;
+    h->native_skip = native_skip;
+    h->records = records;
+    h->table = table;
+    return h;
+}
+/* A hook that never went live (a failed install) goes to the spare list, reusable at once. */
+static void hook_retire(Hook *h) {
+    h->stolen = 0;
+    h->removed_at = 1; /* long ago */
+    if (hook_spare_count < HOOKS) hook_spare[hook_spare_count++] = h;
+}
+
 /* K1: bytes another patch owns. An int3 or coverage byte inside a hook's jump corrupts it, and a hook over a live
  * int3 copies the 0xCC into its trampoline: both crash the game on the next call. */
 static bool hook_range(uint32_t addr, uint32_t len);
@@ -769,10 +821,12 @@ static void op_hook(int argc, char **argv) {
     if (label < 0) return fail("bad_arguments");
     for (int i = 0; i < 5; i++)
         if (v[i] > 15) return fail("bad_selector");
-    if (hook_count >= HOOKS) { /* forget removed hooks (their memory stays valid) */
+    if (hook_count >= HOOKS) { /* stop listing removed hooks; their memory stays valid and is kept for reuse */
         int kept = 0;
-        for (int i = 0; i < hook_count; i++)
+        for (int i = 0; i < hook_count; i++) {
             if (hooks[i]->stolen) hooks[kept++] = hooks[i];
+            else if (hook_spare_count < HOOKS) hook_spare[hook_spare_count++] = hooks[i];
+        }
         hook_count = kept;
     }
     if (hook_count >= HOOKS) return fail("too_many_hooks");
@@ -783,17 +837,25 @@ static void op_hook(int argc, char **argv) {
     if (!VirtualQuery((LPCVOID)(uintptr_t)target, &info, sizeof(info)) || info.State != MEM_COMMIT ||
         !(info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
         return fail("not_executable");
-    Hook *h = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Hook));
+    Hook *h = hook_reuse();
+    if (!h) h = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Hook));
     if (!h) return fail("out_of_memory");
     cov_release_range(target, stolen); /* never save a coverage 0xCC as an original byte */
-    if (!read_bytes(target, h->original, stolen)) { HeapFree(GetProcessHeap(), 0, h); return fail("unreadable"); }
+    if (!read_bytes(target, h->original, stolen)) { hook_retire(h); return fail("unreadable"); }
     if (!hook_code) hook_code = VirtualAlloc(NULL, 65536, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    /* Ring and table are only allocated when used, and never freed: a call that entered before an unhook
-     * may still write to them when it returns. */
-    if (flags & HF_RECORD) h->records = VirtualAlloc(NULL, HOOK_RING * HOOK_WORDS * 4, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (flags & HF_TABLE) h->table = VirtualAlloc(NULL, HOOK_TABLE * sizeof(HookStat), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!hook_code || ((flags & HF_RECORD) && !h->records) || ((flags & HF_TABLE) && !h->table) || hook_code_used + 64 > 65536)
+    /* Ring and table are only allocated when used, and freed never: a call that entered before an unhook may still
+     * write to them when it returns. A reused hook brings its own (K3). */
+    if ((flags & HF_RECORD) && !h->records)
+        h->records = VirtualAlloc(NULL, HOOK_RING * HOOK_WORDS * 4, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if ((flags & HF_TABLE) && !h->table)
+        h->table = VirtualAlloc(NULL, HOOK_TABLE * sizeof(HookStat), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    else if (h->table)
+        memset(h->table, 0, HOOK_TABLE * sizeof(HookStat));
+    if (!hook_code || ((flags & HF_RECORD) && !h->records) || ((flags & HF_TABLE) && !h->table) ||
+        (!h->entry && hook_code_used + 64 > 65536)) {
+        hook_retire(h);
         return fail("out_of_memory");
+    }
     static uint32_t next_id = 1;
     h->id = next_id++;
     h->target = target;
@@ -808,8 +870,13 @@ static void op_hook(int argc, char **argv) {
     h->snap_len = snap_len;
     h->stolen = stolen;
     snprintf(h->label, sizeof(h->label), "%.*s", (int)label, argv[13]);
-    unsigned char *entry = hook_code + hook_code_used, *tramp = entry + 16;
-    hook_code_used += 64;
+    unsigned char *entry = h->entry, *tramp;
+    if (!entry) {
+        entry = hook_code + hook_code_used;
+        hook_code_used += 64;
+    }
+    tramp = entry + 16;
+    h->entry = entry; /* kept with the hook from here on, so a failed install can still be reused */
     entry[0] = 0x68; /* push hook */
     uint32_t value = (uint32_t)(uintptr_t)h;
     memcpy(entry + 1, &value, 4);
@@ -822,7 +889,7 @@ static void op_hook(int argc, char **argv) {
             char *comma = strchr(item, ',');
             if (comma) *comma = 0;
             uint32_t offset, rel;
-            if (!parse_u32(item, &offset) || offset + 4 > stolen) return fail("bad_relocation");
+            if (!parse_u32(item, &offset) || offset + 4 > stolen) { hook_retire(h); return fail("bad_relocation"); }
             memcpy(&rel, tramp + offset, 4);
             rel += target - (uint32_t)(uintptr_t)tramp;
             memcpy(tramp + offset, &rel, 4);
@@ -842,7 +909,11 @@ static void op_hook(int argc, char **argv) {
     memcpy(patch + 1, &value, 4);
     hooks[hook_count++] = h;
     int written = code_write_frozen(target, patch, stolen);
-    if (written) { hook_count--; return fail(written == 1 ? "busy" : "unwritable"); }
+    if (written) {
+        hook_count--;
+        hook_retire(h);
+        return fail(written == 1 ? "busy" : "unwritable");
+    }
     emit("{\"ok\":true,\"hook\":");
     emit_hook(h);
     emit("}");
@@ -868,6 +939,7 @@ static void op_unhook(int argc, char **argv) {
         return fail(written == 1 ? "busy" : "unwritable");
     }
     h->stolen = 0;
+    h->removed_at = GetTickCount64();
     emit("{\"ok\":true,\"id\":%u}", id);
 }
 /* hookctl <id> <active 0|1> [clear]: pause/resume recording; "clear" empties the call-time table. */
@@ -2267,6 +2339,8 @@ static void serve_ops(char *ops, bool first) {
 }
 /* Starts serving one request line; the pipe thread waits for done_event. */
 static void serve_request(char *line) {
+    last_contact = GetTickCount64(); /* a served request is contact (K2) */
+    InterlockedExchange(&request_dropped, 0);
     char *ops = strchr(line, '\t');
     if (ops) *ops++ = 0;
     if (strlen(line) > 64) line[64] = 0;
@@ -2329,8 +2403,8 @@ static void serve_client(HANDLE pipe) {
         size_t line_length = (size_t)(end - buffer);
         if (line_length && buffer[line_length - 1] == '\r') buffer[line_length - 1] = 0;
         char *tab = strchr(buffer, '\t');
-        last_contact = GetTickCount64(); /* every request and ping counts for the dead-man switch */
         if (tab && !strcmp(tab + 1, "ping")) {
+            if (!request_dropped) last_contact = GetTickCount64(); /* not while the main thread is stuck (K2) */
             *tab = 0;
             ping(pipe, buffer);
         } else {
@@ -2339,7 +2413,10 @@ static void serve_client(HANDLE pipe) {
             SetEvent(request_event);
             for (;;) {
                 if (WaitForSingleObject(done_event, 250) == WAIT_OBJECT_0) break;
-                if (client_gone(pipe) && InterlockedCompareExchange(&pending, 0, 1) == 1) return;
+                if (client_gone(pipe) && InterlockedCompareExchange(&pending, 0, 1) == 1) {
+                    InterlockedExchange(&request_dropped, 1); /* never served: pings no longer count (K2) */
+                    return;
+                }
             }
             if (!write_all(pipe, response, response_len)) return;
         }
@@ -2391,6 +2468,7 @@ static void main_loop(void) {
     run_due(false);
     run_hook_scripts();
     if (scripts && scripts->CallFunction) run_periodic();
+    SEAM(6); /* tests: the main thread is busy elsewhere and takes no request (K2) */
     if (InterlockedCompareExchange(&pending, 2, 1) == 1) serve_request(request);
     gate_park();
 }

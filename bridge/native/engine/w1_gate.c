@@ -16,7 +16,10 @@ static void stop_release_all(bool deadman); /* w2_stop.c */
 static bool stop_main_parked(void);         /* w2_stop.c */
 
 static volatile LONG gate_held, step_left, suspend_kind;
-static volatile ULONGLONG last_contact; /* set by the pipe thread on every request and ping */
+/* The dead-man clock: set when the main thread serves a request, and by a ping while no request was dropped unserved
+ * since the last served one (K2: a stuck main thread must not be kept "in contact" by an agent that keeps polling). */
+static volatile ULONGLONG last_contact;
+static volatile LONG request_dropped; /* the pipe thread gave up on a request the main thread never took */
 static volatile uint32_t gate_timeout = GATE_TIMEOUT;
 static HANDLE request_event;            /* set by the pipe thread when it queues a request */
 static uint32_t gate_disable_fn, gate_enable_fn, gate_timer;

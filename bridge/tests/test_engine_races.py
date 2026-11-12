@@ -329,5 +329,89 @@ class BreakHookRaceTests(StopTestCase):
         self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
 
 
+@needs_zig
+class DeadmanContactTests(StopTestCase):
+    """K2: pings and requests the main thread never served kept the dead-man clock fresh, so a worker parked at a stop
+    the main thread waited on was never released while the agent kept polling."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.receipt = build(cls.tmp.name, defines=SEAM)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        self.host = StopHost(self.receipt, Path(self.receipt['dll']).parent, self.tmp.name, 120)
+        self.addCleanup(self.host.close)
+        self.t = self.host.t
+        self.assertTrue(self.t['seam'], 'not a seam build')
+        self.addCleanup(lambda: poke(self.host.process, self.t['seam'], 0))
+
+    def test_a_stuck_main_thread_does_not_keep_a_worker_stop_alive(self):
+        link = self.host.link
+        hook = link.one('hook', hexint(self.t['hookme']), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0),
+                        hexint(1), '0', '0', hexint(0), hexint(0), fnv_link.hexs('k2'))
+        self.assertTrue(hook.get('ok'), hook)
+        self.assertTrue(link.one('hold', 'on', hexint(3000)).get('held'))      # a 3 s dead-man
+        link.one('hold', 'off')
+        self.hold(hook['hook']['id'])
+        link.console('hookthread 4')
+        self.wait_stops()
+        self.assertEqual(link.ping()['parked'], 1)
+        poke(self.host.process, self.t['seam'], 6)          # the main thread stops before it takes a request
+        with self.assertRaises(fnv_link.LinkError):
+            link.one('stops', timeout=1.0)                  # never served: the pipe thread drops it
+        end = time.monotonic() + 8
+        parked = 1
+        while time.monotonic() < end and parked:
+            parked = link.ping()['parked']                  # the agent keeps polling
+            time.sleep(0.3)
+        self.assertEqual(parked, 0, 'the dead-man released the worker')
+
+
+@needs_zig
+class HookReuseTests(StopTestCase):
+    """K3: hook stubs (64 KB for about 1000 hooks) and record rings (768 KB each) were never reused."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.receipt = build(cls.tmp.name, defines=SEAM)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        self.host = StopHost(self.receipt, Path(self.receipt['dll']).parent, self.tmp.name, 300)
+        self.addCleanup(self.host.close)
+        self.t = self.host.t
+        self.assertTrue(self.t['hookReuseMs'], 'not a seam build')
+
+    def test_installs_past_the_stub_area_reuse_removed_hooks(self):
+        poke(self.host.process, self.t['hookReuseMs'], 0)    # no grace period in the test
+        link = self.host.link
+        for n in range(1100):                               # more than the 1024 stubs of the 64 KB area
+            hook = link.one('hook', hexint(self.t['hookme']), hexint(6), '-', hexint(2), hexint(0), hexint(0),
+                            hexint(0), hexint(1), '0', '0', hexint(0), hexint(0), fnv_link.hexs('k3'))
+            self.assertTrue(hook.get('ok'), (n, hook))
+            self.assertTrue(link.one('unhook', hexint(hook['hook']['id'])).get('ok'), n)
+        self.host.link.schedule(0, 'hookme 5')
+        self.assertTrue(self.wait_line('hookme 1005'), 'the function runs normally after all that')
+
+    def test_the_grace_period_keeps_a_fresh_removal(self):
+        link = self.host.link        # the default grace period: a hook removed just now is not reused
+        first = link.one('hook', hexint(self.t['hookme']), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0),
+                         hexint(1), '0', '0', hexint(0), hexint(0), fnv_link.hexs('k3a'))
+        link.one('unhook', hexint(first['hook']['id']))
+        second = link.one('hook', hexint(self.t['hookme']), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0),
+                          hexint(1), '0', '0', hexint(0), hexint(0), fnv_link.hexs('k3b'))
+        self.assertNotEqual(first['hook']['hook'], second['hook']['hook'], 'a new stub, not the fresh one')
+        link.one('unhook', hexint(second['hook']['id']))
+
+
 if __name__ == '__main__':
     unittest.main()

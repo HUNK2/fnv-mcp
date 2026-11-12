@@ -30,6 +30,14 @@ static const char *bp_resume_prepare(const Stop *s, uint32_t mode, uint32_t arg,
 static void bp_resume_undo(const Stop *s, uint32_t mode, uint32_t arg);
 
 static Stop stops_table[STOPS];
+/* A parked stop of this hook, or one whose eip is in [lo, hi): the hook's memory must not be reused (K3). */
+static bool stop_holds_hook(uint32_t id, uint32_t lo, uint32_t hi) {
+    for (int i = 0; i < (int)STOPS; i++) {
+        const Stop *s = &stops_table[i];
+        if (s->claimed && ((s->kind == STOP_HOOK && s->id == id) || (s->eip >= lo && s->eip < hi))) return true;
+    }
+    return false;
+}
 /* Skip stubs, 16 bytes each, executable; made by the main thread. They are not tied to a stop slot: the slot is freed
  * before the parked thread returns into its stub, and another stop could claim that slot and rewrite the stub first.
  * Each skip takes the next stub of a ring instead, which comes round again only after STOP_STUBS more skips. */

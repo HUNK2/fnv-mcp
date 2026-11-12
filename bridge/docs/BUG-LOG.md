@@ -2273,8 +2273,8 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | U8 | low | open | Probe-remove undo reads and writes probe_session.json outside one lock | `audit3/state.md L5` |
 | U9 | low | open | A speed change from an out-of-range multiplier is not journaled | `audit3/state.md L6` |
 | K1 | high | fixed | An int3 can land inside a hook's patched bytes or be copied into its trampoline: the game crashes | `audit3/companion.md H1` |
-| K2 | medium | open | A worker parked at a stop the main thread waits on cannot be released while the bridge keeps talking (dead-man reset by unserved requests) | `audit3/companion.md M1` |
-| K3 | medium | open | Hook stubs and record rings are never reused: ~1000 installs end every hook tool; each recording hook leaks 768 KB | `audit3/companion.md M2` |
+| K2 | medium | fixed | A worker parked at a stop the main thread waits on cannot be released while the bridge keeps talking (dead-man reset by unserved requests) | `audit3/companion.md M1` |
+| K3 | medium | fixed | Hook stubs and record rings are never reused: ~1000 installs end every hook tool; each recording hook leaks 768 KB | `audit3/companion.md M2` |
 | K4 | medium | open | fnv_flow trace takes an old parked stop of a cleared break with the same bp id as its own hit | `audit3/companion.md M3` |
 | K5 | low | open | A thread=main trap break that falls to int3 parks every thread (E24 incomplete) | `audit3/companion.md L1` |
 | K6 | low | open | A failed unhook silently ends the action or hold; break clear drops the record anyway | `audit3/companion.md L2` |
@@ -2401,5 +2401,21 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: medium
 - Found by: round-3 audit (docs/audit3/state.md M2)
 - Fix: the hot-swap entry records the target script's code pointer from before the swap (undo.data); the undo reads the target first and, when it already holds that code, reports the change undone without swapping again. Entries from before the fix swap as before. Tests: tests/test_s7_round3.py SwapUndoTests.
+- Status: fixed
+
+### K2. A worker parked at a stop the main thread waited on was never released while the bridge kept polling
+
+- Where: native/engine/fnvmcp_engine.c (serve_client, serve_request, the frame loop), w1_gate.c (last_contact)
+- Severity: medium
+- Found by: round-3 audit (docs/audit3/companion.md M1)
+- Fix: the dead-man clock counts a request when the main thread serves it, not when it arrives; once the pipe thread drops a request the main thread never took, pings stop counting until the main thread serves one again. A stuck main thread no longer keeps a parked worker "in contact". Test: tests/test_engine_races.py DeadmanContactTests (seam build: SEAM(6) holds the main thread before it takes requests).
+- Status: fixed
+
+### K3. Hook stubs and record rings were never reused
+
+- Where: native/engine/fnvmcp_engine.c (op_hook, op_unhook), w2_stop.c
+- Severity: medium
+- Found by: round-3 audit (docs/audit3/companion.md M2): about 1000 hook installs per game ended every hook tool (64 KB stub area), and each recording hook kept 768 KB.
+- Fix: a removed hook's memory (its 64-byte stub and trampoline, skip stubs, ring and table) is reused for a new hook once HOOK_REUSE_MS (60 s) has passed since the unhook, and never while a parked stop belongs to the hook or sits in its stub or a native handler runs on it; failed installs go to a spare list at once instead of leaking. Tests: tests/test_engine_races.py HookReuseTests (1100 install/remove cycles with recording; the grace period keeps a fresh removal).
 - Status: fixed
 
