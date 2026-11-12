@@ -277,5 +277,28 @@ class CompileOperationTests(unittest.TestCase):
         self.assertEqual(codes, {'OPERATION_NOT_FOUND'})
 
 
+class IgnoredParameterTests(unittest.TestCase):
+    """T8: a tool parameter that the tool never reads (an agent cannot tell its argument had no effect)."""
+
+    # Parameters that are read by the schema alone, on purpose: an explicit confirmation the caller must give.
+    CONFIRMATIONS = {('geck_plugin_save', 'save_entire_active_plugin')}
+
+    def test_ignored_params_rejected(self):
+        import ast
+        root = Path(__file__).resolve().parents[1] / 'geck_mcp'
+        wrong = []
+        for name in ('fnv_live_tools.py', 'fnv_tools.py', 'server.py'):
+            source = (root / name).read_text(encoding='utf-8')
+            for node in ast.walk(ast.parse(source)):
+                if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) or not any(
+                        isinstance(d, ast.Call) and getattr(d.func, 'attr', None) == 'tool' for d in node.decorator_list):
+                    continue
+                body = node.body[1:] if node.body and isinstance(node.body[0], ast.Expr) else node.body
+                used = {n.id for stmt in body for n in ast.walk(stmt) if isinstance(n, ast.Name)}
+                wrong += [(node.name, a.arg) for a in node.args.args + node.args.kwonlyargs
+                          if a.arg not in used and (node.name, a.arg) not in self.CONFIRMATIONS]
+        self.assertEqual(wrong, [])
+
+
 if __name__ == '__main__':
     unittest.main()

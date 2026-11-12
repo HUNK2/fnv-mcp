@@ -1420,7 +1420,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | T5 | low | fixed | Raw int(...,16) ValueError text in fnv_probe and fnv_events arguments | `fnv_live_tools.py` |
 | T6 | low | fixed | Short form ids (no leading zeros / no load-order prefix) not accepted consistently | `fnv_live.py resolve()` |
 | T7 | low | fixed | fnv_asset_check accepts arbitrary paths and surfaces a raw parse error | `fnv_asset_check registration` |
-| T8 | low | open | Parameters documented/required but ignored | `several fnv_* registrations` |
+| T8 | low | partly fixed | Parameters documented/required but ignored | `several fnv_* registrations` |
 | T9 | low | fixed | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
 | P3 | low | fixed | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
 | P4 | low | fixed | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
@@ -2078,7 +2078,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: possible
 - What happens: some parameters are accepted and ignored, or required by the schema but unused by the implementation, so an agent cannot tell its argument had no effect.
 - Fix idea: drop them or reject when set.
-- Status: open
+- Status: partly fixed (PLAN-3 S6)
+- Resolution: no tool takes a parameter its body never reads (an AST test keeps it so; geck_plugin_save's save_entire_active_plugin is a deliberate Literal[True] confirmation). Open: parameters that only some actions of an action-style tool use are still accepted and ignored by the others; the research recorded no list of them, and rejecting them needs a per-action parameter table (S6.23, test_stab_s6c).
 
 ### T9. geck_compile_status vs geck_compile_resume return different codes for unknown operation
 
