@@ -75,6 +75,27 @@ class NameExportPathTests(unittest.TestCase):
             self.assertEqual(tools._export_path(str(want)), want.resolve())
             self.assertEqual(tools._export_path(None).suffix, '.json', 'the default stays in fnvsym/traces')
 
+    def test_the_state_folder_itself_is_refused(self):
+        # S7 batch-1 review I3: engine_map.json and the other state files live there
+        with tempfile.TemporaryDirectory() as tmp:
+            tools, state = self.tools(tmp)
+            (state / 'engine_map.json').write_text('{"map": 1}', encoding='utf-8')
+            with self.assertRaises(Exception) as caught:
+                tools._export_path(str(state / 'engine_map.json'))
+            self.assertEqual(getattr(caught.exception, 'code', None), 'BAD_PATH')
+
+    def test_an_existing_file_is_overwritten_only_when_it_is_a_trace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tools, state = self.tools(tmp)
+            (state / 'traces').mkdir()
+            other, old = state / 'traces' / 'notes.json', state / 'traces' / 'old.json'
+            other.write_text('{"mine": true}', encoding='utf-8')
+            old.write_text('{"format": "fnvsym-trace/2"}', encoding='utf-8')
+            with self.assertRaises(Exception) as caught:
+                tools._export_path(str(other))
+            self.assertEqual(getattr(caught.exception, 'code', None), 'BAD_PATH')
+            self.assertEqual(tools._export_path(str(old)), old.resolve())
+
     def test_registered_as_control_not_read(self):
         from geck_mcp import fnv_live_tools
         self.assertEqual(fnv_live_tools.FNV_LIVE_TOOLS['fnv_name_export'][0], 'control')

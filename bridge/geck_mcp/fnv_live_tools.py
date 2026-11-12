@@ -1453,7 +1453,7 @@ def register(server, project, annotations, result_type, maintain=True):
         result shapes, oracle matches, experiment verdicts, field watches) as fnvsym-trace/2 into fnvsym/traces, with the
         measured accuracy of each method (PROOF 4.1). fnvsym's `python -m namer.runtime2` turns it into evidence.
         With nothing recorded yet it writes no file (changed: false, exported: 0). path: a .json file under
-        fnvsym/traces or the project's state folder (else BAD_PATH)."""
+        fnvsym/traces or <state>/traces; an existing file only when it is a trace (else BAD_PATH)."""
         return await invoke('fnv_name_export', lambda: naming.export(path))
 
     @server.tool(annotations=act)

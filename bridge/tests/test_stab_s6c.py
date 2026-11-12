@@ -210,7 +210,7 @@ class NameExportTests(unittest.TestCase):
             tools = fnv_naming.NamingTools.__new__(fnv_naming.NamingTools)
             tools.live = live
             tools.db = lambda: sqlite3.connect(db_path)
-            target = Path(tmp) / 'out.json'
+            target = Path(tmp) / 'traces' / 'out.json'     # the export's own folder (review I3)
             out = tools.export(path=str(target))
             self.assertFalse(target.exists())
             self.assertEqual((out['changed'], out['exported']), (False, 0))

@@ -446,18 +446,26 @@ class NamingTools:
         return {'counts': counts, 'callers': callers, 'samples': samples, 'fits': fits, 'idle': seconds}
 
     def _export_path(self, path):
-        """Where the trace goes: a .json under fnvsym/traces or the project's state folder, checked on the resolved
-        path (X1: any path was written, under a read-only annotation)."""
+        """Where the trace goes: a .json under fnvsym/traces or <state>/traces, checked on the resolved path (X1: any
+        path was written, under a read-only annotation; review I3: not the state folder itself, which holds the engine
+        map). An existing file is replaced only when it is a trace."""
         if not path:
             return FNVSYM / 'traces' / ('fnvmcp-%s.json' % time.strftime('%Y%m%d'))
         target = Path(path).resolve()
         roots = [(FNVSYM / 'traces').resolve()]
         state = getattr(self.live.project, 'state_dir', None)
         if state:
-            roots.append(Path(state).resolve())
+            roots.append((Path(state) / 'traces').resolve())
         if target.suffix.lower() != '.json' or not any(target.is_relative_to(root) for root in roots):
             raise ProbeError('BAD_PATH', 'the trace goes to a .json file under %s; got %s'
                              % (' or '.join(str(r) for r in roots), path))
+        if target.exists():
+            try:
+                old = json.loads(target.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                old = None
+            if not (isinstance(old, dict) and str(old.get('format', '')).startswith('fnvsym-trace/')):
+                raise ProbeError('BAD_PATH', '%s exists and is not an fnvsym trace: not replaced' % target)
         return target
 
     def export(self, path=None, max_callers=8):
