@@ -109,7 +109,7 @@ class Group:
     def label_text(self):
         """Top groups use a record type; cell/topic groups use a FormID or grid/block numbers."""
         if self.group_type == 0:
-            return self.label.decode('ascii')
+            return self.label.decode('latin-1')     # display only: a corrupt label never raises (P3)
         if self.group_type in (2, 3):
             return str(struct.unpack('<i', self.label)[0])
         if self.group_type in (4, 5):
@@ -228,7 +228,7 @@ def parse_subrecords(data, base=0):
         if pos + size > len(data):
             raise FormatError('subrecord %r overruns record' % tag, base + pos)
         try:
-            name = tag.decode('ascii')
+            name = _tag(tag, pos)
         except UnicodeDecodeError:
             raise FormatError('non-ASCII subrecord tag', base + pos - 6)
         subs.append(Subrecord(name, bytes(data[pos:pos + size])))
@@ -238,6 +238,14 @@ def parse_subrecords(data, base=0):
     return subs
 
 
+def _tag(raw, pos):
+    """A record or subrecord type: 4 ASCII characters, else FormatError with the offset (P3)."""
+    try:
+        return bytes(raw).decode('ascii')
+    except UnicodeDecodeError:
+        raise FormatError('type %r is not 4 ASCII characters' % bytes(raw), pos) from None
+
+
 def _parse_record(data, pos, end, lazy):
     if pos + 24 > end:
         raise FormatError('truncated record header', pos)
@@ -245,7 +253,7 @@ def _parse_record(data, pos, end, lazy):
     body_start, body_end = pos + 24, pos + 24 + size
     if body_end > end:
         raise FormatError('record %r overruns its container' % tag, pos)
-    rec = Record(tag.decode('ascii'), form_id, flags, vc1, version, vc2)
+    rec = Record(_tag(tag, pos), form_id, flags, vc1, version, vc2)
     body = bytes(data[body_start:body_end])
     if flags & COMPRESSED:
         rec._compressed = body
@@ -299,6 +307,8 @@ def iter_records(data, types=None):
     while pos < end:
         while stack and pos >= stack[-1][0]:
             stack.pop()
+        if pos + 24 > end:
+            raise FormatError('truncated record or group header', pos)
         if bytes(data[pos:pos + 4]) == b'GRUP':
             _, size, label, gtype, _ = GROUP_HEADER.unpack_from(data, pos)
             if size < 24 or pos + size > end:

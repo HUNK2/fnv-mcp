@@ -1422,7 +1422,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | T7 | low | open | fnv_asset_check accepts arbitrary paths and surfaces a raw parse error | `fnv_asset_check registration` |
 | T8 | low | open | Parameters documented/required but ignored | `several fnv_* registrations` |
 | T9 | low | open | geck_compile_status vs geck_compile_resume return different codes for unknown operation | `geck_* compile tools in server.py` |
-| P3 | low | open | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
+| P3 | low | fixed | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
 | P4 | low | open | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
 | P6 | low | open | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
 | P7 | low | open | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
@@ -2089,7 +2089,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed by fuzz
 - What happens: validate, which is documented never to raise for content problems, raised UnicodeDecodeError / zlib.error / struct.error on mutated plugins.
 - Fix idea: catch and convert to FormatError, or decode with latin-1 as fnv_data does.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: record and subrecord types that are not ASCII, truncated headers in iter_records and zlib failures (P2) raise FormatError with the offset; Group.label_text decodes latin-1 for display. A 400-mutation fuzz of parse, iter_records, labels and validate raises nothing else (S6.9, test_stab_s6b).
 
 ### P4. XXXX round trip not byte exact
 

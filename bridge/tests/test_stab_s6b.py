@@ -172,5 +172,52 @@ class BadChecksumTests(unittest.TestCase):
         self.assertTrue(rec.warnings, 'the bad checksum is reported')
 
 
+class FuzzTests(unittest.TestCase):
+    """P3: corrupt plugins raised UnicodeDecodeError, zlib.error and struct.error instead of FormatError."""
+
+    def seed_plugin(self):
+        import zlib
+        from geck_mcp.esp import codec
+        body = sub(b'EDID', b'Thing\0') + sub(b'FULL', b'A thing\0') + sub(b'DATA', b'\x01' * 12)
+        packed = struct.pack('<I', len(body)) + zlib.compress(body)
+        recs = record(b'MISC', 0x01000800, body) + record(b'MISC', 0x01000801, packed, flags=codec.COMPRESSED)
+        group = b'GRUP' + struct.pack('<I', 24 + len(recs)) + b'MISC' + struct.pack('<iII', 0, 0, 0) + recs
+        return plugin() + group
+
+    def mutations(self, data, count=400):
+        import random
+        rng = random.Random(20261113)
+        for _ in range(count):
+            raw = bytearray(data)
+            kind = rng.randrange(3)
+            if kind == 0:                                   # flip bytes
+                for _ in range(rng.randint(1, 6)):
+                    raw[rng.randrange(len(raw))] = rng.randrange(256)
+            elif kind == 1:                                 # truncate
+                raw = raw[:rng.randrange(1, len(raw))]
+            else:                                           # non-ASCII tags and labels
+                for at in rng.sample(range(len(raw)), 4):
+                    raw[at] = rng.randrange(0x80, 0x100)
+            yield bytes(raw)
+
+    def test_fuzzed_plugin_raises_format_error_only(self):
+        from geck_mcp.esp import codec, validate
+        seed = self.seed_plugin()
+        codec.parse(seed, lazy=False)                       # the seed itself is valid
+        wrong = []
+        for n, data in enumerate(self.mutations(seed)):
+            for name, fn in (('parse', lambda d: codec.parse(d, lazy=False)),
+                             ('iter_records', lambda d: [r.subrecords for r, _ in codec.iter_records(d)]),
+                             ('labels', lambda d: [repr(g) for g in codec.parse(d).groups]),
+                             ('validate', lambda d: validate.validate(d))):
+                try:
+                    fn(data)
+                except codec.FormatError:
+                    pass
+                except Exception as e:  # noqa: BLE001 - what this test looks for
+                    wrong.append((n, name, type(e).__name__, str(e)[:60]))
+        self.assertEqual(wrong[:10], [], '%d raw exceptions' % len(wrong))
+
+
 if __name__ == '__main__':
     unittest.main()
