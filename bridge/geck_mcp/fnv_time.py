@@ -113,6 +113,30 @@ class TimeControl:
         """Keep the pause flag in the state file: the game keeps its clock counter when the server restarts."""
         self.state.save('time_pause', self.pid, self.start, True if self.paused_by_us else None)
 
+    def _journal(self, what, value=None):
+        """A clock change, undone by time_restore (S3.6: fnv_revert_all and fnv_session end put the clock back)."""
+        journal = getattr(self.live, 'journal', None)
+        if journal is None:
+            return
+        undo = {'op': 'time_restore', 'what': what}
+        if value is not None:
+            undo['value'] = value
+        journal.add({'kind': 'instrument', 'what': 'time_' + what, 'undo': undo})
+
+    def _close(self, what):
+        """The clock change `what` was put back by this tool: its open entries need no undo any more."""
+        journal = getattr(self.live, 'journal', None)
+        ident = getattr(self.live, 'game_identity', None)
+        if journal is None or ident is None:
+            return
+        try:
+            ids = [e['id'] for e in journal.entries(process=ident(), undoable=True)
+                   if (e.get('undo') or {}).get('op') == 'time_restore' and e['undo'].get('what') == what]
+            if ids:
+                journal.mark_undone(ids)
+        except Exception:  # noqa: BLE001 - the journal is a record
+            pass
+
     # ------------------------------------------------------------ plumbing
     def batch(self, ops, timeout=None):
         return self.live.link.batch(ops, timeout=timeout)
@@ -185,6 +209,7 @@ class TimeControl:
             raise _refused('The clock pause', call)
         self.paused_by_us, self.restored = True, False
         self._remember()
+        self._journal('pause')
         counter_before, counter_after = _u32(before, 'the clock counter'), _u32(after, 'the clock counter')
         return verdict('The game clock is paused',
                        'The world stops and keeps rendering, so the camera and photo tools see a still scene. '
@@ -205,6 +230,7 @@ class TimeControl:
             if _u32(self.batch([('rd', w(TIME_GLOBAL), '4')])[0], 'the clock counter') == 0:
                 self.paused_by_us, self.restored = False, False
                 self._remember()
+                self._close('pause')
                 return verdict('The clock is not paused', 'The clock counter is already 0; nothing changed.',
                                changed=False, pausedByUs=False, clockCounter=0)
         call, after = self.batch([('call', w(fns['enable']), 'v', w(TIME_GLOBAL), '0'),
@@ -213,6 +239,7 @@ class TimeControl:
             raise _refused('The clock resume', call)
         self.paused_by_us, self.restored = False, False
         self._remember()
+        self._close('pause')
         counter = _u32(after, 'the clock counter')
         reason = 'Clock counter now %d.' % counter + (' Something else still holds the clock (focus loss or another '
                                                     'user), so it stays stopped.' if counter else '')
@@ -236,6 +263,7 @@ class TimeControl:
             counter_after = counter
         self.paused_by_us, self.restored = False, False
         self._remember()
+        self._close('pause')
         return verdict('The clock counter is %d' % counter_after,
                        'Enable ran %d time(s) (counter was %d).' % (times, counter) + (
                            ' It is still above 0: something else holds the clock (focus loss, another user).'
@@ -249,6 +277,8 @@ class TimeControl:
         before, after = self.batch([('gate',), ('hold', 'on', w(seconds * 1000))])
         if after.get('held') is not True:
             raise _refused('Closing the frame gate', after)
+        if not before.get('held'):
+            self._journal('hold')
         return verdict('The frame gate is closed',
                        'Nothing runs between frames until release. Requests are still served. If nothing calls or '
                        'pings for %d s, the gate opens by itself (the dead-man switch).' % seconds,
@@ -258,6 +288,8 @@ class TimeControl:
     def release(self):
         self.require_game()
         before, after = self.batch([('gate',), ('hold', 'off')])
+        if after.get('held') is False:
+            self._close('hold')
         return verdict('The frame gate is open' if after.get('held') is False else 'The frame gate state is unknown',
                        'The game runs again.' if before.get('held') else 'The gate was already open; nothing changed.',
                        changed=bool(before.get('held')), held=bool(after.get('held')))
@@ -302,11 +334,14 @@ class TimeControl:
                        held=bool(gate.get('held')),
                        next='Call fnv_time_control release to let it run, or step again.')
 
-    def fixed(self, fps):
+    def fixed(self, fps, journal=True):
         if not 0 <= fps <= FPS_MAX:
             raise ValueError('fps must be from 0 (off) to %d' % FPS_MAX)
         self.require_game()
         fns = self.functions()
+        if journal:
+            was_ms = _f32(self.batch([('rd', w(TIME_GLOBAL + 4), '4')])[0], 'the fixed step')
+            self._journal('fixed', int(round(1000.0 / was_ms)) if was_ms and was_ms > 0 else 0)
         call, step_now = self.batch([('call', w(fns['clamp']), 'v', w(TIME_GLOBAL), '0', w(fps)),
                                      ('rd', w(TIME_GLOBAL + 4), '4')])
         if not call.get('ok'):
@@ -320,11 +355,15 @@ class TimeControl:
         return verdict('The fixed frame step is off', 'Frames take real time again.', changed=True,
                        fixedFps=None, fixedStepMs=step_ms)
 
-    def speed(self, x):
+    def speed(self, x, journal=True):
         if not SPEED_MIN <= x <= SPEED_MAX:
             raise ValueError('x must be from %g to %g' % (SPEED_MIN, SPEED_MAX))
         self.require_game()
         packed = struct.pack('<f', x).hex()
+        if journal:
+            was = _f32(self.batch([('rd', w(MULTIPLIER), '4')])[0], 'the multiplier')
+            if was is not None and SPEED_MIN <= was <= SPEED_MAX:
+                self._journal('speed', round(was, 6))
         before = self.batch([('rd', w(MULTIPLIER), '4'), ('rd', w(MULTIPLIER_TARGET), '4'),
                              ('wr', w(MULTIPLIER), packed), ('wr', w(MULTIPLIER_TARGET), packed)])
         previous = _f32(before[0], 'the multiplier')

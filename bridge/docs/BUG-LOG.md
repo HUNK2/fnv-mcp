@@ -1380,13 +1380,13 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R3 | high | fixed | The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3) | `geck_mcp/fnv_suite.py:131-146` |
 | R4 | high | fixed (live check pending) | Hot reload kills a cancelled call that is still running in the old server (A5 fix) | `geck_mcp/supervisor.py:331-338` |
 | T1 | high | fixed | The engine_control gate is bypassed by tools registered as control or read | `fnv_live.py:167` |
-| G1 | medium | open | Undoing a nudge/rotate/scale leaves the export pose at the undone value | `geck_mcp/fnv_create.py:1109-1119` |
+| G1 | medium | fixed | Undoing a nudge/rotate/scale leaves the export pose at the undone value | `geck_mcp/fnv_create.py:1109-1119` |
 | G4 | medium | partly fixed | fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit) | `geck_mcp/fnv_live.py:1419` |
 | G5 | medium | open | fnv_wait_for seconds with clock=game says "met" while the game clock is paused | `geck_mcp/fnv_time.py` |
-| G9 | medium | open | fnv_globals rounds short/long globals that hold fractions (GameHour), and its undo restores the rounded value | `geck_mcp fnv_globals read and set` |
+| G9 | medium | fixed | fnv_globals rounds short/long globals that hold fractions (GameHour), and its undo restores the rounded value | `geck_mcp fnv_globals read and set` |
 | R5 | medium | open | `fnv_flow call` leaves its breakpoint armed (and its predicate slot freed) when the call cannot be armed (E4 incomplete; new path from the B10 fix) | `geck_mcp/fnv_flow.py:171-191 arms the breakpoint` |
 | R6 | medium | open | `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite) | `geck_mcp/fnv_inspect.py:671-681` |
-| R7 | medium | open | After a server restart the camera journal entry still undoes with a blind `tfc`, so fnv_revert_all turns the fly camera ON (D2 incomplete) | `geck_mcp/fnv_eyes.py:271-292` |
+| R7 | medium | fixed | After a server restart the camera journal entry still undoes with a blind `tfc`, so fnv_revert_all turns the fly camera ON (D2 incomplete) | `geck_mcp/fnv_eyes.py:271-292` |
 | R8 | medium | fixed | Journal: `mark_undone`'s `os.replace` fails while any other handle has `journal.jsonl` open, so an undo that already ran is not recorded and undo/revert_all stops (A1 fix, A7 again) | `geck_mcp/fnv_live.py:104-115` |
 | R9 | medium | open | C5 is only partly fixed: some form-id references are still skipped as text (C5) | `geck_mcp/fnv_records.py:96` |
 | R10 | medium | fixed | `save_session` rewrites `session.json` with no lock: parallel act tools lose changes or corrupt it, and a corrupt file then breaks every act tool in a new server (D8 incomplete) | `geck_mcp/fnv_game.py:239-253` |
@@ -1394,8 +1394,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | T2 | medium | open | fnv_input: invalid key_name raises outside invoke() | `fnv_live_tools.py:618` |
 | P2 | medium | open | Vanilla compressed LAND with bad Adler-32 breaks full parse | `esp/codec.py decompress` |
 | P5 | medium | open | record_find reports the wrong version's name and editor ID | `fnv_data.py record_find` |
-| G2 | low | open | fnv_spawn with a reference spec (player, crosshair, a ref form id) fails with a script compile error | `geck_mcp/fnv_agent.py:808` |
-| G3 | low | open | A placed ref whose SetPos/SetAngle fails is never journaled | `geck_mcp/fnv_create.py:1005-1019` |
+| G2 | low | fixed | fnv_spawn with a reference spec (player, crosshair, a ref form id) fails with a script compile error | `geck_mcp/fnv_agent.py:808` |
+| G3 | low | fixed | A placed ref whose SetPos/SetAngle fails is never journaled | `geck_mcp/fnv_create.py:1005-1019` |
 | G6 | low | open | fnv_wait_for seconds with clock=real uses the fixed step as the real frame rate | `geck_mcp/fnv_time.py:450-455` |
 | G7 | low | open | fnv_time_control status says "The game is running" while the clock is paused | `geck_mcp/fnv_time.py status verdict` |
 | G8 | low | open | The envelope's game.frame is the frame of the last ping, minutes old | `geck_mcp/fnv_live.py:190-192` |
@@ -1429,16 +1429,16 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | P8 | low | open | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
 | P9 | low | open | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
 | P10 | low | open | Save parser: FLT_MAX rotation sentinel passed through | `fnv_save.py ACHR/ACRE initial block decode` |
-| N1 | medium | open | An unknown undo op is marked undone without running | `geck_mcp/fnv_live.py:1347-1382` |
-| N2 | medium | open | A console undo is marked undone even when the game rejected the line | `geck_mcp/fnv_live.py:1356-1357, 1380-1381` |
-| N3 | medium | open | After an undo the camera keeps its saved state, so later camera changes are not journaled | `geck_mcp/fnv_eyes.py:273-274` |
-| N4 | low | open | `form_delete` does not supersede `form_create`, so export keeps deleted forms | `geck_mcp/fnv_create.py:962` |
-| N5 | low | open | Undoing a probe only disarms it: the stubs stay patched and `probe_session.json` still says armed | `geck_mcp/fnv_probe.py:432` |
-| N6 | low | open | The `dbg_clear` undo clears every debug register, including other tools' | `geck_mcp/fnv_watch.py:170` |
-| N7 | low | open | The rng seed undo does not restore the index at +0x9C8 | `geck_mcp/fnv_agent.py:1386, 1409` |
-| N8 | medium | open | About a dozen tools change the game with no journal entry at all | `fnv_deep.py, fnv_debugger.py, fnv_time.py, fnv_naming.py, fnv_agent.py and others (see details)` |
-| N9 | low | open | actor_control enable, disable, unconscious, restrain and add_item have blind undos | `geck_mcp/fnv_live.py:1245` |
-| N10 | medium | open | 8 tool families journal after the change, so a failure leaves an unjournaled change | `fnv_live.py, fnv_code.py, fnv_probe.py, fnv_watch.py, fnv_create.py, fnv_world.py, fnv_eyes.py (see details)` |
+| N1 | medium | fixed | An unknown undo op is marked undone without running | `geck_mcp/fnv_live.py:1347-1382` |
+| N2 | medium | fixed | A console undo is marked undone even when the game rejected the line | `geck_mcp/fnv_live.py:1356-1357, 1380-1381` |
+| N3 | medium | fixed | After an undo the camera keeps its saved state, so later camera changes are not journaled | `geck_mcp/fnv_eyes.py:273-274` |
+| N4 | low | fixed | `form_delete` does not supersede `form_create`, so export keeps deleted forms | `geck_mcp/fnv_create.py:962` |
+| N5 | low | fixed | Undoing a probe only disarms it: the stubs stay patched and `probe_session.json` still says armed | `geck_mcp/fnv_probe.py:432` |
+| N6 | low | fixed | The `dbg_clear` undo clears every debug register, including other tools' | `geck_mcp/fnv_watch.py:170` |
+| N7 | low | fixed | The rng seed undo does not restore the index at +0x9C8 | `geck_mcp/fnv_agent.py:1386, 1409` |
+| N8 | medium | fixed | About a dozen tools change the game with no journal entry at all | `fnv_deep.py, fnv_debugger.py, fnv_time.py, fnv_naming.py, fnv_agent.py and others (see details)` |
+| N9 | low | fixed | actor_control enable, disable, unconscious, restrain and add_item have blind undos | `geck_mcp/fnv_live.py:1245` |
+| N10 | medium | fixed | 8 tool families journal after the change, so a failure leaves an unjournaled change | `fnv_live.py, fnv_code.py, fnv_probe.py, fnv_watch.py, fnv_create.py, fnv_world.py, fnv_eyes.py (see details)` |
 | N11 | low | fixed | The game's identity is chosen six different ways, and `tasklist` runs on every `game.process()` call | `geck_mcp/fnv_game.py:~33-52; fnv_code.py:89 and four other pickers` |
 | N12 | low | fixed | Nothing under `state/fnv` is pruned, and none of it has a cross-process lock | `state/fnv/*` |
 | N13 | high | fixed | Two threads passing one int3 breakpoint at once crash the game (access violation in the trap handler) | `native/engine/w2_bp.c:84 byte_set` |
@@ -1538,7 +1538,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: place array -> nudge FF001319 by +50 z -> fnv_undo that nudge. The ref is back at z 6364.31 in the game (fnv_ref), but fnv_place list still says z 6414.31: the place_pose entry written by the nudge is not undone with it, and the export (fnv_author) reads the newest place_pose.
 - Fix idea: tie the place_pose to its place_adjust entry (store the adjust id, skip poses whose adjust is undone), or write a new place_pose with the before pose when a place_adjust is undone.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### G4. fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit)
 
@@ -1565,7 +1565,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: GameHour is FNAM short in FalloutNV.esm, but the engine keeps the fraction (console GetGlobalValue GameHour -> 9.12). fnv_globals shows 9; set {"GameHour": 9.5} writes 9 and reports old 9 new 9. The journaled old value is the rounded one, so fnv_undo cannot restore 9.12. Time of day cannot be set to a half hour with this tool.
 - Fix idea: read and journal the raw float; round only on write, and not for GameHour/GameDaysPassed (or only when the value is integral), and say when a value was rounded.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### R5. `fnv_flow call` leaves its breakpoint armed (and its predicate slot freed) when the call cannot be armed (E4 incomplete; new path from the B10 fix)
 
@@ -1601,7 +1601,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   3. `fnv_revert_all` (or `fnv_session end`) then runs the blind `tfc` and turns the fly camera back on.
   - The same happens when the user turns the fly camera off by hand, or another tool does.
 - **Fix idea:** Make the undo depend on the current state, for example a new undo op `fly_off` that runs `tfc` only while `fly_state()['fly']` is on. Also mark open `camera` journal entries of this game process as undone in the no-saved-state branch of `restore()`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### R8. Journal: `mark_undone`'s `os.replace` fails while any other handle has `journal.jsonl` open, so an undo that already ran is not recorded and undo/revert_all stops (A1 fix, A7 again)
 
@@ -1692,7 +1692,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: `_apply_undo` handles 7 ops and has no else branch: an entry whose op it does not know falls through and is marked undone, so fnv_undo and fnv_revert_all report a change as reverted that was never touched.
 - Fix idea: Raise on an unknown op (UNDO_UNKNOWN_OP) and leave the entry pending; one registry of undo ops (PLAN-3 S3.1).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (Executor, item 17)`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N2. A console undo is marked undone even when the game rejected the line
 
@@ -1702,7 +1702,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: `console` and `console_ref` undo lines are sent and the entry is marked undone without checking `accepted` or `compileError` in the reply, so a rejected or non-compiling undo line counts as a successful undo.
 - Fix idea: Check the console reply; a rejected undo leaves the entry pending with the reason.
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (Executor, item 2)`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N3. After an undo the camera keeps its saved state, so later camera changes are not journaled
 
@@ -1712,7 +1712,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: `fnv_undo`/`fnv_revert_all` run the camera entry's undo but leave `CameraTools.saved` in place. `_remember` returns early while `saved` is set, so the next set/orbit/pov/photo makes a camera change with no journal entry.
 - Fix idea: Undo of a camera entry clears `saved` (the camera entry and `saved` are one record, PLAN-3 S3.3).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 36; STATE-MAP.md (EyesTools.saved)`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N8. About a dozen tools change the game with no journal entry at all
 
@@ -1722,7 +1722,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: These tools install hooks, hold gates, pause the clock or overwrite game state (leveled_roll with a seed rewrites the RNG while its docstring says it changes nothing) without a journal entry, so fnv_undo and fnv_revert_all cannot see or revert them.
 - Fix idea: Journal every installed thing as an act change (D2, PLAN-3 S3.6).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (unjournaled list, tool kinds table)`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N10. 8 tool families journal after the change, so a failure leaves an unjournaled change
 
@@ -1732,7 +1732,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: The journal entry is written after the game was changed. A timeout or exception between the change and the journal write (for example COMPANION_TIMEOUT on a memory write) leaves a change that undo cannot see; the tool reports outcome_unknown.
 - Fix idea: Journal the intent as pending before the change and confirm after (D5, PLAN-3 S3.2).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (journal sites table, before/after column; item 9)`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N16. fnv_play goto reports arrival outside activation reach, so the next activate fails
 
@@ -1776,7 +1776,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: fnv_spawn form=player -> SPAWN_FAILED "PlaceAtMe did not return a reference" with "Could not parse this line" output. The schema advertises player | crosshair | ref ids for form. A ref should map to its base form (copy of that object) or be refused with a clear BAD_FORM error. The `hasattr(self.live, 'base_form')` branch is dead code.
 - Fix idea: if the resolved form is a reference (formType 58-60 etc.), use its base (GetBaseObject) or refuse.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### G3. A placed ref whose SetPos/SetAngle fails is never journaled
 
@@ -1785,7 +1785,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: likely (code reading; same shape as F10 for spawn)
 - What happens: PlaceAtMe creates the ref first; any failure in _set/_pose/GetParentCell (a link timeout, a load starting) raises before journal.add, so fnv_undo / revert_all / place remove cannot remove that ref.
 - Fix idea: journal right after PlaceAtMe (as spawn does since F10), then update the entry's pose.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### G6. fnv_wait_for seconds with clock=real uses the fixed step as the real frame rate
 
@@ -2115,7 +2115,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: Deleting a created form only removes it from `FormTools.created`; the `form_create` journal entry is not marked undone, so `export` (which reads the journal) still lists the deleted form.
 - Fix idea: A `form_delete` entry supersedes its `form_create` entry (PLAN-3 S3.4).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 31`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N5. Undoing a probe only disarms it: the stubs stay patched and `probe_session.json` still says armed
 
@@ -2125,7 +2125,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: The probe journal entry's undo is `probe_disarm`. The patched call sites and stubs stay in the game, and `probe_session.json` is not updated, so the next server reads the probe as armed.
 - Fix idea: A `probe_remove` undo op that unpatches the sites and updates the session file (PLAN-3 S3.4).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 44`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N6. The `dbg_clear` undo clears every debug register, including other tools'
 
@@ -2135,7 +2135,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: A field-watch entry undoes with `dbg clear f`, which clears all four hardware debug registers, so an fnv_debug hardware break or another watch is removed too.
 - Fix idea: Record the slot and clear only that slot (PLAN-3 S3.4).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md rows 37 and 48`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N7. The rng seed undo does not restore the index at +0x9C8
 
@@ -2145,7 +2145,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: fnv_rng seed writes the 624-word state and the index at instance+0x9C8; the undo restores only the state array, so the generator resumes at the wrong position.
 - Fix idea: Journal the old index with the state and restore both (PLAN-3 S3.4).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 17, item 15`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N9. actor_control enable, disable, unconscious, restrain and add_item have blind undos
 
@@ -2155,7 +2155,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: The undo is a fixed console line (`enable`/`disable`, unconscious off, restrain off, RemoveItem) that does not look at the state before the change: undoing a disable of an actor that was already disabled enables it.
 - Fix idea: Record the prior state and undo to it (PLAN-3 S3.3).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md row 9`.
-- Status: open
+- Status: fixed (PLAN-3 S3)
 
 ### N11. The game's identity is chosen six different ways, and `tasklist` runs on every `game.process()` call
 

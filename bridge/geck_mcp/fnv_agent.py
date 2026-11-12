@@ -1582,6 +1582,13 @@ class AgentTools:
         buf = self._buffer()
         out_form, out_count, out_extra = buf, buf + 4, buf + 8
         instance = self._rng_instance() if seed is not None else None
+        if instance is not None:
+            # The seed rewrites the game's one RNG: journaled with its old state and index (N8), like fnv_rng seed.
+            old_state, old_mti = self.live.reads([(instance + 8, 624 * 4), (instance + 0x9C8, 4)])
+            self.live.journal.add({'kind': 'rng_seed', 'by': 'fnv_leveled_roll', 'seed': int(seed),
+                                   'undo': {'op': 'writes', 'writes': [['0x%08X' % (instance + 8), old_state.hex()],
+                                                                       ['0x%08X' % (instance + 0x9C8), old_mti.hex()]]}
+                                   if old_state and old_mti else None})
         results = []
         ops_per = [('wr', word(buf), '000000000000000000000000'),
                    ('call', word(self.LEVELED_ROLL), 'v', word(lst), '0', word(level), word(out_form), word(out_count),

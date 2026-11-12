@@ -680,6 +680,9 @@ class DeepTools:
             for h in targets:
                 self.remove(h['id'])
             self._baseline = {}
+            if targets:      # the history is complete even for hooks no entry knew (S3.6)
+                self.live.journal.add({'kind': 'hook_removed', 'labels': [h['label'] for h in targets],
+                                       'targets': [h['target'] for h in targets], 'undo': None})
             return {'removed': [h['label'] for h in targets]}
         engine = self.live.engine()
         return {'hooks': [dict(self._hook_out(h), function=engine.summary(int(h['target'], 16)).get('name'))

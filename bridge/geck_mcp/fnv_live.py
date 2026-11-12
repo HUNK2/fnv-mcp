@@ -62,6 +62,8 @@ class LiveService:
         self._rtti = {}
         self._lazy_lock = threading.RLock()  # one Game (so one EngineLink and pipe client) per process
         self.journal = Journal(Path(project.state_dir) / 'fnv/journal.jsonl', game=self.game_identity)
+        self._hook_lock = threading.Lock()
+        self._hook_map, self._hook_game = {}, None     # label -> {'entry': journal id, 'hooks': {hook ids}}
 
     # ================================================================= plumbing
     @property
@@ -89,7 +91,47 @@ class LiveService:
 
     @property
     def link(self):
-        return self.game.link
+        link = self.game.link
+        if link is not None and getattr(link, 'on_hook', False) is None:
+            link.on_hook, link.on_unhook = self._hooked, self._unhooked
+        return link
+
+    # Hooks whose tool journals them itself: hook_set (act:) and native modules (mod:, fnv_native unload).
+    SELF_JOURNALED_HOOKS = ('act:', 'mod:')
+
+    def _hooked(self, hook):
+        """A hook went in (trace, tracepoint, profile, debugger hold, capture...): one `instrument` entry per label
+        and game, undone by unhooking the label (N8, PLAN-3 S3.6)."""
+        label = hook.get('label') or ''
+        if not label or label.startswith(self.SELF_JOURNALED_HOOKS):
+            return
+        ident = GameIdentity.parse(self.game_identity())
+        key = ident.key() if ident else None
+        with self._hook_lock:
+            if self._hook_game != key:
+                self._hook_map, self._hook_game = {}, key
+            known = self._hook_map.get(label)
+            if known and not (self.journal.get(known['entry']) or {}).get('undone', True):
+                known['hooks'].add(hook.get('id'))
+                return
+            entry = self.journal.add({'kind': 'instrument', 'label': label, 'target': hook.get('target'),
+                                      'undo': {'op': 'unhook', 'label': label}})
+            self._hook_map[label] = {'entry': entry['id'], 'hooks': {hook.get('id')}}
+
+    def _unhooked(self, hook_id):
+        """A hook came out: when it was the last one of its label, its entry is closed (a tool that takes its own
+        hook out again leaves nothing for fnv_revert_all)."""
+        done = None
+        with self._hook_lock:
+            for label, info in list(self._hook_map.items()):
+                if hook_id in info['hooks']:
+                    info['hooks'].discard(hook_id)
+                    if not info['hooks']:
+                        del self._hook_map[label]
+                        done = info['entry']
+                    break
+        if done:
+            self.journal.mark_undone([done])
 
     def engine(self):
         if self._engine is None:
@@ -1582,6 +1624,26 @@ def _undo_item_count(live, entry, undo):
         return None
     return _console_undo(live, '%s %s %d' % ('AddItem' if diff > 0 else 'RemoveItem', undo['item'], abs(diff)),
                          ref['ptr'])
+
+
+@undo_op('time_restore', repeatable=True)
+def _undo_time_restore(live, entry, undo):
+    """Put the clock back as it was before a pause, gate hold, fixed step or speed change (S3.6). Each restore checks
+    the state first (resume only a pause this bridge made; release an open gate does nothing)."""
+    from .fnv_inject import shared_time
+    control, _ = shared_time(live)
+    what = undo.get('what')
+    if what == 'pause':
+        control.resume()
+    elif what == 'hold':
+        control.release()
+    elif what == 'fixed':
+        control.fixed(int(undo.get('value') or 0), journal=False)
+    elif what == 'speed':
+        control.speed(float(undo['value']), journal=False)
+    else:
+        return {'undone': False, 'error': {'code': 'UNKNOWN_UNDO_OP', 'message': 'No time restore %r' % what}}
+    return None
 
 
 @undo_op('swap_script')

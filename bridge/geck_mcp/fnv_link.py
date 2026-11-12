@@ -254,8 +254,21 @@ class EngineLink:
         self._note(results)
         return results
 
+    # Set by LiveService: every hook the companion installs or removes, whichever tool sent it, reaches the journal
+    # (PLAN-3 S3.6). A failing callback never fails the op.
+    on_hook = None
+    on_unhook = None
+
     def one(self, *op, timeout=None):
-        return self.batch([op], timeout)[0]
+        result = self.batch([op], timeout)[0]
+        if op and op[0] in ('hook', 'unhook') and result.get('ok'):
+            notify = self.on_hook if op[0] == 'hook' else self.on_unhook
+            if notify is not None:
+                try:
+                    notify(result.get('hook') or {} if op[0] == 'hook' else int(str(op[1]), 16))
+                except Exception:  # noqa: BLE001 - the journal is a record; the game change already happened
+                    pass
+        return result
 
     # ------------------------------------------------------------------ typed helpers
     def info(self):
