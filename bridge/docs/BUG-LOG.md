@@ -1377,7 +1377,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 |---|---|---|---|---|
 | R1 | high | fixed (live check pending) | Coverage: two threads that reach the same coverage line at once crash the game (B1 fix) | `native/engine/w6_cov.c:31-55` |
 | R2 | high | fixed | The F5 fix makes bisect unable to find a plugin that crashes the game while it loads (F5) | `geck_mcp/fnv_suite.py:75-83` |
-| R3 | high | open | The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3) | `geck_mcp/fnv_suite.py:131-146` |
+| R3 | high | fixed | The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3) | `geck_mcp/fnv_suite.py:131-146` |
 | R4 | high | open | Hot reload kills a cancelled call that is still running in the old server (A5 fix) | `geck_mcp/supervisor.py:331-338` |
 | T1 | high | open | The engine_control gate is bypassed by tools registered as control or read | `fnv_live.py:167` |
 | G1 | medium | open | Undoing a nudge/rotate/scale leaves the export pose at the undone value | `geck_mcp/fnv_create.py:1109-1119` |
@@ -1486,7 +1486,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - At bisect start (and at server start), check for an existing `restore.json`. If the plugin's sha differs from the recorded one and the backup's sha matches, restore the backup, or refuse with RESTORE_PENDING.
   - Delete `restore.json` after a successful restore.
   - Never overwrite an existing `restore.json` whose backup differs from the current file.
-- Status: open
+- Status: fixed (S1.3). Every bisect first settles the restore markers a dead bisect left (`BisectTools.finish_pending`): a file already holding its original bytes loses its marker, otherwise the backup is written back and verified; a missing or changed backup raises RESTORE_PENDING and writes nothing, and a marker whose owner process still runs raises BUSY. Markers carry pid and startedAt; mods and plugins levels write `profile.restore.json` with copies of modlist.txt, plugins.txt and loadorder.txt. A successful restore deletes its marker, and `fnv_status` lists pending ones as `pendingRestore`. Tests: `tests/test_stab_s1.py` (PendingRestoreTests).
 
 ### R4. Hot reload kills a cancelled call that is still running in the old server (A5 fix)
 

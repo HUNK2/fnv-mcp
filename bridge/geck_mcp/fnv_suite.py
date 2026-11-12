@@ -31,6 +31,61 @@ BASE_PLUGINS = ('falloutnv.esm', 'deadmoney.esm', 'honesthearts.esm', 'oldworldb
                 'gunrunnersarsenal.esm', 'classicpack.esm', 'mercenarypack.esm', 'tribalpack.esm', 'caravanpack.esm')
 
 
+PROFILE_LISTS = ('modlist.txt', 'plugins.txt', 'loadorder.txt')
+
+
+def bisect_dir(state_dir):
+    return Path(state_dir) / 'fnv' / 'bisect'
+
+
+def restore_markers(state_dir):
+    """The restore markers a bisect left (R3): one per <plugin>.restore.json (records level) and profile.restore.json
+    (mods and plugins levels), each with its 'marker' path. A marker exists only while a bisect runs, or after a
+    server died in one."""
+    folder = bisect_dir(state_dir)
+    if not folder.is_dir():
+        return []
+    out = []
+    for path in sorted(folder.glob('*.restore.json')):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            data = {'corrupt': True}
+        if isinstance(data, dict):
+            out.append({**data, 'marker': str(path)})
+    return out
+
+
+def _sha(path):
+    path = Path(path)
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
+def pid_alive(pid):
+    """True when a process with this pid is running (a marker's owner is still bisecting)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name != 'nt':
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+    import ctypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    handle = kernel32.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ctypes.get_last_error() == 5                      # access denied: it exists
+    try:
+        code = ctypes.c_ulong()
+        return bool(kernel32.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code))) and code.value == 259
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+
 class BisectTools:
     def __init__(self, live, records, runner_factory, quit_game=None):
         self.live = live
@@ -180,21 +235,116 @@ class BisectTools:
         plugin.groups = prune(plugin.groups)
         _atomic_write(path, codec.write(plugin))
 
-    def _backup_original(self):
-        """Copy the plugin's original bytes to the project's state dir (named with their sha256) before any variant
-        is written, so a dead server leaves something to restore from."""
-        path, data = self._original
+    def _state_dir(self):
         project = getattr(self.live, 'project', None)
-        if project is None or not getattr(project, 'state_dir', None):
+        return getattr(project, 'state_dir', None) if project is not None else None
+
+    @staticmethod
+    def _pid():
+        return os.getpid()
+
+    def _write_marker(self, name, data):
+        folder = bisect_dir(self._state_dir())
+        folder.mkdir(parents=True, exist_ok=True)
+        marker = folder / name
+        body = json.dumps({**data, 'pid': self._pid(), 'startedAt': time.time()}, indent=2) + '\n'
+        _atomic_write(marker, body.encode('utf-8'))
+        return marker
+
+    def _backup_original(self):
+        """Copy the plugin's original bytes to the project's state dir (named with their sha256) and write the
+        restore marker, before any variant is written, so a dead server leaves something to restore from (R3)."""
+        path, data = self._original
+        if not self._state_dir():
             return None
         sha = hashlib.sha256(data).hexdigest()
-        folder = Path(project.state_dir) / 'fnv' / 'bisect'
+        folder = bisect_dir(self._state_dir())
+        marker = folder / (path.name + '.restore.json')
+        if marker.exists():
+            try:
+                held = json.loads(marker.read_text(encoding='utf-8')).get('sha256')
+            except (OSError, ValueError):
+                held = None
+            if held != sha:      # finish_pending ran first, so this is a marker it could not settle
+                raise ConvError('RESTORE_PENDING', '%s has a restore marker for other bytes; it was not overwritten.'
+                                % path.name, {'marker': str(marker)})
         folder.mkdir(parents=True, exist_ok=True)
         backup = folder / ('%s.%s.orig' % (path.name, sha[:16]))
         _atomic_write(backup, data)
-        (folder / (path.name + '.restore.json')).write_text(json.dumps(
-            {'plugin': str(path), 'backup': str(backup), 'sha256': sha}, indent=2) + '\n', encoding='utf-8')
+        self._write_marker(path.name + '.restore.json', {'plugin': str(path), 'backup': str(backup), 'sha256': sha})
         return {'path': str(backup), 'sha256': sha}
+
+    def _backup_profile(self):
+        """Copies of the profile's lists and their marker, before the first _set of a mods or plugins bisect."""
+        if not self._state_dir():
+            return None
+        profile = Path(self.live.game.profile_dir)
+        folder = bisect_dir(self._state_dir())
+        folder.mkdir(parents=True, exist_ok=True)
+        backups, shas = {}, {}
+        for name in PROFILE_LISTS:
+            source = profile / name
+            if not source.is_file():
+                continue
+            data = source.read_bytes()
+            shas[name] = hashlib.sha256(data).hexdigest()
+            backups[name] = str(folder / ('profile.%s.%s.orig' % (name, shas[name][:16])))
+            _atomic_write(backups[name], data)
+        return self._write_marker('profile.restore.json', {'profile': str(profile), 'backups': backups,
+                                                           'sha256': shas})
+
+    def _drop_marker(self, name):
+        if self._state_dir():
+            (bisect_dir(self._state_dir()) / name).unlink(missing_ok=True)
+
+    def finish_pending(self, target=None):
+        """Settle the restore markers a dead bisect left (R3), before anything else touches the files: a file that
+        already holds its original bytes just loses its marker; one that does not gets its backup written back. A
+        marker whose backup is missing or wrong raises RESTORE_PENDING (nothing is written), and one whose owner
+        process is still running raises BUSY (another server is bisecting). target: only that plugin's marker."""
+        if not self._state_dir():
+            return []
+        done = []
+        for m in restore_markers(self._state_dir()):
+            if target is not None and Path(m.get('plugin', '')) != Path(target):
+                continue
+            if m.get('corrupt'):
+                raise ConvError('RESTORE_PENDING', 'The bisect restore marker %s cannot be read; check the plugin '
+                                'and profile by hand, then delete it.' % m['marker'], m)
+            if m.get('pid') != self._pid() and pid_alive(m.get('pid')):
+                raise ConvError('BUSY', 'Another server (pid %s) is bisecting; it owns %s.' % (
+                    m.get('pid'), m.get('plugin') or 'the profile'), m)
+            if 'plugin' in m:
+                done.append(self._settle(Path(m['plugin']), m.get('backup'), m.get('sha256'), m))
+            else:
+                done.append(self._settle_lists(Path(m.get('profile', '')), m))
+            Path(m['marker']).unlink(missing_ok=True)
+        return done
+
+    def _settle(self, path, backup, sha, marker):
+        if _sha(path) == sha:
+            return {'marker': marker['marker'], 'settled': str(path)}
+        if not backup or _sha(backup) != sha:
+            raise ConvError('RESTORE_PENDING', '%s is not its original and the backup %s is missing or changed; put '
+                            'the original back by hand, then delete %s.' % (path, backup, marker['marker']), marker)
+        _atomic_write(path, Path(backup).read_bytes())
+        if _sha(path) != sha:
+            raise ConvError('RESTORE_PENDING', 'Writing %s back did not verify.' % path, marker)
+        return {'marker': marker['marker'], 'restored': str(path)}
+
+    def _settle_lists(self, profile, marker):
+        backups, shas = marker.get('backups') or {}, marker.get('sha256') or {}
+        for name, sha in shas.items():           # check every list before writing any
+            if _sha(profile / name) != sha and _sha(backups.get(name) or '') != sha:
+                raise ConvError('RESTORE_PENDING', 'The profile list %s is not its original and its backup is '
+                                'missing or changed; fix it by hand, then delete %s.' % (name, marker['marker']),
+                                marker)
+        restored = []
+        for name, sha in shas.items():
+            if _sha(profile / name) != sha:
+                _atomic_write(profile / name, Path(backups[name]).read_bytes())
+                restored.append(str(profile / name))
+        return {'marker': marker['marker'], 'restored': restored or None, 'settled': str(profile)}
 
     def _restore_plugin(self):
         original = getattr(self, '_original', None)
@@ -202,6 +352,7 @@ class BisectTools:
             _atomic_write(original[0], original[1])
             if original[0].read_bytes() != original[1]:
                 raise OSError('the restored plugin does not match the original')
+            self._drop_marker(original[0].name + '.restore.json')
             self._original = None
 
     def bisect(self, level, steps, start='continue', keep=None, max_rounds=10, plugin=None):
@@ -219,6 +370,8 @@ class BisectTools:
             touched = False                             # the game was closed or a variant written
             everything = []
             try:
+                # A dead bisect's restore comes first (R3), so this one never starts from a pruned file.
+                self.finish_pending()
                 # Everything is validated before the game is closed.
                 everything = self._candidates(level, keep)
                 if len(everything) < 1:
@@ -229,6 +382,8 @@ class BisectTools:
                     touched = True
                     if self.live.game.process():
                         self.quit_game()
+                else:
+                    self._backup_profile()
                 result = self._bisect_rounds(level, steps, start, everything, max_rounds)
                 if backup:
                     result['originalBackup'] = backup
@@ -248,7 +403,8 @@ class BisectTools:
                 elif everything and level != 'records':
                     try:
                         self._set(level, everything, [])        # the profile as it was
-                    except Exception as e:  # noqa: BLE001 - reported in the verdict
+                        self._drop_marker('profile.restore.json')
+                    except Exception as e:  # noqa: BLE001 - reported in the verdict; the marker stays for next time
                         restore_failed.append(str(e)[:300])
             if restore_failed:
                 if result is None:

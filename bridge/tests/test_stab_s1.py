@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_suite import CRASH_CODES, BisectTools  # noqa: E402
+from geck_mcp.fnv_conv import ConvError  # noqa: E402
+from geck_mcp.fnv_suite import CRASH_CODES, BisectTools, restore_markers  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_bugfix_f import make_plugin, stat_ids  # noqa: E402
 
 CRASH = {'passed': False, 'crash': None, 'summary': 'FAILED',
          'failures': [{'phase': 'prepare', 'reason': 'The game exited while loading', 'code': 'GAME_EXITED',
@@ -107,6 +111,121 @@ class BisectCrashTests(unittest.TestCase):                   # R2
         fx.tools._masters = fx.tools._plugin_masters(['A.esp', 'B.esp', 'C.esp'])
         self.assertEqual(fx.tools._close_under_masters(['A.esp'], ['A.esp', 'B.esp', 'C.esp']),
                          ['A.esp', 'B.esp', 'C.esp'])
+
+
+
+class Passing:
+    def run(self, data):
+        return {'passed': True, 'failures': [], 'summary': 'x'}
+
+
+class PendingRestoreTests(unittest.TestCase):                # R3
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.path = self.root / 'A.esp'
+        self.ids = ['%08X' % (0x01000800 + i) for i in range(4)]
+        self.original = make_plugin(self.path, [int(i, 16) for i in self.ids])
+        (self.root / 'modlist.txt').write_text('# h\n+M0\n+M1\n', encoding='utf-8')
+        (self.root / 'plugins.txt').write_text('FalloutNV.esm\nA.esp\n', encoding='utf-8')
+        (self.root / 'loadorder.txt').write_text('FalloutNV.esm\nA.esp\n', encoding='utf-8')
+        self.state = self.root / 'state'
+        self.live = SimpleNamespace(game=SimpleNamespace(process=lambda: None, profile_dir=self.root),
+                                    project=SimpleNamespace(state_dir=self.state))
+
+    def tools(self):
+        t = BisectTools(self.live, None, lambda: Passing(), quit_game=lambda: None)
+        t._plugin_file = lambda: self.path
+        return t
+
+    def dead_server(self):
+        """A server that wrote its backup and a variant, then died (no finally ran)."""
+        t1 = self.tools()
+        t1.plugin = 'A.esp'
+        t1._original = None
+        t1._record_candidates(None)
+        t1._backup_original()
+        t1._write_variant({self.ids[0]})
+        self.assertEqual(stat_ids(self.path), {self.ids[0]})
+        # the marker belongs to a process that is gone
+        marker = self.state / 'fnv/bisect/A.esp.restore.json'
+        import json
+        data = json.loads(marker.read_text(encoding='utf-8'))
+        data['pid'] = 0x7FFFFFF0
+        marker.write_text(json.dumps(data), encoding='utf-8')
+        return marker
+
+    def test_dead_server_then_new_bisect_restores_original(self):
+        self.dead_server()
+        seen = []
+        t2 = self.tools()
+        real = t2._record_candidates
+
+        def candidates(keep):
+            seen.append(set(stat_ids(self.path)))
+            return real(keep)
+        t2._record_candidates = candidates
+        t2.bisect('records', [{'wait': 1}], plugin='A.esp')
+        self.assertEqual(seen[0], set(self.ids))                 # it started from the 4-record original
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertEqual(stat_ids(self.path), set(self.ids))
+
+    def test_marker_removed_after_success(self):
+        self.tools().bisect('records', [{'wait': 1}], plugin='A.esp')
+        self.assertEqual(restore_markers(self.state), [])
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_backup_missing_refuses(self):
+        marker = self.dead_server()
+        import json
+        Path(json.loads(marker.read_text(encoding='utf-8'))['backup']).unlink()
+        variant = self.path.read_bytes()
+        with self.assertRaises(ConvError) as cm:
+            self.tools().bisect('records', [{'wait': 1}], plugin='A.esp')
+        self.assertEqual(cm.exception.code, 'RESTORE_PENDING')
+        self.assertEqual(self.path.read_bytes(), variant)
+        self.assertTrue(marker.exists())
+
+    def test_profile_marker_restores_lists(self):
+        t = self.tools()
+        t._backup_profile()
+        before = {n: (self.root / n).read_bytes() for n in ('modlist.txt', 'plugins.txt', 'loadorder.txt')}
+        for n in before:
+            (self.root / n).write_text('# pruned\n', encoding='utf-8')
+        import json
+        marker = self.state / 'fnv/bisect/profile.restore.json'
+        data = json.loads(marker.read_text(encoding='utf-8'))
+        data['pid'] = 0x7FFFFFF0
+        marker.write_text(json.dumps(data), encoding='utf-8')
+        done = self.tools().finish_pending()
+        self.assertEqual({n: (self.root / n).read_bytes() for n in before}, before)
+        self.assertEqual(restore_markers(self.state), [])
+        self.assertTrue(done and done[0].get('restored'))
+
+    def test_marker_of_a_live_server_is_busy(self):
+        t1 = self.tools()
+        t1.plugin = 'A.esp'
+        t1._original = None
+        t1._record_candidates(None)
+        t1._backup_original()                     # this process: alive, so another server's bisect is running
+        t1._write_variant({self.ids[0]})
+        other = self.tools()
+        other._pid = lambda: 1                    # pretend to be another server
+        with self.assertRaises(ConvError) as cm:
+            other.finish_pending()
+        self.assertEqual(cm.exception.code, 'BUSY')
+        self.assertEqual(stat_ids(self.path), {self.ids[0]})
+
+    def test_status_lists_pending_restore(self):
+        from geck_mcp import fnv_game
+        self.dead_server()
+        project = SimpleNamespace(fnv=SimpleNamespace(mo2_root=str(self.root), mo2_profile='Dev', engine_pipe=None),
+                                  game_root=str(self.root / 'game'), state_dir=self.state)
+        game = fnv_game.Game(project)
+        game.process = lambda: None
+        out = game.status()
+        self.assertEqual([m['plugin'] for m in out['pendingRestore']], [str(self.path)])
 
 
 if __name__ == '__main__':

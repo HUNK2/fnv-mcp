@@ -300,6 +300,11 @@ class Game:
         out = {'running': bool(proc), 'pid': proc[0] if proc else None,
                'profile': {'mo2': str(self.mo2_root), 'name': self.profile},
                'session': {k: session.get(k) for k in ('pid', 'launchedAt', 'start', 'ready')}}
+        from .fnv_suite import restore_markers
+        pending = restore_markers(self.project.state_dir)
+        if pending:     # a bisect is running, or a server died in one: the next fnv_bisect finishes the restore (R3)
+            out['pendingRestore'] = [{k: m.get(k) for k in ('plugin', 'profile', 'pid', 'startedAt', 'marker')
+                                      if m.get(k) is not None} for m in pending]
         if not proc:
             crash = self.crash_since(session.get('launchedAt'))
             last = self.last_exit(session.get('launchedAt'))
