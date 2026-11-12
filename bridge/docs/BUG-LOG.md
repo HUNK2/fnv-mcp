@@ -1412,7 +1412,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R15 | low | fixed | C3 is fixed within one process only: two server processes still collide (C3) | `geck_mcp/fnv_data.py:168-210` |
 | R16 | low | fixed | C13 is only partly fixed: strict cp1252 decodes remain in other readers (C13) | `geck_mcp/fnv_create.py:64, 71, 745, 751, 767, 818` |
 | R17 | low | fixed | The F16 fix leaves its own error path open: an item that fails mid-test stays in the player's inventory (F16) | `geck_mcp/fnv_crawl.py:483-517` |
-| R18 | low | open | The new "terminated from outside" note in `fnv_status` is wrong with an older companion and when the bridge itself force-quit (S4 diagnosis) | `geck_mcp/fnv_game.py:305-313` |
+| R18 | low | fixed | The new "terminated from outside" note in `fnv_status` is wrong with an older companion and when the bridge itself force-quit (S4 diagnosis) | `geck_mcp/fnv_game.py:305-313` |
 | R19 | low | fixed | Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix) | `geck_mcp/fnv_live.py:89-96` |
 | R20 | low | fixed | E6 state file: one save with a different `start` drops every other section (ProcState) | `geck_mcp/fnv_pred.py:400-421` |
 | T3 | low | open | fnv_name_export writes a trace file even when it has nothing to export | `fnv naming export tool` |
@@ -1990,7 +1990,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - A companion built before this commit never writes `exit-*.json`, so every normal quit is blamed on "outside".
   - `quit(force=True)` (TerminateProcess) is blamed on "outside" too, although `quit-log.jsonl` records that the bridge did it.
 - **Fix idea:** Show the note only when the companion is new enough to write exit notes, and check `quit-log.jsonl` for a bridge quit first.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: the launch records the companion build (ping companion) in the session; the 'terminated from outside' note shows only when that build writes exit notes (companion >= 2) and the quit-log has no bridge quit for that pid (S6.20, test_stab_s6c).
 
 ### R19. Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix)
 

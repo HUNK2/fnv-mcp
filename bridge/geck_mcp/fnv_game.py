@@ -366,7 +366,10 @@ class Game:
             crash = self.crash_since(session.get('launchedAt'))
             last = self.last_exit(session.get('launchedAt'))
             out.update(phase='not_running', crashedSinceLaunch=crash, lastExit=last)
-            if session.get('launchedAt') and not crash and not (last and last.get('forLastLaunch')):
+            if session.get('launchedAt') and not crash and not (last and last.get('forLastLaunch')) \
+                    and (session.get('companion') or 0) >= 2 and not self._bridge_quit(session.get('pid')):
+                # Only a companion that writes exit notes (wire 2) can tell, and a quit the bridge asked for (its
+                # force path ends in TerminateProcess) is not "from outside" (R18).
                 # The companion writes its note from the game's own exit path, so a game that ended with neither a
                 # note nor a crash log was ended from outside: TerminateProcess (Task Manager, a script), MO2's job
                 # object closing with MO2, or a fault so early that the crash logger did not run.
@@ -474,6 +477,10 @@ class Game:
         self._wait(lambda: (self.ping().get('deferredInit') or None), deadline, 'COMPANION_NOT_READY',
                    'The engine companion did not answer (is it installed and enabled in the dev profile?)', pid)
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'companion_ready'})
+        try:        # which companion build: an older one writes no exit notes (fnv_status uses it; R18)
+            self.save_session(companion=self.ping().get('companion'))
+        except Exception:  # noqa: BLE001 - only the status note depends on it
+            pass
         self._wait(lambda: self.phase()[0] == 'main_menu' or None, deadline, 'NO_MAIN_MENU', 'Main menu not reached', pid)
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'main_menu'})
         result = self.start_from_menu(kind, value, deadline, pid)
@@ -741,6 +748,17 @@ class Game:
         return {'pid': note.get('pid'), 'how': note.get('how'), 'at': at, 'frame': note.get('frame'),
                 'servingRequest': note.get('servingRequest'), 'askedByBridge': asked,
                 'forLastLaunch': None if launched_at is None else at >= float(launched_at)}
+
+    def _bridge_quit(self, pid):
+        """Did the bridge ask this game process to quit (a quit-log line for its pid)?"""
+        log = Path(self.project.state_dir) / 'fnv' / 'quit-log.jsonl'
+        if not pid or not log.exists():
+            return False
+        try:
+            rows = [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines()[-200:] if line.strip()]
+        except (OSError, ValueError):
+            return False
+        return any(r.get('pid') == pid for r in rows)
 
     def log_quit(self, pid, step):
         """Every quit the bridge asks for, with the code path that asked (state/fnv/quit-log.jsonl), so a game that
