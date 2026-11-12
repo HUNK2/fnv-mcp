@@ -1318,35 +1318,13 @@ class LiveService:
         if not self.same_process(entry, self.game_identity()):
             return {'id': entry['id'], 'undone': False,
                     'reason': 'made in another game process (%s)' % (entry.get('pid') or 'unknown')}
-        if undo['op'] == 'write':
-            self.link.write(int(undo['address'], 16), bytes.fromhex(undo['hex']))
-        elif undo['op'] == 'console':
-            self.console(undo['line'])
-        elif undo['op'] == 'unhook':
-            for h in self.link.one('hooks').get('hooks') or []:
-                if h.get('label') == undo['label'] and h.get('stolen'):
-                    self.link.one('unhook', word(h['id']))
-        elif undo['op'] == 'probe_disarm':
-            info = self.link.one('probe', 'info')
-            if info.get('ok') and info.get('armed'):
-                self.link.one('probe', 'disarm')
-        elif undo['op'] == 'dbg_clear':
-            self.link.one('dbg', 'clear', 'f')
-        elif undo['op'] == 'swap_script':
-            from .fnv_data import swap_script_code
-            swap_script_code(self, int(undo['target'], 16), int(undo['holder'], 16))
-        elif undo['op'] == 'console_ref':
-            try:
-                ref = self.resolve(undo['ref'])
-            except LiveError as e:
-                if e.code != 'REF_NOT_FOUND':
-                    raise
-                # A load or a cell reset removed the ref: there is nothing left to undo.
-                return {'id': entry['id'], 'undone': True, 'kind': entry['kind'],
-                        'note': 'the ref %s no longer exists' % undo['ref']}
-            for line in undo['lines']:
-                self.console(line, ref['ptr'])
-        return {'id': entry['id'], 'undone': True, 'kind': entry['kind']}
+        op = UNDO_OPS.get(undo.get('op'))
+        if op is None:   # never mark a change undone that nothing reverted (N1)
+            return {'id': entry['id'], 'undone': False, 'kind': entry.get('kind'),
+                    'error': {'code': 'UNKNOWN_UNDO_OP', 'message': 'No undo op %r in this bridge' % undo.get('op')}}
+        out = {'id': entry['id'], 'undone': True, 'kind': entry.get('kind')}
+        out.update(op(self, entry, undo) or {})
+        return out
 
     def undo(self, count=1, journal_id=None):
         self.ready()
@@ -1393,3 +1371,77 @@ class LiveService:
         skipped = {'count': len(left), 'ids': left[::-1][:50]}
         return {'reverted': sum(r['undone'] for r in results), 'results': results, 'notUndoable': skipped,
                 'changed': any(r['undone'] for r in results)}
+
+
+# -- Undo ops (PLAN-3 S3.1) -------------------------------------------------------------------------------------
+# One registry: an entry's undo {'op': name, ...} runs UNDO_OPS[name](live, entry, undo). An op returns None when
+# the change is reverted, or a dict merged into the result ({'undone': False, 'reason': ...} when it could not).
+# `repeatable` (S3.2): running the op when the change never happened is harmless (it restores, not toggles).
+UNDO_OPS = {}
+
+
+def undo_op(name, repeatable=False):
+    def register(fn):
+        fn.repeatable = repeatable
+        UNDO_OPS[name] = fn
+        return fn
+    return register
+
+
+def _console_undo(live, line, ref=0):
+    """Run one undo line; a line the game rejected or could not compile is not an undo (N2)."""
+    r = live.console(line, ref)
+    if not r['accepted']:
+        return {'undone': False, 'reason': 'the game rejected the undo line %r' % line, 'output': r['output']}
+    return None
+
+
+@undo_op('write', repeatable=True)
+def _undo_write(live, entry, undo):
+    live.link.write(int(undo['address'], 16), bytes.fromhex(undo['hex']))
+
+
+@undo_op('console')
+def _undo_console(live, entry, undo):
+    return _console_undo(live, undo['line'])
+
+
+@undo_op('console_ref')
+def _undo_console_ref(live, entry, undo):
+    try:
+        ref = live.resolve(undo['ref'])
+    except LiveError as e:
+        if e.code != 'REF_NOT_FOUND':
+            raise
+        # A load or a cell reset removed the ref: there is nothing left to undo.
+        return {'note': 'the ref %s no longer exists' % undo['ref']}
+    for line in undo['lines']:
+        bad = _console_undo(live, line, ref['ptr'])
+        if bad:
+            return bad
+    return None
+
+
+@undo_op('unhook', repeatable=True)
+def _undo_unhook(live, entry, undo):
+    for h in live.link.one('hooks').get('hooks') or []:
+        if h.get('label') == undo['label'] and h.get('stolen'):
+            live.link.one('unhook', word(h['id']))
+
+
+@undo_op('probe_disarm', repeatable=True)
+def _undo_probe_disarm(live, entry, undo):
+    info = live.link.one('probe', 'info')
+    if info.get('ok') and info.get('armed'):
+        live.link.one('probe', 'disarm')
+
+
+@undo_op('dbg_clear')
+def _undo_dbg_clear(live, entry, undo):
+    live.link.one('dbg', 'clear', 'f')
+
+
+@undo_op('swap_script')
+def _undo_swap_script(live, entry, undo):
+    from .fnv_data import swap_script_code
+    swap_script_code(live, int(undo['target'], 16), int(undo['holder'], 16))

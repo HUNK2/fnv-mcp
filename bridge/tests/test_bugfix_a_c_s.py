@@ -87,7 +87,7 @@ class JournalTests(unittest.TestCase):
         live.journal.add({'kind': 'a', 'undo': {'op': 'console', 'line': 'old'}}, GameIdentity(5, 99))
         live.journal.add({'kind': 'a', 'undo': {'op': 'console', 'line': 'nopid'}}, None)
         ran = []
-        live.console = lambda line, ref=0: ran.append(line)
+        live.console = lambda line, ref=0: ran.append(line) or {'accepted': True, 'output': []}
         live.ready = lambda: None
         out = live.revert_all()
         self.assertEqual(ran, ['one'])
@@ -104,6 +104,7 @@ class JournalTests(unittest.TestCase):
             if line == 'boom':
                 raise fnv_live.LiveError('COMPANION_TIMEOUT', 'no reply')
             ran.append(line)
+            return {'accepted': True, 'output': []}
         live.console, live.ready = console, (lambda: None)
         out = live.revert_all()
         self.assertEqual(ran, ['last', 'first'])
