@@ -2287,7 +2287,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | K13 | low | open | A main-thread stop that closed the gate reopens it on release, dropping a hold sent meanwhile | `audit3/companion.md L9` |
 | W1 | high | fixed | Read-classed fnv_snapshot, fnv_diff and fnv_watch run caller console lines and xNVSE expressions (T1 incomplete) | `audit3/contract.md H1` |
 | W2 | high | fixed | resolve() evaluates any bare identifier as an xNVSE expression: fnv_ref ref=QuitGame runs QuitGame under read | `audit3/contract.md H2` |
-| W3 | medium | open | fnv_warnings capture start and fnv_window mouse/unpause change the game as 'control' without the engine_control check | `audit3/contract.md M1` |
+| W3 | medium | fixed | fnv_warnings capture start and fnv_window mouse/unpause change the game as 'control' without the engine_control check | `audit3/contract.md M1` |
 | W4 | medium | open | fnv_formid_live (read) pastes free text into a quoted xNVSE expression | `audit3/contract.md M2` |
 | W5 | low | open | After a launch where no game started, fnv_status says 'terminated from outside' | `audit3/contract.md L1` |
 | W6 | low | open | The audio-cache flag can stay off when its restore write fails (N21 incomplete) | `audit3/contract.md L2` |
@@ -2353,5 +2353,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: high
 - Found by: round-3 audit (docs/audit3/companion.md H1): `fnv_debug break F hits=2` then `fnv_debug break F` (hook over the int3), or a hook on F then a trap break at F+3 (inside the jump displacement); both crash the game on the next call of F.
 - Fix: the companion knows which bytes other patches own: hook_range (live hooks, target..target+stolen) and probe_range (armed probes; an int3 probe owns one byte). isite_add refuses a new site there (-3, `in_use` for bp set and the to resume; a trace return site there is skipped), coverage arming skips those bytes, and op_hook refuses any overlap with another hook (`already_hooked`, was the same target only) or with an armed probe or a live int3 site (`in_use`). Review I1/I5 (S7 batch 1): a probe owns only what it patched at its target (an entry probe its jump, an int3 probe one byte, a call-site probe nothing), a hook may start exactly at an entry probe's target (the designed chain: it relocates the probe's jump), and probe init is refused (`in_use`) while a live hook's saved bytes jump into the probe code. Tests: tests/test_engine_bp.py PatchOverlapTests (fake host).
+- Status: fixed
+
+### W3. fnv_warnings capture and fnv_window mouse/unpause changed the game as 'control', without the engine_control check
+
+- Where: geck_mcp/fnv_live_tools.py (MUTATING_ACTIONS, fnv_warnings and fnv_window registrations)
+- Severity: medium
+- Found by: round-3 audit (docs/audit3/contract.md M1)
+- Fix: MUTATING_ACTIONS lists fnv_warnings capture (start and stop; capture status is a read) and fnv_window release_mouse, capture_mouse and unpause, so they run as act and need engine_control full; both tools pass the action. Tests: tests/test_stab_gate.py cases.
 - Status: fixed
 

@@ -51,6 +51,10 @@ MUTATING_CASES = {
     ('fnv_events', 'subscribe'): {'subscribe': ['onhit']},
     ('fnv_events', 'unsubscribe'): {'unsubscribe': ['all']},
     ('fnv_watch', '*'): {'items': ['player.x'], 'seconds': 0.1},   # expressions can change the game (W1)
+    ('fnv_warnings', 'capture'): {'action': 'capture', 'mode': 'start'},    # hooks the engine's Warning (W3)
+    ('fnv_window', 'release_mouse'): {'action': 'release_mouse'},           # writes game memory (W3)
+    ('fnv_window', 'capture_mouse'): {'action': 'capture_mouse'},
+    ('fnv_window', 'unpause'): {'action': 'unpause'},
     ('fnv_snapshot', '*'): {'name': 'x', 'items': [{'console': 'player.kill'}]},
     ('fnv_diff', '*'): {'before': 'x'},
     ('fnv_systems', 'formula'): {'action': 'formula', 'name': 'x'},
@@ -82,6 +86,8 @@ READ_CASES = {
     'fnv_leveled_roll': {'form': '0x00000014'},
     'fnv_session': {'action': 'status'},
     'fnv_replay': {'action': 'list'},
+    'fnv_warnings': {'action': 'capture', 'mode': 'status'},
+    'fnv_window': {'action': 'status'},
 }
 
 

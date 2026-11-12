@@ -51,6 +51,8 @@ MUTATING_ACTIONS = {
     # caller expressions and console lines can change the game, and the sampler closes message boxes (W1)
     'fnv_watch': '*',
     'fnv_snapshot': '*',
+    'fnv_warnings': {'capture'},                  # start/stop hooks the engine's Warning function (W3)
+    'fnv_window': {'release_mouse', 'capture_mouse', 'unpause'},     # game memory and the pause menu (W3)
     'fnv_diff': '*',
     'fnv_systems': {'formula', 'sweep'},
     'fnv_leveled_roll': {'seed'},
@@ -1329,7 +1331,7 @@ def register(server, project, annotations, result_type, maintain=True):
         exclusive mode back; unpause closes the pause menu (it opens when the window loses focus). persist=true writes
         bBackground Mouse=1 to the dev profile's Fallout.ini so every launch leaves the mouse free (false undoes it).
         Works without the game for persist."""
-        return await invoke('fnv_window', lambda: world.window(action, persist), 'control')
+        return await invoke('fnv_window', lambda: world.window(action, persist), 'control', action=action)
 
     # ------------------------------------------------------------------ naming from the running game
     @server.tool(annotations=act)
@@ -1530,7 +1532,8 @@ def register(server, project, annotations, result_type, maintain=True):
         summary then show the warnings live, with the calling function (fnv_session start turns it on)."""
         return await invoke('fnv_warnings', lambda: warnings_for_live(live).run(
             action, mode=mode, since=since, category=category, text=text, plugin=plugin, source=source, limit=limit,
-            offset=offset, brief=brief, top=top), 'control' if action in ('enable', 'capture') else 'read')
+            offset=offset, brief=brief, top=top), 'control' if action in ('enable', 'capture') else 'read',
+            action=action if action != 'capture' or mode in ('start', 'stop') else 'capture_status')
 
     @server.tool(annotations=act)
     async def fnv_time_control(action: Literal['pause', 'resume', 'force_resume', 'hold', 'release', 'step', 'fixed',
