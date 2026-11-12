@@ -31,8 +31,10 @@ from .fnv_state import sqlite_connect, write_txn
 KNOWN_NAMES = {v.lower() for v in ACTOR_VALUES} | {'x', 'y', 'z', 'player', 'playerref'}  # AVs, axes, the player
 BLOCK_ALIASES = {'onpackageend'}  # short names in g_scriptBlocks (OnPackageDone = OnPackageEnd)
 
-INDEX_VERSION = 1
-SKIP_EDID = {b'LAND', b'NAVM', b'PGRE', b'PMIS', b'NAVI'}  # no EditorIDs worth reading, many of them
+INDEX_VERSION = 2   # 2: EditorIDs of PGRE, PMIS and NAVM are indexed (P7)
+SKIP_EDID = {b'LAND', b'NAVI'}  # no EditorIDs, many of them (PGRE/PMIS/NAVM can be named and scripts use them; P7)
+# Forms the engine makes itself, with no record in any plugin (P7: lint warned on PlayerREF).
+HARDCODED_EDIDS = {'playerref': 'ACHR'}
 FORM_TYPES_FOR_PARAM = {
     # command parameter type -> record types an EditorID argument may name
     'Quest': {'QUST'}, 'Faction': {'FACT'}, 'Cell': {'CELL'}, 'Global': {'GLOB'}, 'Topic': {'DIAL'},
@@ -331,6 +333,8 @@ class DataTools:
 
     # ------------------------------------------------------------------ fnv_record_find
     def record_find(self, query=None, record_type=None, plugin=None, limit=25, offset=0):
+        limit = max(1, min(int(limit), 1000))           # P7: -1 was unlimited, a huge number overflowed SQLite
+        offset = max(0, min(int(offset), 2 ** 31 - 1))
         entries, built = self._active()
         by_file = {e['fileId']: e for e in entries}
         clauses, args = ['file in (%s)' % ','.join(str(i) for i in by_file) or '0'], []
@@ -643,7 +647,10 @@ class DataTools:
         files = ','.join(str(e['fileId']) for e in entries) or '-1'
         rows = self.index.db.execute('select type from records where edid = ? collate nocase and file in (%s)' % files,
                                      (edid,)).fetchall()
-        return {r[0] for r in rows}
+        found = {r[0] for r in rows}
+        if (edid or '').lower() in HARDCODED_EDIDS:
+            found.add(HARDCODED_EDIDS[edid.lower()])
+        return found
 
     # ------------------------------------------------------------------ fnv_compile_ingame / hot swap
     def compile_ingame(self, source, include_bytecode=True):

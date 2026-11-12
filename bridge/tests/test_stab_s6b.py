@@ -283,5 +283,47 @@ class FormIndexTests(unittest.TestCase):
         self.assertIsNone(tools._form(entries, plugin_entry, 0x02000800))                         # past it: no form
 
 
+class IndexGapTests(unittest.TestCase):
+    """P7: placed grenades/mines and navmeshes were not indexed by EditorID; PlayerREF unknown; offset/limit unclamped."""
+
+    def test_pgre_edid_indexed(self):
+        from geck_mcp.fnv_data import RecordIndex
+        recs = [record(b'PGRE', 0x01000800, sub(b'EDID', b'FiendMineRef\0')),
+                record(b'PMIS', 0x01000801, sub(b'EDID', b'SomeMissileRef\0')),
+                record(b'NAVM', 0x01000802, sub(b'EDID', b'NVDLC04ElevNav02REF\0'))]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write(tmp, 'MyMod.esp', plugin(*recs))
+            index = RecordIndex(tmp)
+            file_id = index.ensure(str(path))
+            names = {r[0] for r in index.db.execute('select edid from records where file = ?', (file_id,))}
+            index.db.close()
+        self.assertTrue({'FiendMineRef', 'SomeMissileRef', 'NVDLC04ElevNav02REF'} <= names, names)
+
+    def test_playerref_is_known(self):
+        import sqlite3
+        from types import SimpleNamespace
+        from geck_mcp.fnv_data import DataTools
+        db = sqlite3.connect(':memory:')
+        db.execute('create table records(file integer, owner text, local integer, type text, edid text, full text)')
+        tools = DataTools.__new__(DataTools)
+        tools._index = SimpleNamespace(db=db)
+        self.assertEqual(tools._edid_lookup('PlayerREF', []), {'ACHR'})
+
+    def test_huge_offset_clamped(self):
+        import sqlite3
+        from types import SimpleNamespace
+        from geck_mcp.fnv_data import DataTools
+        db = sqlite3.connect(':memory:')
+        db.execute('create table records(file integer, owner text, local integer, type text, edid text, full text)')
+        for k in range(5):
+            db.execute("insert into records values (1, 'a.esp', ?, 'MISC', ?, null)", (k, 'Thing%d' % k))
+        tools = DataTools.__new__(DataTools)
+        tools._index = SimpleNamespace(db=db)
+        tools._active = lambda: ([{'name': 'A.esp', 'index': 0, 'fileId': 1}], None)
+        self.assertEqual(tools.record_find('Thing', offset=10 ** 30)['count'], 0)
+        self.assertEqual(tools.record_find('Thing', limit=-1)['count'], 1, 'limit is at least 1, not unlimited')
+        self.assertEqual(tools.record_find('Thing', limit=10 ** 9)['count'], 5)
+
+
 if __name__ == '__main__':
     unittest.main()

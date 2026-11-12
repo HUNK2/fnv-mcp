@@ -1425,7 +1425,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | P3 | low | fixed | Corrupt input raises raw exceptions rather than FormatError | `esp/codec.py lines 207 and 224` |
 | P4 | low | fixed | XXXX round trip not byte exact | `esp/codec.py encode_subrecords` |
 | P6 | low | fixed | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
-| P7 | low | open | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
+| P7 | low | fixed | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
 | P8 | low | open | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
 | P9 | low | open | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
 | P10 | low | open | Save parser: FLT_MAX rotation sentinel passed through | `fnv_save.py ACHR/ACRE initial block decode` |
@@ -2120,7 +2120,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed
 - What happens: named placed grenades/mines/NAVM are not found by EditorID. `FiendMineRef` (PGRE) is not in the index, so lint warns UNKNOWN_REFERENCE for `FiendMineRef.enable` in FiendAmbushTriggerScript. NAVM `NVDLC04ElevNav02REF` (LonesomeRoad) is also missing. Hard-coded forms such as PlayerREF (0x14) are not in the index. Huge offset/limit raise OverflowError; limit=-1 returns unlimited results.
 - Fix idea: index EDIDs for PGRE/PMIS (only skip LAND/NAVI if cost matters); seed engine forms; clamp offset/limit.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: EditorIDs of PGRE, PMIS and NAVM are indexed (only LAND and NAVI skipped; INDEX_VERSION 2 rebuilds), PlayerREF is a known hard-coded form (ACHR 0x14) for lint, record_find clamps limit to 1..1000 and offset to 0..2^31-1 (S6.13, test_stab_s6b).
 
 ### P8. Lint false positives on vanilla scripts
 
