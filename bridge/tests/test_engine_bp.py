@@ -254,6 +254,37 @@ class PatchOverlapTests(StopTestCase):
         self.host.link.one('bp', 'clear', 'ff')
         for h in self.host.link.one('hooks').get('hooks') or []:
             self.host.link.one('unhook', hexint(h['id']))
+        self.host.link.one('probe', 'disarm')
+
+    def probe(self, mode, stolen):
+        link = self.host.link
+        link.one('probe', 'disarm')
+        self.assertTrue(link.one('probe', 'init', '4', '2', '0', '0')['ok'])
+        record = struct.pack('<IBBB3sH', self.t['bpTarget'], mode, stolen, 0, bytes(3), 0)
+        self.assertEqual(link.one('probe', 'add', record.hex())['added'], 1)
+        self.assertTrue(link.one('probe', 'arm').get('ok'))
+        self.assertTrue(link.one('probe', 'info').get('armed'))
+
+    # S7 batch-1 review I1/I5: a hook chains on an entry probe's jump at its target; only an int3 probe blocks it
+    def test_a_hook_chains_on_an_entry_probe_at_its_target(self):
+        original = self.host.link.one('rd', hexint(self.t['bpTarget']), '6')['hex']
+        self.probe(0, 6)
+        self.assertEqual(self.hook(self.t['bpTarget'] + 1).get('error'), 'in_use', 'inside the probe jump')
+        hooked = self.hook(self.t['bpTarget'])
+        self.assertTrue(hooked.get('ok'), hooked)
+        self.assertEqual(self.host.link.one('bp', 'set', hexint(1), hexint(self.t['bpTarget'] + 3), 'int3', 'ff',
+                                            hexint(0)).get('error'), 'in_use')
+        # I5: a new probe set would reuse the stub area the hook's saved bytes jump into
+        self.host.link.one('probe', 'disarm')
+        self.assertEqual(self.host.link.one('probe', 'init', '4', '2', '0', '0').get('error'), 'in_use')
+        # the probe saw its jump overwritten and leaves it: after the unhook the function keeps the probe's jump,
+        # so put the original bytes back for the next tests
+        self.assertTrue(self.host.link.one('unhook', hexint(hooked['hook']['id'])).get('ok'))
+        self.host.link.one('wr', hexint(self.t['bpTarget']), original)
+
+    def test_an_int3_probe_blocks_a_hook(self):
+        self.probe(2, 1)
+        self.assertEqual(self.hook(self.t['bpTarget']).get('error'), 'in_use')
 
     def hook(self, target, label='k1'):
         from geck_mcp import fnv_link
@@ -274,7 +305,8 @@ class PatchOverlapTests(StopTestCase):
         self.assertTrue(self.host.link.one('bp', 'set', hexint(2), hexint(self.t['bpTarget'] + 3), 'int3', 'ff',
                                            hexint(0)).get('ok'))
         self.assertEqual(self.hook(self.t['bpTarget']).get('error'), 'in_use')
-        self.assertEqual(self.host.link.one('hooks').get('hooks') or [], [])
+        live = [h for h in self.host.link.one('hooks').get('hooks') or [] if h.get('stolen')]   # removed ones stay listed
+        self.assertEqual(live, [])
 
     def test_no_hook_overlapping_another(self):
         self.assertTrue(self.hook(self.t['bpTarget']).get('ok'))

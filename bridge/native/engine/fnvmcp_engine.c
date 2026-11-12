@@ -752,6 +752,8 @@ static void emit_hook(const Hook *h) {
  * int3 copies the 0xCC into its trampoline: both crash the game on the next call. */
 static bool hook_range(uint32_t addr, uint32_t len);
 static bool probe_range(uint32_t addr, uint32_t len);
+static bool probe_blocks_hook(uint32_t target, uint32_t len);
+static bool hook_on_probe_code(void);
 static bool isite_in(uint32_t addr, uint32_t len);
 static bool patched_range(uint32_t addr, uint32_t len) { return hook_range(addr, len) || probe_range(addr, len); }
 
@@ -775,7 +777,7 @@ static void op_hook(int argc, char **argv) {
     }
     if (hook_count >= HOOKS) return fail("too_many_hooks");
     if (hook_range(target, stolen)) return fail("already_hooked"); /* any overlap, not only the same target (K1) */
-    if (probe_range(target, stolen) || isite_in(target, stolen)) return fail("in_use");
+    if (probe_blocks_hook(target, stolen) || isite_in(target, stolen)) return fail("in_use");
     if (shadow_tls == TLS_OUT_OF_INDEXES && (shadow_tls = TlsAlloc()) == TLS_OUT_OF_INDEXES) return fail("no_tls");
     MEMORY_BASIC_INFORMATION info;
     if (!VirtualQuery((LPCVOID)(uintptr_t)target, &info, sizeof(info)) || info.State != MEM_COMMIT ||
@@ -1018,10 +1020,28 @@ static bool hook_range(uint32_t addr, uint32_t len) {
 }
 static ProbeSite *probe_sites;
 static uint32_t probe_capacity, probe_used, probe_site_used, probe_samples_per;
-static bool probe_range(uint32_t addr, uint32_t len) { /* the bytes an armed probe patched (an int3 probe: one) */
+/* The bytes an armed probe patched at its target: an entry probe (mode 0) its jump over `stolen`, an int3 probe
+ * (mode 2) one byte; a call-site probe (mode 1) patches only its callers' fields, nothing at the target. */
+static uint32_t probe_patch_size(const Probe *p) {
+    if (p->state != PROBE_ARMED) return 0;
+    return p->mode == 0 ? p->stolen : p->mode == 2 ? 1 : 0;
+}
+static bool probe_range(uint32_t addr, uint32_t len) {
     for (uint32_t i = 0; i < probe_used; i++) {
-        uint32_t size = probes[i].stolen ? probes[i].stolen : 1;
-        if (probes[i].state == PROBE_ARMED && addr < probes[i].target + size && probes[i].target < addr + len) return true;
+        uint32_t size = probe_patch_size(&probes[i]);
+        if (size && addr < probes[i].target + size && probes[i].target < addr + len) return true;
+    }
+    return false;
+}
+/* A hook may start exactly at an entry probe's target: it relocates the probe's jump into its trampoline (the
+ * designed chain; probe disarm then sees its bytes changed and leaves them). Any other overlap, and any overlap with
+ * an int3 probe, would cut an instruction or copy a 0xCC (K1, S7 review I1). */
+static bool probe_blocks_hook(uint32_t target, uint32_t len) {
+    for (uint32_t i = 0; i < probe_used; i++) {
+        uint32_t size = probe_patch_size(&probes[i]);
+        if (!size || !(target < probes[i].target + size && probes[i].target < target + len)) continue;
+        if (probes[i].mode == 0 && target == probes[i].target) continue;
+        return true;
     }
     return false;
 }
@@ -1030,6 +1050,21 @@ static volatile LONG *probe_meta;    /* [capacity][2]: sampled calls, caller-tab
 static uint32_t *probe_samples;      /* [capacity][samples_per][PROBE_WORDS] */
 static volatile LONG *probe_callers; /* [capacity][PROBE_CALLERS][2]: return address, count */
 static unsigned char *probe_code;
+/* A live hook whose saved first bytes are a jump into the current probe code (it chained on an entry probe): a new
+ * probe set would reuse that code area, and the unhook would put back a jump into it (S7 review I5). */
+static bool hook_on_probe_code(void) {
+    if (!probe_code) return false;
+    uint32_t lo = (uint32_t)(uintptr_t)probe_code, hi = lo + probe_capacity * PROBE_STUB;
+    for (int i = 0; i < hook_count; i++) {
+        Hook *h = hooks[i];
+        if (!h->stolen || h->original[0] != 0xE9) continue;
+        int32_t rel;
+        memcpy(&rel, h->original + 1, 4);
+        uint32_t dest = h->target + 5 + (uint32_t)rel;
+        if (dest >= lo && dest < hi) return true;
+    }
+    return false;
+}
 static volatile uint32_t probe_limit, probe_mask = 0xFFFFFFFFu, probe_action, probe_exit_samples;
 
 uint32_t fnvmcp_probe_enter(uint32_t *fr) {
@@ -1576,6 +1611,7 @@ static void op_probe(int argc, char **argv) {
             !parse_u32(argv[5], &v[3]) || !v[0] || v[0] > PROBE_MAX || v[1] > 64 || (v[3] & (v[3] - 1)))
             return fail("bad_arguments");
         if (probe_any_armed()) return fail("probes_armed");
+        if (hook_on_probe_code()) return fail("in_use"); /* unhook first (S7 review I5) */
         /* Arrays are reused when they are big enough (nothing is armed, so no stub runs any more); the code area
          * is always new: a thread preempted inside an old stub finishes on the old code. */
         if (!probes || v[0] > probe_capacity || v[1] > probe_samples_per) {
