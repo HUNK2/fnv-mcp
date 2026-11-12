@@ -197,10 +197,14 @@ class RecordIndex:
                 done, row = self._fresh(path, path.stat())   # the insert keeps the stat taken before the scan
                 if done is not None:
                     return done
-                if row:
-                    db.execute('delete from records where file = ?', (row[0],))
-                    db.execute('delete from files where id = ?', (row[0],))
-                    self._drop_refs(db, row[0])
+                # This path's old build, and any other copy of the same plugin (the Data copy and the mod copy of
+                # one name): only one is loaded, and lookups by name must not see the other one's records (X3).
+                stale = [r[0] for r in db.execute('select id from files where lower(name) = ? and path != ?',
+                                                  (path.name.lower(), str(path)))]
+                for old in ([row[0]] if row else []) + stale:
+                    db.execute('delete from records where file = ?', (old,))
+                    db.execute('delete from files where id = ?', (old,))
+                    self._drop_refs(db, old)
                 next_id = max(db.execute('select coalesce(max(id), 0) from files').fetchone()[0],
                               self._last_id(db)) + 1
                 db.execute('insert into files(id, path, name, size, mtime, version, masters, records, built) '

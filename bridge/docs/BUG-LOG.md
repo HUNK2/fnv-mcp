@@ -2296,7 +2296,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | W9 | low | open | fnv_snapshot items has no length cap; console items uncapped | `audit3/contract.md L5` |
 | X1 | high | fixed | fnv_name_export writes to any path the call names, under a read-only annotation | `audit3/parsers.md H1` |
 | X2 | medium | fixed | fnv_asset_check's folder check is lexical: Data\..\.. escapes it (T7 incomplete) | `audit3/parsers.md M1` |
-| X3 | medium | open | The record index keeps rows of a plugin path that left the load order; lookups serve them | `audit3/parsers.md M2` |
+| X3 | medium | fixed | The record index keeps rows of a plugin path that left the load order; lookups serve them | `audit3/parsers.md M2` |
 | X4 | low | open | records.text accepts U+0080..U+009F and writes other characters | `audit3/parsers.md L1` |
 | X5 | low | open | P9 incomplete: generic text fields and dialogue responses write an embedded NUL | `audit3/parsers.md L2` |
 | X6 | low | open | codec.parse RecursionError on deeply nested groups (P3 incomplete) | `audit3/parsers.md L3` |
@@ -2377,5 +2377,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: medium
 - Found by: round-3 audit (docs/audit3/parsers.md M1)
 - Fix: the path is compared with `..` collapsed (os.path.normpath; a symlinked mod folder still counts where it sits) or fully resolved, never as the raw absolute path; the check runs before is_file(), so a refusal does not tell whether a path exists. Tests: tests/test_s7_round3.py AssetPathTests.
+- Status: fixed
+
+### X3. The record index kept the rows of a plugin path that left the load order
+
+- Where: geck_mcp/fnv_data.py (RecordIndex.ensure)
+- Severity: medium
+- Found by: round-3 audit (docs/audit3/parsers.md M2): geck_plugin_install writes Data\<plugin>, fnv_install writes mods\<stem>\<plugin>; both copies kept their rows under one owner name, and unfiltered lookups (_form, refs `known`, record_users, conflicts, the save namer) served the other copy.
+- Fix: indexing a path deletes, in the same transaction, the files, records and refs rows of any other path with the same plugin name (only one copy is loaded); switching copies re-indexes the one now in use. Tests: tests/test_s7_round3.py StaleCopyTests.
 - Status: fixed
 

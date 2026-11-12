@@ -318,5 +318,32 @@ class AssetPathTests(unittest.TestCase):
             self.assertEqual(tools.asset_check(str(game_root / 'Data' / 'Mine.esp'))['plugin'], 'Mine.esp')
 
 
+class StaleCopyTests(unittest.TestCase):
+    """X3: the record index kept the rows of a plugin path that left the load order (Data copy vs mod copy)."""
+
+    def test_indexing_one_copy_drops_the_other(self):
+        from test_bugfix_a_c_s import tes4_plugin
+        from geck_mcp.fnv_data import RecordIndex
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            data, mod = root / 'Data' / 'Mine.esp', root / 'mods' / 'Mine' / 'Mine.esp'
+            data.parent.mkdir(parents=True)
+            mod.parent.mkdir(parents=True)
+            tes4_plugin(data, [(0x000800, 'STAT', 'OldRock')])
+            tes4_plugin(mod, [(0x000801, 'STAT', 'NewRock')])
+            index = RecordIndex(root / 'state')
+            index.ensure(data)
+            index.ensure(mod)
+            db = index.db
+            self.assertEqual([r[0] for r in db.execute("select path from files where lower(name) = 'mine.esp'")],
+                             [str(mod)])
+            self.assertEqual([r[0] for r in db.execute("select edid from records where owner = 'mine.esp'")],
+                             ['NewRock'])
+            index.ensure(data)       # switching back re-indexes the Data copy
+            self.assertEqual([r[0] for r in db.execute("select edid from records where owner = 'mine.esp'")],
+                             ['OldRock'])
+            db.close()
+
+
 if __name__ == '__main__':
     unittest.main()
