@@ -82,5 +82,47 @@ class NameExportPathTests(unittest.TestCase):
         self.assertEqual([ast.unparse(d) for d in fn.decorator_list], ['server.tool(annotations=control)'])
 
 
+class BareIdentifierTests(unittest.TestCase):
+    """W2: resolve() sent any EditorID-shaped ref to eval, so fnv_ref ref=QuitGame ran QuitGame under read."""
+
+    def live(self, commands):
+        from fakes import FakeLive
+        fake = FakeLive(engine_control='read')
+        self.addCleanup(fake.close)
+        live = fake.live
+
+        def engine():
+            if commands is None:
+                raise RuntimeError('no engine map')
+            return SimpleNamespace(commands=commands)
+        live.engine = engine
+        live.editor_id = lambda edid: None
+        return fake, live
+
+    def evals(self, fake):
+        return [bytes.fromhex(args[0]).decode('cp1252') for name, args in fake.link.ops if name == 'eval']
+
+    def test_a_command_name_is_never_evaluated(self):
+        from geck_mcp.fnv_live import LiveError
+        fake, live = self.live([{'name': 'QuitGame', 'short': 'qqq'}, {'name': 'KillAll', 'short': ''}])
+        for name in ('QuitGame', 'qqq', 'killall'):
+            with self.assertRaises(LiveError) as caught:
+                live.resolve(name)
+            self.assertEqual(caught.exception.code, 'REF_NOT_FOUND')
+        self.assertEqual(self.evals(fake), [])
+
+    def test_without_the_command_list_a_bare_name_is_not_evaluated(self):
+        from geck_mcp.fnv_live import LiveError
+        fake, live = self.live(None)
+        with self.assertRaises(LiveError):
+            live.resolve('QuitGame')
+        self.assertEqual(self.evals(fake), [])
+
+    def test_an_editor_id_still_resolves(self):
+        fake, live = self.live([{'name': 'QuitGame', 'short': 'qqq'}])
+        fake.link.expressions['DocMitchellRef'] = {'type': 'form', 'ptr': '0x12345678', 'formId': '00104C0C'}
+        self.assertEqual(live.resolve('DocMitchellRef')['formId'], '00104C0C')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -2286,7 +2286,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | K12 | low | open | _store_pred keeps a claimed slot when pred set fails | `audit3/companion.md L8` |
 | K13 | low | open | A main-thread stop that closed the gate reopens it on release, dropping a hold sent meanwhile | `audit3/companion.md L9` |
 | W1 | high | open | Read-classed fnv_snapshot, fnv_diff and fnv_watch run caller console lines and xNVSE expressions (T1 incomplete) | `audit3/contract.md H1` |
-| W2 | high | open | resolve() evaluates any bare identifier as an xNVSE expression: fnv_ref ref=QuitGame runs QuitGame under read | `audit3/contract.md H2` |
+| W2 | high | fixed | resolve() evaluates any bare identifier as an xNVSE expression: fnv_ref ref=QuitGame runs QuitGame under read | `audit3/contract.md H2` |
 | W3 | medium | open | fnv_warnings capture start and fnv_window mouse/unpause change the game as 'control' without the engine_control check | `audit3/contract.md M1` |
 | W4 | medium | open | fnv_formid_live (read) pastes free text into a quoted xNVSE expression | `audit3/contract.md M2` |
 | W5 | low | open | After a launch where no game started, fnv_status says 'terminated from outside' | `audit3/contract.md L1` |
@@ -2321,5 +2321,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: high
 - Found by: round-3 audit (docs/audit3/parsers.md H1)
 - Fix: a given path must resolve to a .json file under fnvsym/traces or the project's state folder (else BAD_PATH), checked before any work; the tool is kind control (it writes a file), so it no longer carries readOnlyHint. Tests: tests/test_s7_round3.py NameExportPathTests.
+- Status: fixed
+
+### W2. resolve() evaluated any bare identifier: fnv_ref ref=QuitGame ran QuitGame under read
+
+- Where: geck_mcp/fnv_live.py (resolve; reached from every tool that takes a ref, quest or form)
+- Severity: high
+- Found by: round-3 audit (docs/audit3/contract.md H2)
+- Fix: a bare name is looked up in the EditorID index first (form_expr of the indexed form id); it is evaluated as an expression only when the script command list is readable and the name is not a command or short name. Otherwise REF_NOT_FOUND, with no eval sent. The command list is built in one place (_commands, also used by substitute_editor_ids). Tests: tests/test_s7_round3.py BareIdentifierTests.
 - Status: fixed
 

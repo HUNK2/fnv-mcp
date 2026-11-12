@@ -425,17 +425,22 @@ class LiveService:
             value = form_id(ref)
             expr = '(BuildRef %d %d)' % (value >> 24, value & 0xFFFFFF)
         elif EDITOR_ID.match(ref):
-            expr = ref
+            # A bare name goes to the EditorID index first; it is evaluated as an expression only when it is not a
+            # script command (W2: eval "QuitGame" ran QuitGame from a read tool), and never without the command list.
+            found = self.editor_id(ref)
+            if found:
+                expr = self.form_expr(found['formId'])
+            else:
+                commands = self._commands()
+                if commands is None or ref.lower() in commands:
+                    raise LiveError('REF_NOT_FOUND', 'No form for %r: %s' % (ref, 'it is a script command, not a form'
+                                    if commands is not None else 'not in the EditorID index (and the command list '
+                                    'is not readable, so the name is not evaluated)'), {'spec': ref})
+                expr = ref
         else:
             raise ValueError('Not a reference: %r (use player, crosshair, a form id or an EditorID)' % ref)
         result = self.link.eval(expr)
         element = result.get('result') or {}
-        if (not result.get('ok') or element.get('type') != 'form' or not element.get('ptr')) and expr == ref:
-            found = self.editor_id(ref)
-            if found:
-                expr = self.form_expr(found['formId'])
-                result = self.link.eval(expr)
-                element = result.get('result') or {}
         if not result.get('ok') or element.get('type') != 'form' or not element.get('ptr'):
             raise LiveError('REF_NOT_FOUND', 'No form for %r in the running game' % ref,
                             {'expression': expr, 'result': result})
@@ -958,20 +963,25 @@ class LiveService:
     # place fails ("set <form id> to" is not a variable). Seen live 2026-11-11: globals compile by name.
     RUNTIME_NAMED = {'GLOB'}
 
+    def _commands(self):
+        """Every script command name and short name (lower case), or None when the engine map cannot be read."""
+        commands = getattr(self, '_command_names', None)
+        if commands is None:
+            try:
+                found = set()
+                for c in self.engine().commands:
+                    found.add(c['name'].lower())
+                    if c.get('short'):
+                        found.add(c['short'].lower())
+            except Exception:  # noqa: BLE001 - no engine map: the callers decide what that means
+                return None
+            commands = self._command_names = found
+        return commands
+
     def substitute_editor_ids(self, text):
         """Replace EditorIDs found in the offline indexes (not commands, keywords or quoted text) with their runtime
         form ids, which the in-game compiler accepts. Returns (new text, {EditorID: form id})."""
-        commands = getattr(self, '_command_names', None)
-        if commands is None:
-            commands = set()
-            try:
-                for c in self.engine().commands:
-                    commands.add(c['name'].lower())
-                    if c.get('short'):
-                        commands.add(c['short'].lower())
-            except Exception:
-                pass
-            self._command_names = commands
+        commands = self._commands() or set()
         out, subs = [], {}
         # The script's own name (scn) and its declared variables are names, not forms.
         protected = set()
