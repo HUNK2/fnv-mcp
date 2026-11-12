@@ -1142,8 +1142,16 @@ class LiveService:
         undo = None
         if action in self.ACTIONS:
             command = self.ACTIONS[action]
-            undo = {'enable': 'Disable', 'disable': 'Enable', 'unconscious_on': 'SetUnconscious 0',
-                    'restrain_on': 'SetRestrained 0'}.get(action)
+            # Undos that restore the state read before (N9), never a blind opposite command.
+            if action in ('enable', 'disable'):
+                was = self.values(['GetDisabled'], r['ptr'])[0]
+                if was is not None:
+                    undo = {'op': 'ref_enabled', 'ref': r['formId'], 'on': not was}
+            elif action in ('unconscious_on', 'restrain_on'):
+                flag = 'unconscious' if action == 'unconscious_on' else 'restrained'
+                was = self.values([ACTOR_FLAGS[flag][0]], r['ptr'])[0]
+                if was is not None:
+                    undo = {'op': 'actor_flag', 'ref': r['formId'], 'flag': flag, 'on': bool(was)}
         elif action in self.TARGET_ACTIONS:
             if not target:
                 raise ValueError('%s needs a target' % action)
@@ -1151,7 +1159,9 @@ class LiveService:
             command = self.TARGET_ACTIONS[action] % t
             if action == 'add_item':
                 command = 'AddItem %s %d' % (t, int(value or 1))
-                undo = 'RemoveItem %s %d' % (t, int(value or 1))
+                before = self.values(['GetItemCount %s' % t], r['ptr'])[0]
+                if before is not None:
+                    undo = {'op': 'item_count', 'ref': r['formId'], 'item': t, 'count': int(before)}
             elif action == 'remove_item':
                 command = 'RemoveItem %s %d' % (t, int(value or 1))
         elif action in ('set_av', 'force_av'):
@@ -1189,9 +1199,10 @@ class LiveService:
             raise ValueError('Unknown action %r; use one of %s' % (action, ', '.join(
                 sorted(list(self.ACTIONS) + list(self.TARGET_ACTIONS) + ['set_av', 'force_av', 'set_position']))))
         self.changing('actor_control')
+        entry = self.journal.add({'kind': 'actor', 'state': 'pending', 'ref': r['formId'], 'action': action,
+                                  'command': command, 'undo': undo})
         result = self.console(command, r['ptr'])
-        entry = self.journal.add({'kind': 'actor', 'ref': r['formId'], 'action': action, 'command': command,
-                                  'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': [undo]} if undo else None})
+        self.journal.confirm(entry['id'], {'accepted': result['accepted']})
         return {'action': action, 'command': command, 'accepted': result['accepted'], 'output': result['output'],
                 'undoable': bool(undo), 'journalId': entry['id']}
 
@@ -1447,6 +1458,88 @@ def _undo_probe_disarm(live, entry, undo):
 @undo_op('dbg_clear')
 def _undo_dbg_clear(live, entry, undo):
     live.link.one('dbg', 'clear', 'f')
+
+
+def _undo_ref(live, undo):
+    """The ref an undo acts on, or a result saying it is gone (nothing left to undo)."""
+    try:
+        return live.resolve(undo['ref']), None
+    except LiveError as e:
+        if e.code != 'REF_NOT_FOUND':
+            raise
+        return None, {'note': 'the ref %s no longer exists' % undo['ref']}
+
+
+def _undo_unreadable(what):
+    return {'undone': False, 'reason': 'cannot read %s now, so the undo did not run' % what}
+
+
+@undo_op('fly_set', repeatable=True)
+def _undo_fly_set(live, entry, undo):
+    from .fnv_eyes import fly_on
+    want = bool(undo['on'])
+    if fly_on(live) == want:
+        return None
+    bad = _console_undo(live, 'tfc')
+    if bad:
+        return bad
+    if fly_on(live) != want:
+        return {'undone': False, 'reason': 'the fly camera did not turn %s' % ('on' if want else 'off')}
+    return None
+
+
+@undo_op('hud_set', repeatable=True)
+def _undo_hud_set(live, entry, undo):
+    from .fnv_eyes import hud_hidden
+    if hud_hidden(live) != bool(undo['on']):      # shown == on: nothing to do
+        return None
+    return _console_undo(live, 'tm')
+
+
+@undo_op('ref_enabled', repeatable=True)
+def _undo_ref_enabled(live, entry, undo):
+    ref, gone = _undo_ref(live, undo)
+    if gone:
+        return gone
+    disabled = live.values(['GetDisabled'], ref['ptr'])[0]
+    if disabled is None:
+        return _undo_unreadable('GetDisabled')
+    if bool(disabled) != bool(undo['on']):
+        return None
+    return _console_undo(live, 'Enable' if undo['on'] else 'Disable', ref['ptr'])
+
+
+ACTOR_FLAGS = {'unconscious': ('GetUnconscious', 'SetUnconscious %d'),
+               'restrained': ('GetRestrained', 'SetRestrained %d')}
+
+
+@undo_op('actor_flag', repeatable=True)
+def _undo_actor_flag(live, entry, undo):
+    ref, gone = _undo_ref(live, undo)
+    if gone:
+        return gone
+    getter, setter = ACTOR_FLAGS[undo['flag']]
+    now = live.values([getter], ref['ptr'])[0]
+    if now is None:
+        return _undo_unreadable(getter)
+    if bool(now) == bool(undo['on']):
+        return None
+    return _console_undo(live, setter % int(bool(undo['on'])), ref['ptr'])
+
+
+@undo_op('item_count', repeatable=True)
+def _undo_item_count(live, entry, undo):
+    ref, gone = _undo_ref(live, undo)
+    if gone:
+        return gone
+    now = live.values(['GetItemCount %s' % undo['item']], ref['ptr'])[0]
+    if now is None:
+        return _undo_unreadable('GetItemCount')
+    diff = int(undo['count']) - int(now)
+    if not diff:
+        return None
+    return _console_undo(live, '%s %s %d' % ('AddItem' if diff > 0 else 'RemoveItem', undo['item'], abs(diff)),
+                         ref['ptr'])
 
 
 @undo_op('swap_script')

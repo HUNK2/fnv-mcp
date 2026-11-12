@@ -83,10 +83,24 @@ class D2D3D4(unittest.TestCase):
 
     def test_visible_hud_is_toggled_and_restored(self):
         live = eyes_world()
+        original = live.console
+
+        def console(line, ref=0):            # tm flips the hidden flag, as in the game
+            if line == 'tm':
+                live.mem[fnv_eyes.MENUS_HIDDEN_FLAG] = 0 if live.mem.get(fnv_eyes.MENUS_HIDDEN_FLAG) else 1
+            return original(line, ref)
+        live.console = console
         eyes = EyesTools(live, sleep=lambda s: None)
         back = eyes._hud_off(True)
         back()
         self.assertEqual([l for l in live.lines if l == 'tm'], ['tm', 'tm'])
+
+    def test_hud_shown_again_by_someone_else_is_not_toggled_back(self):
+        live = eyes_world()
+        eyes = EyesTools(live, sleep=lambda s: None)
+        back = eyes._hud_off(True)       # tm sent; the flag stays 0 (shown again before the restore)
+        back()
+        self.assertEqual([l for l in live.lines if l == 'tm'], ['tm'])
 
 
 class FakeControl:

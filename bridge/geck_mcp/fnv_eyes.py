@@ -200,6 +200,18 @@ class Camera:
                 'area': (cu1 - cu0) * (cv1 - cv0), 'clipped': (cu0, cu1, cv0, cv1) != (u0, u1, v0, v1)}
 
 
+def fly_on(live):
+    """The fly camera flag (OSGlobals +6), read now."""
+    osg = live.u32s([OS_GLOBALS])[0]
+    flag = live.reads([(osg + FLY_FLAG, 1)])[0] if osg else None
+    return bool(flag and flag[0])
+
+
+def hud_hidden(live):
+    """HUD and menus hidden by tm, read now."""
+    return bool((live.reads([(MENUS_HIDDEN_FLAG, 1)])[0] or b'\x00')[0])
+
+
 class EyesTools:
     def __init__(self, live, agent=None, engine_ai=None, sleep=time.sleep):
         self.live = live
@@ -245,6 +257,28 @@ class EyesTools:
         width, height = self.screen_size()
         return Camera(position, rotate, clip, frustum, _f(raw_sg, SG_FOV - SG_CAMERA), width, height)
 
+    def _saved_undone(self):
+        """The saved state's journal entry was undone (fnv_undo / fnv_revert_all ran its undo): the camera is no
+        longer ours to restore, and the next change needs a new entry (N3)."""
+        jid = (self.saved or {}).get('journalId')
+        get = getattr(self.live.journal, 'get', None)
+        if not jid or get is None:
+            return False
+        e = get(jid)
+        return bool(e and e.get('undone'))
+
+    def _mark_open_camera_entries_undone(self):
+        """restore() with no saved state (a new server after a reload) puts the camera back itself: the earlier
+        server's camera entries for this game must not run again (R7)."""
+        ident = getattr(self.live, 'game_identity', None)
+        try:
+            entries = self.live.journal.entries(process=ident()) if ident else []
+            ids = [e['id'] for e in entries if e.get('kind') == 'camera' and e.get('undo') and not e['undone']]
+            if ids:
+                self.live.journal.mark_undone(ids)
+        except Exception:  # noqa: BLE001 - the journal is a record; a failed mark must not block the restore
+            pass
+
     def fly_state(self):
         osg, player = self.live.u32s([OS_GLOBALS, PLAYER])
         flag = self.live.reads([(osg + FLY_FLAG, 1)])[0] if osg else None
@@ -270,13 +304,14 @@ class EyesTools:
     # ================================================================ camera control
     def _remember(self):
         pid = (self.live.identity() or {}).get('pid')
-        if self.saved and self.saved.get('pid') == pid:
+        if self.saved and self.saved.get('pid') == pid and not self._saved_undone():
             return
         state = self.fly_state()
         self.saved = {'pid': pid, 'fly': state['fly'], 'pose': state.get('pose'), 'fov': self.camera().fov}
         self.live.changing('camera')
+        # The undo sets the fly camera off; it reads the flag first, so it never toggles blind (R7).
         entry = self.live.journal.add({'kind': 'camera', 'saved': self.saved,
-                                       'undo': {'op': 'console', 'line': 'tfc'} if not state['fly'] else None})
+                                       'undo': {'op': 'fly_set', 'on': False} if not state['fly'] else None})
         self.saved['journalId'] = (entry or {}).get('id')
 
     def _mark_camera_undone(self, saved):
@@ -406,6 +441,7 @@ class EyesTools:
     def restore(self):
         self.live.ready()
         if not self.saved:
+            self._mark_open_camera_entries_undone()
             state = self.fly_state()
             if state['fly']:
                 self.live.console('tfc')
@@ -749,7 +785,8 @@ class EyesTools:
         self._frames(2)
 
         def back():
-            self.live.console('tm')
+            if hud_hidden(self.live):      # the hud_set undo's rule: toggle only when it is still hidden
+                self.live.console('tm')
         return back
 
     @_locked
