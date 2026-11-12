@@ -3,6 +3,7 @@ what is abnormal since the last mark. The open session is kept on the live servi
 reads the same one. Start reuses ScenarioRunner.prepare (launch or load, crash context on); end reverts this session's
 journal entries, turns the frame control back to normal and optionally quits the game.
 """
+import threading
 import time
 
 from .fnv_conv import ConvError, dispatch, verdict
@@ -36,6 +37,9 @@ def _deep(live):
     return deep
 
 
+_SESSION_LOCK = threading.RLock()  # start and end run one at a time: two parallel starts must not both launch
+
+
 class SessionTools:
     def __init__(self, live):
         self.live = live
@@ -59,6 +63,10 @@ class SessionTools:
         return state
 
     def start(self, start, timeout_seconds, deterministic):
+        with _SESSION_LOCK:
+            return self._start(start, timeout_seconds, deterministic)
+
+    def _start(self, start, timeout_seconds, deterministic):
         if self.state is not None:
             raise ConvError('SESSION_OPEN', 'A session is already open (since %s). Next: call fnv_session end first, or '
                             'fnv_session status.' % time.strftime('%H:%M:%S', time.localtime(self.state['since'])))
@@ -82,17 +90,31 @@ class SessionTools:
         except Exception as e:  # noqa: BLE001 - the session works without it; the health check says so
             warnings_state['capture'] = False
             warnings_state['captureError'] = str(e)[:200]
-        warnings.clear()
-
         control, _ = shared_time(self.live)
         deterministic_state = None
-        if deterministic:
-            control.fixed(DETERMINISTIC_FPS)
-            runner.agent.rng(seed=DETERMINISTIC_SEED)
-            deterministic_state = {'fps': DETERMINISTIC_FPS, 'seed': DETERMINISTIC_SEED}
-        snap = control.snapshot(measure=True)
-        mark = runner.mark()
-        baseline = {'realFps': snap.get('realFps'), 'refs': _refs(self.live)}
+        try:
+            warnings.clear()
+            if deterministic:
+                control.fixed(DETERMINISTIC_FPS)
+                runner.agent.rng(seed=DETERMINISTIC_SEED)
+                deterministic_state = {'fps': DETERMINISTIC_FPS, 'seed': DETERMINISTIC_SEED}
+            snap = control.snapshot(measure=True)
+            mark = runner.mark()
+            baseline = {'realFps': snap.get('realFps'), 'refs': _refs(self.live)}
+        except Exception:
+            # No session will be open, so nothing could undo these later: take back what this start turned on.
+            if warnings_state.get('capture'):
+                try:
+                    warnings.capture.stop()
+                except Exception:  # noqa: BLE001 - best effort; the original error is what the caller needs
+                    pass
+            if deterministic:
+                try:
+                    control.fixed(0)
+                    control.release()
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
         self.live.session_state = {'start': start, 'since': time.time(), 'deterministic': deterministic_state,
                                    'baseline': baseline, 'journal': mark['journal'], 'mark': mark,
                                    'marks': [{'label': 'session start', **mark}]}
@@ -114,8 +136,21 @@ class SessionTools:
                        marks=len(state['marks']))
 
     def end(self, quit_game=False):
-        state = self._open()
-        health = HealthTools(self.live).check()
+        with _SESSION_LOCK:
+            state = self._open()
+            try:
+                return self._end(state, quit_game)
+            finally:
+                # Whatever failed above (the game may be gone), the session is closed so a new one can start.
+                self.live.session_state = None
+
+    def _end(self, state, quit_game):
+        try:
+            health = HealthTools(self.live).check()
+        except Exception as e:  # the game crashed or quit during the session: the report says so
+            health = {'ok': False, 'items': [{'kind': 'health_check_failed', 'what': 'The health check failed: %s'
+                                              % str(e)[:300], 'next': 'Call fnv_status (the game may be gone).'}],
+                      'error': {'code': getattr(e, 'code', type(e).__name__), 'message': str(e)[:300]}}
         try:
             out = self.live.revert_all(state['journal'])
             reverted = {'reverted': out.get('reverted', 0)}

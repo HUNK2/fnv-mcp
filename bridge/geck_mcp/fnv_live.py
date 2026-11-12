@@ -8,7 +8,9 @@ of a game session. Act tools refuse unless the project sets fnv.engine_control =
 import json
 import math
 import re
+import os
 import struct
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -48,30 +50,69 @@ def _fid(value):
 
 
 class Journal:
-    """Append-only record of every change, with what undoes it. One file per bridge state folder."""
+    """Append-only record of every change, with what undoes it. One file per bridge state folder.
 
-    def __init__(self, path):
+    Tools run on worker threads and may run in parallel, so every read and write holds one lock per file, and
+    rewrites go through a temporary file and os.replace (a crash mid-write never leaves half a journal). Each
+    entry is stamped with the game process it was made in (pid and start time, from `game`), so undo never
+    replays a change from an earlier game process onto a new one."""
+
+    _locks = {}
+    _locks_guard = threading.Lock()
+
+    def __init__(self, path, game=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.game = game  # callable -> {'pid', 'started'} of the running game, or None
+        with Journal._locks_guard:
+            self.lock = Journal._locks.setdefault(os.path.normcase(str(self.path.resolve())), threading.RLock())
 
-    def entries(self):
+    def _read(self):
         if not self.path.exists():
             return []
-        return [json.loads(line) for line in self.path.read_text(encoding='utf-8').splitlines() if line.strip()]
+        out = []
+        for line in self.path.read_text(encoding='utf-8').splitlines():
+            if not line.strip():
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:  # a line torn by an older, unlocked writer: skip it, keep the rest
+                continue
+        return out
+
+    def entries(self):
+        with self.lock:
+            return self._read()
 
     def add(self, entry):
-        entry = {'id': uuid.uuid4().hex[:12], 'time': time.time(), 'undone': False, **entry}
-        with self.path.open('a', encoding='utf-8') as f:
-            f.write(json.dumps(entry) + '\n')
+        stamp = {}
+        if 'pid' not in entry and self.game is not None:
+            try:
+                ident = self.game() or {}
+            except Exception:
+                ident = {}
+            if ident.get('pid'):
+                stamp = {'pid': ident['pid'], 'started': ident.get('started')}
+        entry = {'id': uuid.uuid4().hex[:12], 'time': time.time(), 'undone': False, **stamp, **entry}
+        line = json.dumps(entry) + '\n'
+        with self.lock:
+            with self.path.open('a', encoding='utf-8') as f:
+                f.write(line)
         return entry
 
     def mark_undone(self, ids):
-        entries = self.entries()
-        for e in entries:
-            if e['id'] in ids:
-                e['undone'] = True
-                e['undoneAt'] = time.time()
-        self.path.write_text(''.join(json.dumps(e) + '\n' for e in entries), encoding='utf-8')
+        ids = set(ids)
+        if not ids:
+            return
+        with self.lock:
+            entries = self._read()
+            for e in entries:
+                if e['id'] in ids:
+                    e['undone'] = True
+                    e['undoneAt'] = time.time()
+            tmp = self.path.with_name(self.path.name + '.tmp')
+            tmp.write_text(''.join(json.dumps(e) + '\n' for e in entries), encoding='utf-8')
+            os.replace(tmp, self.path)
 
 
 class LiveService:
@@ -80,14 +121,33 @@ class LiveService:
         self._game = None
         self._engine = None
         self._rtti = {}
-        self.journal = Journal(Path(project.state_dir) / 'fnv/journal.jsonl')
+        self._lazy_lock = threading.RLock()  # one Game (so one EngineLink and pipe client) per process
+        self.journal = Journal(Path(project.state_dir) / 'fnv/journal.jsonl', game=self.game_identity)
 
     # ================================================================= plumbing
     @property
     def game(self):
         if self._game is None:
-            self._game = Game(self.project)
+            with self._lazy_lock:
+                if self._game is None:
+                    self._game = Game(self.project)
         return self._game
+
+    def game_identity(self):
+        """{'pid', 'started'} of the game the link talks to (asks the game if the link has not said hello)."""
+        if self._game is None:
+            return None
+        link = self._game.link
+        hello = link.hello or link.ping()
+        return {'pid': hello.get('pid'), 'started': hello.get('started')}
+
+    @staticmethod
+    def same_process(entry, ident):
+        """True when a journal entry was made in the game process `ident`. Entries without a pid come from an
+        unknown process (older journals, or no game connected) and never match."""
+        if not entry.get('pid') or not ident or entry['pid'] != ident.get('pid'):
+            return False
+        return not entry.get('started') or not ident.get('started') or entry['started'] == ident['started']
 
     @property
     def link(self):
@@ -95,7 +155,9 @@ class LiveService:
 
     def engine(self):
         if self._engine is None:
-            self._engine = fnv_engine.load(*fnv_engine.default_paths(self.project))
+            with self._lazy_lock:
+                if self._engine is None:
+                    self._engine = fnv_engine.load(*fnv_engine.default_paths(self.project))
         return self._engine
 
     def run(self, name, action, kind='read'):
@@ -122,10 +184,26 @@ class LiveService:
                     'game': self.identity(), 'elapsedMs': round((time.monotonic() - started) * 1000)}
 
     def identity(self):
-        hello = self._game.link.hello if self._game else None
-        if not hello:
+        if self._game is None:
             return None
-        return {'pid': hello.get('pid'), 'started': hello.get('started'), 'frame': hello.get('frame')}
+        link = self._game.link
+        hello = link.hello
+        if hello:
+            return {'pid': hello.get('pid'), 'started': hello.get('started'), 'frame': hello.get('frame')}
+        if link.handle is None:
+            return None
+        # Connected but no ping on this connection yet (a fresh server child, a tool that only sends batches): the
+        # one game process is the one the pipe talks to; its start time is the companion's `started`.
+        try:
+            from .fnv_game import process_started
+            proc = self._game.process()
+            if not proc:
+                return None
+            started = process_started(proc[0])
+        except Exception:  # noqa: BLE001 - identity is best effort
+            return None
+        return {'pid': proc[0], 'started': str(started) if started is not None else None,
+                'frame': link.last_frame}
 
     def ready(self):
         """The game runs and the companion answers; returns the ping."""
@@ -291,21 +369,39 @@ class LiveService:
                             % (ref, form_type, r.get('formId')), {'formId': r.get('formId'), 'formType': form_type})
         return r
 
+    ACTOR_TYPES = (59, 60)  # ACHR, ACRE
+
+    def resolve_actor(self, ref):
+        """resolve(), refusing anything but a placed actor: actor methods (MagicTarget, actor values) called on another
+        form run engine code on the wrong layout (seen 2026-11-12: fnv_actor_values on a campfire static)."""
+        r = self.resolve(ref)
+        raw = self.reads([(r['ptr'] + 4, 1)])[0]
+        form_type = raw[0] if raw else None
+        if form_type not in self.ACTOR_TYPES:
+            raise LiveError('NOT_AN_ACTOR', '%s is not a placed actor (form type %s; actors are ACHR 59 and ACRE 60). '
+                            'Next: pass an NPC or creature reference (fnv_refs_near lists them).'
+                            % (ref, form_type), {'formId': r.get('formId'), 'formType': form_type})
+        return r
+
     PREFERRED = ('QUST', 'REFR', 'ACHR', 'ACRE', 'NPC_', 'CREA', 'GLOB', 'WEAP', 'ARMO', 'ALCH', 'MISC', 'KEYM',
                  'AMMO', 'BOOK', 'CONT', 'DOOR', 'ACTI', 'STAT', 'CELL', 'PACK', 'SPEL', 'PERK', 'FACT')
 
     def editor_id(self, edid):
         """EditorID -> runtime form id via the offline master indexes (state/index) and the live load order:
         the running game keeps few EditorIDs in memory."""
-        if not hasattr(self, '_indexes'):
-            import gzip
-            self._indexes = {}
-            for path in sorted((Path(self.project.state_dir) / 'index').glob('*.json.gz')):
-                try:
-                    data = json.load(gzip.open(path))
-                    self._indexes[data.get('master') or path.name[:-8]] = data.get('entries', {})
-                except (OSError, ValueError):
-                    continue
+        if getattr(self, '_indexes', None) is None:
+            with self._lazy_lock:
+                if getattr(self, '_indexes', None) is None:
+                    import gzip
+                    indexes = {}  # filled privately, then published whole: a parallel call never sees half of it
+                    for path in sorted((Path(self.project.state_dir) / 'index').glob('*.json.gz')):
+                        try:
+                            with gzip.open(path) as f:
+                                data = json.load(f)
+                            indexes[data.get('master') or path.name[:-8]] = data.get('entries', {})
+                        except (OSError, ValueError):
+                            continue
+                    self._indexes = indexes
         hits = []
         for master, entries in self._indexes.items():
             found = entries.get(edid)
@@ -554,7 +650,7 @@ class LiveService:
 
     def actor_values(self, ref, names=None):
         self.in_game()
-        r = self.resolve(ref)
+        r = self.resolve_actor(ref)
         names = names or fnv_facts.ACTOR_VALUES
         bad = [n for n in names if n not in fnv_facts.ACTOR_VALUES]
         if bad:
@@ -578,7 +674,7 @@ class LiveService:
     def effects(self, ref, _checked=False):
         if not _checked:
             self.in_game()
-        r = self.resolve(ref)
+        r = self.resolve_actor(ref)
         target = r['ptr'] + FACTS['Actor.magicTarget']['offset']
         vtable = self.u32s([target])[0]
         if not vtable:
@@ -1133,11 +1229,13 @@ class LiveService:
         elif action == 'set_position':
             x, y, z = value
             old = self.values(['GetPos X', 'GetPos Y', 'GetPos Z'], r['ptr'])
-            for axis, v in zip('XYZ', (x, y, z)):
-                self.console('SetPos %s %s' % (axis, float(v)), r['ptr'])
+            self.changing('actor_control')
+            # Journaled before the moves: if a later axis fails, the axes already moved can still be undone.
             entry = self.journal.add({'kind': 'actor', 'ref': r['formId'], 'action': action, 'old': old, 'new': value,
                                       'undo': {'op': 'console_ref', 'ref': r['formId'],
                                                'lines': ['SetPos %s %s' % (a, o) for a, o in zip('XYZ', old)]}})
+            for axis, v in zip('XYZ', (x, y, z)):
+                self.console('SetPos %s %s' % (axis, float(v)), r['ptr'])
             return {'action': action, 'old': old, 'new': value, 'journalId': entry['id']}
         else:
             raise ValueError('Unknown action %r; use one of %s' % (action, ', '.join(
@@ -1250,9 +1348,9 @@ class LiveService:
         undo = entry.get('undo')
         if not undo:
             return {'id': entry['id'], 'undone': False, 'reason': 'not undoable (%s)' % entry['kind']}
-        pid = (self.link.hello or self.link.ping()).get('pid')
-        if entry.get('pid') and entry['pid'] != pid:
-            return {'id': entry['id'], 'undone': False, 'reason': 'made in another game process (%s)' % entry['pid']}
+        if not self.same_process(entry, self.game_identity()):
+            return {'id': entry['id'], 'undone': False,
+                    'reason': 'made in another game process (%s)' % (entry.get('pid') or 'unknown')}
         if undo['op'] == 'write':
             self.link.write(int(undo['address'], 16), bytes.fromhex(undo['hex']))
         elif undo['op'] == 'console':
@@ -1291,19 +1389,33 @@ class LiveService:
             if not entries:
                 raise LiveError('NOT_FOUND', 'No undoable journal entry %s' % journal_id)
         else:
-            entries = [e for e in entries if e.get('undo')][-int(count):]
-        results = [self._apply_undo(e) for e in reversed(entries)]
-        self.journal.mark_undone([r['id'] for r in results if r['undone']])
+            ident = self.game_identity()
+            entries = [e for e in entries if e.get('undo') and self.same_process(e, ident)][-int(count):]
+        results = self._apply_undos(reversed(entries))
         return {'results': results, 'changed': any(r['undone'] for r in results)}
+
+    def _apply_undos(self, entries):
+        """Apply undos newest first, marking each one undone as soon as it lands (a later failure must not make
+        a retry apply the earlier ones twice). A failing entry is reported and the rest still run."""
+        results = []
+        for e in entries:
+            try:
+                r = self._apply_undo(e)
+            except Exception as exc:
+                r = {'id': e['id'], 'undone': False, 'kind': e.get('kind'),
+                     'error': {'code': getattr(exc, 'code', type(exc).__name__), 'message': str(exc)}}
+            if r['undone']:
+                self.journal.mark_undone([r['id']])
+            results.append(r)
+        return results
 
     def revert_all(self, since=None):
         """Undo every undoable change of this game process (since: only entries after that journal position)."""
         self.ready()
-        pid = (self.link.hello or self.link.ping()).get('pid')
+        ident = self.game_identity()
         entries = [e for k, e in enumerate(self.journal.entries()) if not e['undone'] and e.get('undo') and
-                   (not e.get('pid') or e['pid'] == pid) and (since is None or k >= since)]
-        results = [self._apply_undo(e) for e in reversed(entries)]
-        self.journal.mark_undone([r['id'] for r in results if r['undone']])
+                   self.same_process(e, ident) and (since is None or k >= since)]
+        results = self._apply_undos(reversed(entries))
         skipped = [e['id'] for e in self.journal.entries() if not e['undone'] and not e.get('undo')]
         return {'reverted': sum(r['undone'] for r in results), 'results': results, 'notUndoable': skipped,
                 'changed': any(r['undone'] for r in results)}

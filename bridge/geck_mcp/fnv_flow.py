@@ -35,7 +35,7 @@ FLAG_ONCE = 4
 LOAD_CODES = {'u8': 'u8', 'i8': 'i8', 'u16': 'u16', 'i16': 'i16', 'u32': 'u32', 'i32': 'i32', 'f32': 'f32'}
 BITS = {'u8': 8, 'i8': 8, 'u16': 16, 'i16': 16, 'u32': 32, 'i32': 32}
 
-PRED_SLOT = 57   # predicate slot of the trace's when condition
+PRED_SLOT = 57   # no longer used: a trace's when condition takes a free slot of the debugger's pool (fnv_debug's)
 
 
 def hook_at(live, address, label, nargs, flags=0, filter_sel=0, filter_value=0):
@@ -166,22 +166,30 @@ class FlowTools:
                             'has decomp source.' % fn['name'])
         locals_, skipped = self._trace_locals(db, fn['addr'])
         log_hex = ''.join(compile_predicate(load_text(local, local['code']))['hex'] for local in locals_)
-        pred = 'ff'
-        if when:   # breakpoints take a predicate slot (wire 2): store the program first
-            stored = self.link.one('pred', 'set', word(PRED_SLOT), compile_predicate(when)['hex'])
-            if not stored.get('ok'):
-                raise ConvError('PREDICATE_REFUSED', 'The companion refused the condition (%s).'
-                                % stored.get('error'), stored)
-            pred = word(PRED_SLOT)
         end = fn['addr'] + max(fn['size'] or 1, 1)
-        bp_id = self.dbg._free_bp_id()
-        mechanism = 'hw' if self._hw_used() < HW_SLOTS else 'int3'
+        pred_slot = None
         try:
-            armed = self.dbg._set_bp(bp_id, fn['addr'], mechanism, pred, FLAG_ONCE, None)
-        except ConvError:
-            if mechanism != 'hw':
-                raise
-            armed = self.dbg._set_bp(bp_id, fn['addr'], 'int3', pred, FLAG_ONCE, None)
+            # One lock with fnv_debug: two calls must not pick the same bp id or predicate slot.
+            with self.dbg.lock:
+                pred = 'ff'
+                if when:   # breakpoints take a predicate slot (wire 2): store the program first
+                    pred_slot = self.dbg._store_pred(when)
+                    pred = word(pred_slot)
+                bp_id = self.dbg._free_bp_id()
+                mechanism = 'hw' if self._hw_used() < HW_SLOTS else 'int3'
+                try:
+                    armed = self.dbg._set_bp(bp_id, fn['addr'], mechanism, pred, FLAG_ONCE, None)
+                except ConvError:
+                    if mechanism != 'hw':
+                        raise
+                    armed = self.dbg._set_bp(bp_id, fn['addr'], 'int3', pred, FLAG_ONCE, None)
+            return self._trace_armed(db, fn, bp_id, end, when, depth, steps_limit, arm_wait, call, locals_, skipped,
+                                     log_hex)
+        finally:
+            if pred_slot is not None:
+                self.dbg.release_pred_slot(pred_slot)
+
+    def _trace_armed(self, db, fn, bp_id, end, when, depth, steps_limit, arm_wait, call, locals_, skipped, log_hex):
         callees = self._callee_ranges(db, fn) if depth == 1 else []
         slot = self._arm_call(fn, call) if call is not None else None
         stop = self._await_bp(bp_id, arm_wait)
@@ -196,12 +204,20 @@ class FlowTools:
         if callees and not ranged.get('ok'):
             callees = []        # an older companion: depth 0 only
         args = ['trace', word(steps_limit), word(fn['addr']), word(end)] + ([log_hex] if log_hex else [])
-        result = self.link.one('resume', word(stop['seq']), *args)
-        if not result.get('ok'):
-            raise ConvError('COMPANION_REFUSED', 'The companion refused the trace (%s).' % result.get('error'), result)
-        entries, reason, done = self._read_trace(stop['seq'])
+        ended = {}
+        try:
+            result = self.link.one('resume', word(stop['seq']), *args)
+            if not result.get('ok'):
+                raise ConvError('COMPANION_REFUSED', 'The companion refused the trace (%s).' % result.get('error'),
+                                result)
+            entries, reason, done = self._read_trace(stop['seq'], ended)
+        except BaseException:
+            # Nothing may stay parked: the bp stop when the trace was refused, the stop the trace ended in when its
+            # entries could not be read. (A stop that is already gone answers no_stop; that is ignored.)
+            self._release_quietly(stop['seq'], ended.get('end'))
+            raise
         if done:
-            self._release()
+            self._release(ended.get('end'))
         called = self._call_result(slot) if slot else None
         rows, summary = self._lines_of(db, fn, entries, locals_)
         if callees:
@@ -217,7 +233,8 @@ class FlowTools:
         note = {'max': 'The trace stopped at max_steps; raise max_steps to see the rest.',
                 'fault': 'The thread faulted inside the function; the trace ends there.',
                 'returned': 'The function returned.',
-                'timeout': 'The trace is still running in the game; the thread is not released yet.'}.get(reason)
+                'timeout': 'The trace is still running in the game; the thread is not released yet. When it ends the '
+                           'thread parks as a step stop: fnv_debug continue releases it.'}.get(reason)
         return verdict('Traced %s: %d steps over %d source lines.' % (fn['name'], len(entries), len(rows)),
                        note or 'The trace is complete.', function=fn['name'], address='0x%08X' % fn['addr'],
                        endedBy=reason, done=done, lines=rows, steps=summary, locals=[x['name'] for x in locals_],
@@ -258,11 +275,36 @@ class FlowTools:
         this_ptr = 0
         if this:
             this_ptr = int(this, 16) if str(this).lower().startswith('0x') else self.live.resolve(this)['ptr']
+        edx = 0
+        if self._is_fastcall(fn['addr']):
+            # fastcall: ecx and edx are the first two arguments (`this`, when given, is the first), the rest are
+            # stack words; the slot's edx word carries the second.
+            regs = ([this_ptr] if this else []) + words
+            this_ptr, edx = (regs + [0, 0])[:2]
+            words = regs[2:]
         body = struct.pack('<III', fn['addr'], this_ptr, len(words)) + struct.pack(
             '<12I', *(words + [0] * (12 - len(words))))
         self.link.write(slot + 4, body + struct.pack('<II', 0, 0))
+        if self._slot_has_edx(required=bool(edx)):  # a stale edx from an earlier fastcall call is cleared too
+            self.link.write(slot + 4 * 18, struct.pack('<I', edx))
         self.link.write(slot, struct.pack('<I', 1))
         return slot
+
+    def _is_fastcall(self, address):
+        try:
+            _, _record, signature, _ = self.live._signature('0x%08X' % address)
+        except Exception:  # noqa: BLE001 - no signature known: the slot's default (ecx = this) applies
+            return False
+        return '__fastcall' in (signature or '')
+
+    def _slot_has_edx(self, required):
+        exports = (getattr(self.native, 'loaded', {}) or {}).get('fnvmcp_flowcall', {}).get('exports', {})
+        if 'fnvmcp_flow_version' in exports:
+            return True
+        if required:
+            raise ConvError('OLD_MODULE', 'The loaded flow-call module is too old for a fastcall function. Next: '
+                            'fnv_native unload name=fnvmcp_flowcall, then call again.')
+        return False
 
     def _call_result(self, slot):
         deadline = self.clock() + 5.0
@@ -304,16 +346,18 @@ class FlowTools:
                 return None
             self.sleep(0.05)
 
-    def _read_trace(self, start_seq):
+    def _read_trace(self, start_seq, ended=None):
         """The trace is filed under the step stop that ends it (the thread parks again when it leaves the
         function or reaches max): wait for that stop, then read the entries with its seq (seen live: reading with the
         breakpoint's seq gives no_trace)."""
         deadline = self.clock() + RUN_WAIT
         end = None
         while end is None:
-            ended = [s for s in self.dbg._stops() if s.get('kind') == 'step' and int(s.get('seq', 0)) > start_seq]
-            if ended:
-                end = min(ended, key=lambda s: int(s['seq']))
+            parked = [s for s in self.dbg._stops() if s.get('kind') == 'step' and int(s.get('seq', 0)) > start_seq]
+            if parked:
+                end = min(parked, key=lambda s: int(s['seq']))
+                if ended is not None:
+                    ended['end'] = end
                 break
             if self.clock() >= deadline:
                 return [], 'timeout', False
@@ -332,11 +376,19 @@ class FlowTools:
                 return entries, 'timeout', False
             self.sleep(0.05)
 
-    def _release(self):
-        """Resume the thread the trace parked (it parks again as a step stop when the trace ends)."""
-        for s in self.dbg._stops():
-            if s.get('kind') == 'step':
-                self.link.one('resume', word(s['seq']), 'run')
+    def _release(self, end):
+        """Resume the thread the trace parked: only the step stop this trace ended in, never another tool's stop."""
+        if end is not None:
+            self.link.one('resume', word(end['seq']), 'run')
+
+    def _release_quietly(self, bp_seq, end):
+        for seq in (bp_seq, end['seq'] if end else None):
+            if seq is None:
+                continue
+            try:
+                self.link.one('resume', word(seq), 'run')
+            except Exception:  # noqa: BLE001 - the stop may already be gone; nothing else can be done here
+                pass
 
     def _lines_of(self, db, fn, entries, locals_):
         """Entries to source lines: order of first run, visits (hits), steps, and the locals whose value changed on

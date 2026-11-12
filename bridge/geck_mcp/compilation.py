@@ -160,7 +160,10 @@ class Compilation:
                 cp['loadedSha256'] = disk_hash
                 self.write(cp, 'editor_opening' if cp['index'] < len(cp['order']) else 'persisted_script_verified')
             phase = cp['phase']
-            if disk_hash != cp['expectedDiskSha256'] and phase != 'plugin_save_requested':
+            # A server killed between install() and the 'installed' write leaves phase 'rebuilt' with the rebuilt
+            # file already in Data; install() is idempotent for it (same sha: changed False), so let it finish.
+            installed_already = phase == 'rebuilt' and bool(cp.get('builtSha256')) and disk_hash == cp['builtSha256']
+            if disk_hash != cp['expectedDiskSha256'] and phase != 'plugin_save_requested' and not installed_already:
                 return self.result(cp, 'blocked', 'Installed artifact changed since checkpoint; stale editor save refused.')
             if cp['index'] < len(cp['order']):
                 edid = cp['order'][cp['index']]
@@ -356,7 +359,7 @@ class Compilation:
 
     def record_saved(self, cp, digest):
         path = self.p.state_dir / 'installs' / (self.p.project_id + '.json')
-        history = json.loads(path.read_text()) if path.exists() else []
+        history = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
         history.append({'time': time.time(), 'sha256': digest, 'kind': 'verified-compile-checkpoint',
                         'operationId': cp['operationId'], 'specSha256': cp['specSha256']})
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -16,6 +16,7 @@ Addresses and layouts come from the decomp (research notes in the fnv-mcp projec
 import ctypes
 import math
 import struct
+import threading
 import time
 from ctypes import wintypes
 
@@ -23,6 +24,7 @@ from .fnv_deep import HF_EXIT, HF_TABLE, HookError, decode_prologue
 from .fnv_link import hexs, word
 from .fnv_live import LiveError
 
+_SCRATCH_LOCK = threading.Lock()   # vats_odds' write/call/read of its scratch float
 PLAYER = 0x011DEA3C
 DATA_HANDLER = 0x011C3F2C
 FORM_MAP = 0x011C54C0
@@ -361,12 +363,19 @@ class WorldTools:
             if action in ('scale', 'transform') and scale is not None:
                 self._call(0x005C1C10, 0, p, _fw(scale))  # Script::SetReferenceScale(ref, scale)
                 undo_lines.append('SetScale %f' % old_scale)
+            was_disabled = bool(struct.unpack_from('<I', raw, 0x08)[0] & 0x800)    # form flags: 0x800 disabled
             if action == 'enable':
                 self._call(0x005AA580, 0, p)  # AddPendingEnabledReference: applied by the next frame's delayed pass
-                undo_lines.append('Disable')
+                if was_disabled:                # undo only a change this call made
+                    undo_lines.append('Disable')
+                else:
+                    out['note'] = 'The reference was already enabled: nothing to undo.'
             elif action == 'disable':
                 self._call(0x005AA500, 0, p, 1 if fade else 0)  # AddPendingDisabledReference(ref, fade)
-                undo_lines.append('Enable')
+                if not was_disabled:
+                    undo_lines.append('Enable')
+                else:
+                    out['note'] = 'The reference was already disabled: nothing to undo.'
             elif action == 'delete':
                 if p == self.live.u32s([PLAYER])[0]:
                     raise ValueError('The player cannot be deleted')
@@ -411,16 +420,32 @@ class WorldTools:
             current = self.live.u32s([sky + 0x10, sky + 0x1C])
             before = self._describe([v for v in current if v])
             if weather in (None, 'release'):
+                self.live.changing('release weather override')
                 self.live.console('ReleaseWeatherOverride')
                 out['released'] = True
+                prior = (before.get(current[1]) or {}).get('formId') if current[1] else None
+                if prior:
+                    entry = self.live.journal.add({'kind': 'world_edit', 'action': 'weather_release', 'weather': None,
+                                                   'undo': {'op': 'console', 'line': 'ForceWeather %s 1' % prior}})
+                    out['journalId'] = entry['id']
             else:
                 w = self.live.resolve(weather)
                 self.live.changing('force weather')
                 self._call(0x0063D0E0, sky, w['ptr'], 1 if override else 0)  # Sky::ForceWeather(weather, override)
                 old = (before.get(current[0]) or {}).get('formId')
-                if old:
+                old_override = (before.get(current[1]) or {}).get('formId') if current[1] else None
+                # ForceWeather with the flag false clears the override, so the undo must put the old one back.
+                if old_override:
+                    undo = 'ForceWeather %s 1' % old_override
+                elif override:
+                    undo = 'ReleaseWeatherOverride'
+                elif old:
+                    undo = 'ForceWeather %s 0' % old
+                else:
+                    undo = None
+                if undo:
                     entry = self.live.journal.add({'kind': 'world_edit', 'action': 'weather', 'weather': w['formId'],
-                                                   'undo': {'op': 'console', 'line': 'ForceWeather %s' % old}})
+                                                   'undo': {'op': 'console', 'line': undo}})
                     out['journalId'] = entry['id']
             now = self.live.u32s([sky + 0x10, sky + 0x1C])
             names = self._describe([v for v in now if v])
@@ -725,7 +750,7 @@ class WorldTools:
         if not records:
             return {'vatsOpen': bool(menu), 'note': 'VATS is not open and no target was given: open VATS (or pass '
                                                     'target, and optionally limb) to compute odds.', 'settings': settings}
-        buf = self.agent._buffer()
+        buf = self.agent._buffer() + 0xF00      # the tail of the shared scratch: the other users start lower
         out_targets = []
         tile_text = {}
         tiles = [l['tile'] for r in records for l in r['limbs'] if l['tile']]
@@ -759,9 +784,10 @@ class WorldTools:
                          _fw(l['visible']), _fw(dist), _fw(bound), 0]
                 base_chance = self._st0(0x00646F70, 0, *words)
                 # perk layer: ep 8 Calculate To-Hit Chance, starting from the base chance
-                self.link.write(buf, struct.pack('<f', base_chance or 0.0))
-                self._call(0x005E58F0, 0, 8, player, weapon or self.live.u32s([FIST])[0] or 0, t, buf)
-                perk_max = struct.unpack('<f', self.live.reads([(buf, 4)])[0])[0]
+                with _SCRATCH_LOCK:     # the shared scratch buffer: write, call and read must not interleave
+                    self.link.write(buf, struct.pack('<f', base_chance or 0.0))
+                    self._call(0x005E58F0, 0, 8, player, weapon or self.live.u32s([FIST])[0] or 0, t, buf)
+                    perk_max = struct.unpack('<f', self.live.reads([(buf, 4)])[0])[0]
                 final = max(base_chance or 0.0, perk_max)
                 part_raw = self.live.reads([(part, 0x68)])[0] if part else None
                 row = {'limb': LIMBS[l['idx']] if 0 <= l['idx'] < len(LIMBS) else ('whole body' if l['idx'] == -1 else l['idx']),

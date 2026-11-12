@@ -1462,13 +1462,15 @@ def register(server, project, annotations, result_type):
             offset=offset, brief=brief, top=top), 'control' if action in ('enable', 'capture') else 'read')
 
     @server.tool(annotations=act)
-    async def fnv_time_control(action: Literal['pause', 'resume', 'hold', 'release', 'step', 'fixed', 'speed', 'status'],
+    async def fnv_time_control(action: Literal['pause', 'resume', 'force_resume', 'hold', 'release', 'step', 'fixed',
+                                               'speed', 'status'],
                                frames: Annotated[int, Field(ge=1, le=10000)] | None = None,
                                fps: Annotated[int, Field(ge=0, le=1000)] | None = None,
                                x: Annotated[float, Field(ge=0.05, le=10)] | None = None,
                                timeout_seconds: Annotated[int, Field(ge=1, le=600)] | None = None) -> result_type:
         """The game clock and the frame gate. pause: stop the game clock (the world keeps rendering, so the camera and
-        photo tools see a still scene); resume: start it again, only if this tool paused it. hold: close the frame
+        photo tools see a still scene); resume: start it again, only if this tool paused it; force_resume: start it
+        again whoever paused it (after a server restart lost the pause record). hold: close the frame
         gate, so nothing runs between frames (requests are still served; the gate reopens by itself after
         timeout_seconds with no calls, default 120). release: open the gate. step frames=N [fps=F]: advance exactly N
         frames and stop, optionally at a fixed frame step of F fps. fixed fps=F (0 turns it off): every frame takes
@@ -2081,8 +2083,8 @@ def register(server, project, annotations, result_type):
         reference. playing: every sound the audio manager holds (file, form, 2D/3D, loop, volume, position, state).
         stop sound|sound_id. music: the two music channels, what plays and its media type, the location controller
         and media set behind it; file=<path> forces a track, stop=true fades music out. radio [enable]: stations,
-        signal, the current one; enable turns the radio on or off. subtitles seconds [enable]: subtitle lines shown, with
-        speaker. hear sound position=[x,y,z]: whether the engine would play it there (its distance test).
+        signal, the current one; enable turns the radio on or off. subtitles seconds [enable]: subtitle lines shown
+        (text, sound id). hear sound position=[x,y,z]: whether the engine would play it there (its distance test).
         voice_check ref: for each line of an NPC the voice and lip files the engine asks for, and whether they
         exist (same as fnv_crawl dialogue)."""
         acts = ('play', 'stop') + (('music',) if file or stop else ()) + (('radio',) if enable is not None else ()) \
@@ -2187,17 +2189,17 @@ def register(server, project, annotations, result_type):
                         spacing: Annotated[float, Field(gt=0, le=5000)] | None = None,
                         columns: Annotated[int, Field(ge=1, le=50)] | None = None,
                         radius: Annotated[float, Field(gt=0, le=10000)] | None = None,
-                        snap: bool = False, local: bool = False) -> result_type:
+                        snap: bool = False, local: bool = False, align: bool = False) -> result_type:
         """Place things in the running game; every placement is journaled for fnv_author export. at base: at position,
         or near a ref (+ offset), or 150 units in front of the player; rotation in degrees, scale, snap=true drops it
         on the surface below. array base: shape row, grid (columns) or circle (radius), count, spacing, from position
         or the player. nudge ref offset=[dx,dy,dz] (local=true in its own axes), rotate ref rotation=[dx,dy,dz]
-        degrees added, scale ref scale. snap ref: onto the surface below. check ref: floating or sinking. list: what
+        degrees added, scale ref scale. snap ref [align]: onto the surface below (align=true also tilts it to the slope at its heading). check ref: floating or sinking. list: what
         this session placed. remove: one placed ref, or all of them."""
         is_read = action in ('list', 'check')
         args = {'base': base, 'ref': ref, 'position': position, 'near': near, 'offset': offset, 'rotation': rotation,
                 'scale': scale, 'shape': shape, 'count': count, 'spacing': spacing, 'columns': columns,
-                'radius': radius, 'snap': snap, 'local': local}
+                'radius': radius, 'snap': snap, 'local': local, 'align': align}
         return await invoke('fnv_place', lambda: place_tools.run(action, **args), 'read' if is_read else 'act')
 
     @server.tool(annotations=control)

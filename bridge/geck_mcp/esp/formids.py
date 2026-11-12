@@ -117,11 +117,20 @@ class MasterIndex:
             data = json.load(stream)
         position = len(self.masters)
         self.masters.append(data['master'])
-        for edid, row in data['entries'].items():
-            rows = row if isinstance(row[0], list) else [row]
-            for r in rows:
-                self.entries.setdefault(edid.lower(), []).append(
-                    (position, r[0], int(r[1], 16), r[2], r[3], edid))
+        listed = [(edid, r) for edid, row in data['entries'].items() for r in (row if isinstance(row[0], list) else [row])]
+        # Inside a master, its own records carry its master count as the top byte; a smaller top byte is that
+        # master's override of a record of one of ITS masters (a DLC's edit of a FalloutNV.esm record). Mapping
+        # such a row to this master's position would name a form that does not exist, so overrides are left out:
+        # the original record is found through the index of the master that defines it.
+        own_byte = len(data['masters']) if isinstance(data.get('masters'), list) else \
+            max((int(r[1], 16) >> 24 for _, r in listed), default=0)
+        self.overrides_skipped = getattr(self, 'overrides_skipped', 0)
+        for edid, r in listed:
+            form = int(r[1], 16)
+            if form >> 24 != own_byte:
+                self.overrides_skipped += 1
+                continue
+            self.entries.setdefault(edid.lower(), []).append((position, r[0], form, r[2], r[3], edid))
         return data
 
     def lookup(self, edid):

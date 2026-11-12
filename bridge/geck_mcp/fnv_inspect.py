@@ -659,24 +659,42 @@ class AudioTools:
         if turned_on:
             self.live.changing('audio subtitles enable')
             self.live.link.write(GENERAL_SUBTITLES + 4, b'\x01')
+        rows = []
         try:
-            recs = record_hooks(self.live, self.deep, [(SHOW_SUBTITLE, 'subtitle')], seconds)
+            # The text is a temporary string: read it while the line is shown, so poll the records meanwhile.
+            from .fnv_deep import decode_prologue
+            raw = self.live.reads([(SHOW_SUBTITLE, 24)])[0]
+            stolen, relocs = decode_prologue(raw)
+            h = self.live.link.one('hook', word(SHOW_SUBTITLE), word(stolen), ','.join('%x' % r for r in relocs) or '-',
+                                   word(2), '0', '0', '0', word(5), '0', '0', '0', '0', hexs('subtitle'))
+            if not h.get('ok'):
+                raise ConvError('HOOK_REFUSED', 'The subtitle hook was refused (%s).' % h.get('error'), h)
+            hook, seen = h['hook'], 0
+            try:
+                end = time.monotonic() + float(seconds)
+                while True:
+                    _, got, _ = self.deep.records(hook, since=seen)
+                    for rec in got:
+                        seen = max(seen, rec[0] + 1)
+                        text = _text(self.live.reads([(rec[12], 260)])[0]) if rec[12] else None
+                        rows.append({'frame': rec[22], 'text': text, 'soundId': rec[13]})
+                    if time.monotonic() >= end:
+                        break
+                    time.sleep(0.15)
+            finally:
+                self.live.link.one('unhook', word(hook['id']))
         finally:
             if turned_on:
                 self.live.link.write(GENERAL_SUBTITLES + 4, b'\x00')
-        texts = self.live.reads([(rec[12], 260) for _, rec in recs]) if recs else []
-        speakers = [rec[19] for _, rec in recs]
-        heads = self.live.form_ids(speakers) if speakers else []
-        rows = [{'frame': rec[22], 'text': _text(t), 'speaker': (h or {}).get('formId')}
-                for (_, rec), t, h in zip(recs, texts, heads)]
         out = dict(generalSubtitles=general or turned_on, subtitles=rows[:int(limit)])
         if not (general or turned_on):
             out['note'] = ('General Subtitles is off (bGeneralSubtitles): lines spoken outside the dialogue menu show '
                            'no subtitle and are not caught here. Pass enable=true to turn it on while recording; '
                            'fnv_audio playing lists the voice files that play.')
         return verdict('%d subtitles in %.1f s' % (len(rows), float(seconds)),
-                       'Record hook on Interface::ShowSubtitle 0x00705210 (text, sound handle, position, speaker); '
-                       'removed after.%s' % (' General Subtitles was on only for the recording.' if turned_on else ''),
+                       'Record hook on Interface::ShowSubtitle 0x00705210, read while it records (the text is a '
+                       'temporary string); sound id from the voice handle. The call carries no speaker form: '
+                       'fnv_audio playing names the voice file (its path holds the voice type and topic).%s' % (' General Subtitles was on only for the recording.' if turned_on else ''),
                        **out)
 
     def hear(self, sound, x, y, z, scale=1.0):
@@ -965,6 +983,10 @@ class SystemsTools:
     def sweep(self, name, args, index, start, stop, steps=10):
         self.live.ready()
         args = list(args or [])
+        if int(steps) < 1:
+            raise ConvError('BAD_ARGUMENTS', 'sweep steps must be at least 1.')
+        if not 0 <= int(index) < len(args):
+            raise ConvError('BAD_ARGUMENTS', 'sweep index must be from 0 to %d (one of the args).' % (len(args) - 1))
         rows = []
         for k in range(int(steps) + 1):
             v = start + (stop - start) * k / float(steps)

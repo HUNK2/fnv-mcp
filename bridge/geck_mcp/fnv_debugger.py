@@ -12,6 +12,7 @@ from the symbol database; without it, function names and breaks still work.
 """
 import re
 import struct
+import threading
 import time
 from pathlib import Path
 
@@ -20,8 +21,8 @@ from engine_map import symdb_schema
 from . import fnv_deep, fnv_engine, fnv_procmem, fnv_symdb
 from .fnv_conv import ConvError, dispatch, verdict
 from .fnv_deep import HookError, decode_prologue
-from .fnv_link import hexs, word
-from .fnv_pred import compile_predicate
+from .fnv_link import LinkError, hexs, word
+from .fnv_pred import ProcState, compile_predicate
 
 _is_pointer = fnv_symdb.is_pointer_text
 
@@ -44,7 +45,9 @@ ACTIONS = ('break', 'status', 'stack', 'locals', 'eval', 'set', 'continue', 'ste
            'freeze', 'thaw', 'threads', 'dump')
 READ_ACTIONS = ('status', 'stack', 'locals')
 STEP_MODES = ('instruction', 'into', 'over', 'out', 'line')
+OUTSIDE_ACTIONS = ('freeze', 'thaw', 'threads', 'dump')   # work from outside the process: no companion needed
 PRED_SLOT_FIRST, PRED_SLOT_LAST = 32, 55   # predicate slots for break conditions (waits use 62 and 63)
+MAIN_SLOT = PRED_SLOT_LAST                 # holds the program `main`: the thread filter of thread=main hook holds
 SCALARS = {'char': 1, 'unsigned char': 1, 'bool': 1, 'short': 2, 'unsigned short': 2, 'int': 4, 'unsigned int': 4,
            'long': 4, 'unsigned long': 4, 'float': 4, 'double': 8, 'u8': 1, 'i8': 1, 'u16': 2, 'i16': 2, 'u32': 4,
            'i32': 4, 'f32': 4}
@@ -156,21 +159,53 @@ class Debugger:
         self.sleep = sleep
         self.clock = clock
         self.pid = None
+        self.start = None
         self.breaks = {}
         self.next_number = 1
         self.frozen = []
+        self.pending_to = set()          # temporary `to` sites left armed (a timeout, or another stop came first)
+        # One lock for everything that picks a bp id or a predicate slot and then sets it: shared with fnv_flow,
+        # fnv_blame and the script debugger, since tool calls run on parallel worker threads.
+        self.lock = threading.RLock()
+        self._claimed_slots = set()      # predicate slots taken by other tools (fnv_flow) out of this pool
+        self.state = ProcState(live)
 
     @property
     def link(self):
         return self.live.link
+
+    # ================================================================ state kept across server restarts
+    def _persist(self):
+        """Breaks and frozen thread ids go to the state file (keyed by pid and start): they live in the game, and the
+        server may restart (a supervisor does it on every code change)."""
+        if self.pid is None:
+            return
+        records = [dict(b) for _, b in sorted(self.breaks.items())]
+        self.state.save('dbg_breaks', self.pid, self.start,
+                        {'next': self.next_number, 'breaks': records} if records else None)
+        self.state.save('dbg_frozen', self.pid, self.start, list(self.frozen) or None)
+        self.state.save('dbg_pending_to', self.pid, self.start, sorted(self.pending_to) or None)
+
+    def _restore(self):
+        saved = self.state.load('dbg_breaks', self.pid, self.start) or {}
+        self.breaks = {int(b['number']): b for b in saved.get('breaks', []) if isinstance(b, dict) and 'number' in b}
+        self.next_number = max([int(saved.get('next') or 1)] + [n + 1 for n in self.breaks])
+        self.frozen = [int(t) for t in (self.state.load('dbg_frozen', self.pid, self.start) or [])]
+        self.pending_to = {int(a) for a in (self.state.load('dbg_pending_to', self.pid, self.start) or [])}
 
     # ================================================================ entry point
     def run(self, action, **args):
         if action not in ACTIONS:
             raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid actions: %s.' % (action, ', '.join(ACTIONS)),
                             {'actions': list(ACTIONS)})
-        self.live.ready()
-        self._process()
+        if action in OUTSIDE_ACTIONS:
+            self._process()       # freeze, thaw, threads and dump work from outside: a frozen game cannot answer ready()
+        else:
+            if action == 'status' and (self.frozen or self._frozen_on_record()):
+                self._process()
+                return dispatch(action, {'status': self.status})
+            self.live.ready()
+            self._process()
         table = {
             'break': lambda: self.break_(args.get('op'), args.get('location'), args.get('break_id'), args.get('when'),
                                          args.get('hits'), args.get('thread') or 'main', args.get('do') or 'stop',
@@ -196,9 +231,19 @@ class Debugger:
         found = self.live.game.process()
         if not found:
             raise ConvError('NOT_RUNNING', 'Debugging needs the game running.')
-        if found[0] != self.pid:
-            self.pid, self.breaks, self.frozen, self.next_number = found[0], {}, [], 1
+        start = found[1] if len(found) > 1 else None
+        if found[0] != self.pid or (self.start is not None and start != self.start):
+            self.pid, self.start = found[0], start
+            self._restore()     # a new game process starts clean; the same one gets its breaks and frozen threads back
+        elif self.start is None:
+            self.start = start
         return found[0]
+
+    def _frozen_on_record(self):
+        found = self.live.game.process()
+        if not found:
+            return False
+        return bool(self.state.load('dbg_frozen', found[0], found[1] if len(found) > 1 else None))
 
     # ================================================================ plumbing
     def _engine(self):
@@ -249,16 +294,33 @@ class Debugger:
                             'break) and wait for it, or call fnv_debug status.')
         return stops[-1]
 
-    def _await(self, after_seq):
-        """Poll the stops until one with a sequence number above after_seq appears (a single step, or a `to`)."""
+    @staticmethod
+    def _same_thread(a, b):
+        if a is None or b is None:
+            return True
+        try:
+            return _num(a) == _num(b)
+        except ValueError:
+            return str(a) == str(b)
+
+    def _await(self, after_seq, thread=None, pending=None):
+        """Poll the stops until one of this thread with a sequence number above after_seq appears (a single step, or
+        a `to`). A stop of another thread (a break with thread=any, a script hold, a fault) is not the result of the
+        step: it stays listed for status. pending names a temporary `to` site that is still armed on a timeout."""
         deadline = self.clock() + STOP_WAIT
         while True:
-            fresh = [s for s in self._stops() if s['seq'] > after_seq]
+            fresh = [s for s in self._stops() if s['seq'] > after_seq and self._same_thread(s.get('thread'), thread)]
             if fresh:
                 return max(fresh, key=lambda s: s['seq'])
             if self.clock() >= deadline:
-                raise ConvError('STOP_TIMEOUT', 'The thread did not stop again within %d s. Next: call fnv_debug status.'
-                                % STOP_WAIT)
+                extra = ''
+                if pending:
+                    self.pending_to.add(pending)
+                    self._persist()
+                    extra = (' The temporary stop site at %s stays armed and parks the thread when it is reached; '
+                             'fnv_debug break op=clear (no break_id) removes it.' % _hx(pending))
+                raise ConvError('STOP_TIMEOUT', 'The thread did not stop again within %d s.%s Next: call fnv_debug '
+                                'status.' % (STOP_WAIT, extra), {'pendingTo': _hx(pending) if pending else None})
             self.sleep(0.05)
 
     def _resume(self, stop, *args, wait=False):
@@ -268,7 +330,10 @@ class Debugger:
             code = {'bad_mode': 'BAD_MODE', 'no_stop': 'NOT_STOPPED'}.get(result.get('error'), 'COMPANION_REFUSED')
             raise ConvError(code, 'The engine companion refused resume %s (%s).' % (' '.join(str(a) for a in args),
                                                                                      result.get('error')), result)
-        return self._await(stop['seq']) if wait else None
+        if not wait:
+            return None
+        pending = int(str(args[1]), 16) if args and args[0] == 'to' and len(args) > 1 else None
+        return self._await(stop['seq'], stop.get('thread'), pending)
 
     # ================================================================ engine helpers
     def _resolve(self, text):
@@ -375,6 +440,51 @@ class Debugger:
         return max(1, min(HOOK_MAX_ARGS, words))
 
     # ================================================================ breaks
+    def claim_pred_slot(self):
+        """A free predicate slot of the breaks' pool (PRED_SLOT_FIRST..LAST): not used by a break of this debugger, not
+        claimed by another tool, not in use in the companion (a break of an earlier server process). Call with self.lock
+        held, store the program, and release_pred_slot when the condition is no longer needed."""
+        used = {b.get('predSlot') for b in self.breaks.values()} | self._claimed_slots
+        try:
+            used |= {int(p['id']) for p in self.link.one('pred', 'list').get('preds', [])}
+        except (LinkError, KeyError, TypeError, ValueError):
+            pass
+        slot = next((n for n in range(PRED_SLOT_FIRST, MAIN_SLOT) if n not in used), None)
+        if slot is None:
+            raise ConvError('TOO_MANY_CONDITIONS', 'Every predicate slot for breaks is in use. Next: clear a break that '
+                            'has a when condition (fnv_debug break op=clear).')
+        self._claimed_slots.add(slot)
+        return slot
+
+    def release_pred_slot(self, slot):
+        """Give a slot back and clear it in the companion (best effort)."""
+        with self.lock:
+            self._claimed_slots.discard(slot)
+            if slot is not None:
+                try:
+                    self.link.one('pred', 'clear', word(slot))
+                except LinkError:
+                    pass
+
+    def _store_pred(self, text):
+        """Compile text and store it in a new slot; returns the slot."""
+        program = compile_predicate(text)['hex']
+        slot = self.claim_pred_slot()
+        stored = self.link.one('pred', 'set', word(slot), program)
+        if not stored.get('ok'):
+            self._claimed_slots.discard(slot)
+            raise ConvError('PREDICATE_REFUSED', 'The companion refused the condition (%s).' % stored.get('error'),
+                            stored)
+        return slot
+
+    def _main_slot(self):
+        """The shared predicate slot that holds `main`; returns its word."""
+        stored = self.link.one('pred', 'set', word(MAIN_SLOT), compile_predicate('main')['hex'])
+        if not stored.get('ok'):
+            raise ConvError('PREDICATE_REFUSED', 'The companion refused the main-thread condition (%s).'
+                            % stored.get('error'), stored)
+        return word(MAIN_SLOT)
+
     def break_(self, op, location, break_id, when, hits, thread, do, log):
         if op is None:
             op = 'set' if location else 'list'
@@ -390,19 +500,8 @@ class Debugger:
             raise ConvError('BAD_ARGUMENTS', 'do must be stop or log.')
         if (location or '').strip().lower() == 'fault':
             return self.break_fault()
-        pred, pred_slot = 'ff', None
         if when:
-            # Hook holds and breakpoints take a predicate slot (wire 2), not the program: store it first.
-            used = {b.get('predSlot') for b in self.breaks.values()}
-            pred_slot = next((n for n in range(PRED_SLOT_FIRST, PRED_SLOT_LAST + 1) if n not in used), None)
-            if pred_slot is None:
-                raise ConvError('TOO_MANY_CONDITIONS', 'Every predicate slot for breaks is in use. Next: clear a '
-                                'break that has a when condition.')
-            stored = self.link.one('pred', 'set', word(pred_slot), compile_predicate(when)['hex'])
-            if not stored.get('ok'):
-                raise ConvError('PREDICATE_REFUSED', 'The companion refused the condition (%s).' % stored.get('error'),
-                                stored)
-            pred = word(pred_slot)
+            compile_predicate(when)       # a bad condition is refused before anything is allocated
         log_hex = None
         if do == 'log':
             if not log or len(log) != 1:
@@ -410,46 +509,76 @@ class Debugger:
                                 'log=["expression"]; several expressions need the multi-value program.')
             log_hex = compile_predicate(log[0])['hex']
         address, function, source = self._resolve(location)
+        with self.lock:
+            return self._break_set(location, when, hits, thread, do, log, log_hex, address, function, source)
+
+    def _break_set(self, location, when, hits, thread, do, log, log_hex, address, function, source):
         name = self._function_name(function)
         number = self.next_number
         self.next_number += 1
         record = {'number': number, 'location': location, 'address': _hx(address), 'function': name,
                   'source': source, 'when': when or None, 'do': do, 'log': log[0] if log else None,
-                  'thread': thread, 'predSlot': pred_slot}
+                  'thread': thread, 'predSlot': None}
         if address == function and do == 'stop' and not hits:
+            # A hook hold has no thread filter of its own: a thread=main break adds `main and` to its condition.
+            hold_slot, hold_pred = None, 'ff'
             try:
-                hook = self._hook_hold(address, pred, 'dbg %d %s' % (number, name or _hx(address)), self._nargs(function))
-                record.update(mechanism='hook', id=hook['id'])
+                if thread == 'main' and not when:
+                    hold_pred = self._main_slot()          # one shared slot holds `main`
+                elif thread == 'main':
+                    hold_slot = self._store_pred('main and (%s)' % when)
+                    hold_pred = word(hold_slot)
+                elif when:
+                    hold_slot = self._store_pred(when)
+                    hold_pred = word(hold_slot)
+                pop = self._pop_bytes_of(function)
+                hook = self._hook_hold(address, hold_pred,
+                                       'dbg %d %s' % (number, name or _hx(address)), self._nargs(function), pop or 0)
+                record.update(mechanism='hook', id=hook['id'], predSlot=hold_slot, popKnown=pop is not None)
                 self.breaks[number] = record
+                self._persist()
                 return self._break_result(record, 'A hook hold: the thread parks when the function is called.')
             except (HookError, ConvError) as e:
+                if hold_slot is not None:
+                    self.release_pred_slot(hold_slot)
                 record['hookRefused'] = str(e)
+        pred, pred_slot = 'ff', None
+        if when:
+            pred_slot = self._store_pred(when)
+            pred = word(pred_slot)
+            record['predSlot'] = pred_slot
         mechanism = 'hw' if thread == 'main' and self._hw_in_use() < HW_SLOTS else 'int3'
         flags = (1 if do == 'log' else 0) | (2 if thread == 'any' else 0)
-        bp_id = self._free_bp_id()
-        if hits and hits > 1:
-            # The companion counts the hits that pass the condition and acts from the Nth one on. Sent before the
-            # set, so the count is armed with the breakpoint (set first, the next frame's hit would stop at once).
-            after = self.link.one('bp', 'after', word(bp_id), word(int(hits)))
-            if not after.get('ok'):
-                raise ConvError('BREAK_REFUSED', 'The companion refused the hit count (%s). Next: the companion may '
-                                'be older than bp after: reinstall it (fnv_companion_install).' % after.get('error'),
-                                after)
-            record['stopAt'] = int(hits)     # stop on this passing hit and every later one
         try:
-            try:
-                result = self._set_bp(bp_id, address, mechanism, pred, flags, log_hex)
-            except ConvError:
-                if mechanism != 'hw':
-                    raise
-                mechanism = 'int3'
-                result = self._set_bp(bp_id, address, mechanism, pred, flags, log_hex)
-        except ConvError:
+            bp_id = self._free_bp_id()
             if hits and hits > 1:
-                self.link.one('bp', 'after', word(bp_id), '0')    # drop the pending count
+                # The companion counts the hits that pass the condition and acts from the Nth one on. Sent before the
+                # set, so the count is armed with the breakpoint (set first, the next frame's hit would stop at once).
+                after = self.link.one('bp', 'after', word(bp_id), word(int(hits)))
+                if not after.get('ok'):
+                    raise ConvError('BREAK_REFUSED', 'The companion refused the hit count (%s). Next: the companion may '
+                                    'be older than bp after: reinstall it (fnv_companion_install).' % after.get('error'),
+                                    after)
+                record['stopAt'] = int(hits)     # stop on this passing hit and every later one
+            try:
+                try:
+                    result = self._set_bp(bp_id, address, mechanism, pred, flags, log_hex)
+                except ConvError:
+                    if mechanism != 'hw':
+                        raise
+                    mechanism = 'int3'
+                    result = self._set_bp(bp_id, address, mechanism, pred, flags, log_hex)
+            except ConvError:
+                if hits and hits > 1:
+                    self.link.one('bp', 'after', word(bp_id), '0')    # drop the pending count
+                raise
+        except ConvError:
+            if pred_slot is not None:
+                self.release_pred_slot(pred_slot)
             raise
         record.update(mechanism=result.get('kind', mechanism), id=bp_id)
         self.breaks[number] = record
+        self._persist()
         return self._break_result(record, 'A trap breakpoint (%s).' % record['mechanism'])
 
     def _set_bp(self, bp_id, address, mechanism, pred, flags, log_hex):
@@ -474,7 +603,7 @@ class Debugger:
     def _hw_in_use(self):
         return sum(1 for b in self.breaks.values() if b['mechanism'] == 'hw')
 
-    def _hook_hold(self, address, pred, label, nargs):
+    def _hook_hold(self, address, pred, label, nargs, pop=0):
         for h in self.link.one('hooks').get('hooks', []):
             if int(str(h.get('target')), 16) == address:
                 raise HookError('ALREADY_HOOKED', 'The function already carries a hook (%s).' % h.get('label'),
@@ -488,7 +617,9 @@ class Debugger:
         if not result.get('ok'):
             raise HookError('HOOK_REFUSED', 'The companion refused the hook (%s).' % result.get('error'), result)
         hook = result['hook']
-        held = self.link.one('hookact', word(hook['id']), 'hold', pred)
+        # The 5th argument is the bytes a skip (return from the stop) pops: a callee-cleans function would otherwise
+        # return with ESP off by its arguments.
+        held = self.link.one('hookact', word(hook['id']), 'hold', pred, *([word(pop)] if pop else []))
         if not held.get('ok'):
             self.link.one('unhook', word(hook['id']))
             raise HookError('HOOK_REFUSED', 'The companion refused the hold (%s).' % held.get('error'), held)
@@ -499,11 +630,13 @@ class Debugger:
         if not result.get('ok'):
             raise ConvError('COMPANION_REFUSED', 'The companion refused the crash hold (%s).' % result.get('error'),
                             result)
-        number = self.next_number
-        self.next_number += 1
+        with self.lock:
+            number = self.next_number
+            self.next_number += 1
         self.breaks[number] = {'number': number, 'location': 'fault', 'address': None, 'function': None,
                                'source': None, 'when': None, 'do': 'stop', 'log': None, 'thread': 'any',
                                'mechanism': 'fault', 'id': None}
+        self._persist()
         return verdict('Crash hold is on.', 'A real fault parks the faulting thread; status shows the line.',
                        **{'break': self.breaks[number]})
 
@@ -526,10 +659,22 @@ class Debugger:
                 if listed.get('after'):
                     row['passed'] = listed.get('passed')
             rows.append(row)
-        return verdict('%d breaks' % len(rows), 'Breaks are armed in the game until cleared or the game exits.',
-                       total=len(rows), rows=rows)
+        known_bps = {b['id'] for b in self.breaks.values() if b['mechanism'] in ('hw', 'int3')}
+        known_hooks = {b['id'] for b in self.breaks.values() if b['mechanism'] == 'hook'}
+        orphans = [{'kind': 'bp', 'id': i} for i in sorted(companion) if i not in known_bps and i != TEMP_BP]
+        orphans += [{'kind': 'hook', 'id': i, 'label': h.get('label')} for i, h in sorted(hooks.items())
+                    if str(h.get('label') or '').startswith('dbg ') and h.get('stolen', 1) and i not in known_hooks]
+        note = 'Breaks are armed in the game until cleared or the game exits.'
+        if orphans:
+            note += (' %d armed in the game but not listed here (set by an earlier server process): fnv_debug break '
+                     'op=clear with no break_id removes them.' % len(orphans))
+        return verdict('%d breaks' % len(rows), note, total=len(rows), rows=rows, orphans=orphans)
 
     def break_clear(self, number):
+        with self.lock:
+            return self._break_clear(number)
+
+    def _break_clear(self, number):
         targets = sorted(self.breaks) if number is None else [int(number)]
         cleared = []
         for n in targets:
@@ -542,9 +687,28 @@ class Debugger:
                 self.link.one('bp', 'clear', word(b['id']))
             elif b['mechanism'] == 'fault':
                 self.link.one('faulthold', 'off')
+            if b.get('predSlot') is not None:
+                self.release_pred_slot(b['predSlot'])
             cleared.append(n)
             del self.breaks[n]
-        return verdict('Cleared %d break(s).' % len(cleared), None, cleared=cleared)
+        swept = None
+        if number is None:
+            # Clear all also sweeps what an earlier server process left armed (nothing here knows those): every trap
+            # breakpoint and temporary stop site (bp clear ff), the crash hold, and the `dbg N` hook holds.
+            result = self.link.one('bp', 'clear', 'ff')
+            swept = {'bps': result.get('cleared'), 'toSites': result.get('toSites'), 'hooks': []}
+            self.pending_to.clear()
+            self.link.one('faulthold', 'off')
+            for h in self.link.one('hooks').get('hooks', []):
+                if str(h.get('label') or '').startswith('dbg ') and h.get('stolen', 1):
+                    self.link.one('unhook', word(h['id']))
+                    swept['hooks'].append(h['id'])
+            for item in self.link.one('pred', 'list').get('preds', []):
+                slot = int(item['id'])
+                if PRED_SLOT_FIRST <= slot <= PRED_SLOT_LAST and slot not in self._claimed_slots:
+                    self.link.one('pred', 'clear', word(slot))
+        self._persist()
+        return verdict('Cleared %d break(s).' % len(cleared), None, cleared=cleared, swept=swept)
 
     # ================================================================ frames and stops
     def _why(self, stop):
@@ -588,6 +752,25 @@ class Debugger:
             return True
         return eip - fn['addr'] >= fn['debug_start']
 
+    def _prologue_caller(self, top):
+        """(return address, caller's ebp) of a frame that is not set up yet (the stop is inside the prologue), or
+        (None, None) when the prologue is not the standard `push ebp; mov ebp,esp`. Only offset 0 has the return
+        address at [esp]; after the push it is at [esp+4], and from the mov on the frame pointer is valid."""
+        regs = top['regs']
+        db = self._symdb()
+        fn = db.function_containing(top['address']) if db else None
+        if fn is None:
+            return self._u32_at(regs['esp']), regs['ebp']
+        offset = top['address'] - fn['addr']
+        if offset == 0:
+            return self._u32_at(regs['esp']), regs['ebp']
+        code = self.read(fn['addr'], 3)
+        if code != b'\x55\x8b\xec':
+            return None, None
+        if offset < 3:      # after push ebp, before mov ebp,esp
+            return self._u32_at(regs['esp'] + 4), self._u32_at(regs['esp'])
+        return self._u32_at(regs['ebp'] + 4), self._u32_at(regs['ebp'])
+
     def frames(self, stop, depth=24):
         top = self._top(stop)
         out = [{'index': 0, 'address': top['address'], 'how': 'eip', 'ebp': top['ebp'],
@@ -599,7 +782,7 @@ class Debugger:
             ebp = self._u32_at(top['ebp'])
             ret = self._u32_at(top['ebp'] + 4)
         else:
-            ret, ebp = self._u32_at(top['esp']), top['regs']['ebp']
+            ret, ebp = self._prologue_caller(top)
         lo, hi = fnv_engine.EXE_RANGE
         while ret is not None and lo <= ret < hi and len(out) < depth:
             out.append({'index': len(out), 'address': ret, 'how': 'return', 'ebp': ebp, 'paramBase': ebp,
@@ -633,8 +816,12 @@ class Debugger:
                            'they will time out.', frozen=self.frozen, state='frozen')
         stops = self._stops()
         if not stops:
-            return verdict('Running: the debugger has no stop in the game.', '%d breaks armed.' % len(self.breaks),
-                           state='running', breaks=[_public(b) for _, b in sorted(self.breaks.items())])
+            pending = sorted(_hx(a) for a in self.pending_to)
+            return verdict('Running: the debugger has no stop in the game.', '%d breaks armed.%s' % (
+                len(self.breaks), ' Temporary stop sites still armed: %s (break op=clear with no id removes them).'
+                % ', '.join(pending) if pending else ''),
+                           state='running', breaks=[_public(b) for _, b in sorted(self.breaks.items())],
+                           pendingTo=pending or None)
         stop = stops[-1]
         top = self._top(stop)
         sym = self._symbol(top['address'])
@@ -931,6 +1118,8 @@ class Debugger:
                 raise ConvError('NOT_WRITABLE', '%s is not a scalar.' % expression)
             if (target['type'] or '') == 'float' and size == 4:
                 data = struct.pack('<f', float(new))
+            elif (target['type'] or '') == 'double' and size == 8:
+                data = struct.pack('<d', float(new))
             else:
                 data = (int(new) & ((1 << (8 * size)) - 1)).to_bytes(size, 'little')
             self._write(target['address'], data)
@@ -961,7 +1150,7 @@ class Debugger:
             position = self._position(_addr(stop['eip']))
             new = self._step_line(stop) if position and position.get('line') is not None else self._over(stop)
         elif mode == 'out':
-            new = self._run_to(stop, self._return_address(stop))
+            new = self._run_to(stop, self._return_address(stop), self._esp_of(stop) + 4)
         else:
             new = self._step_line(stop)
         return verdict('Stopped at %s (%s).' % (_hx(_addr(new['eip'])), self._why(new)),
@@ -978,14 +1167,34 @@ class Debugger:
             raise ConvError('MEMORY_UNREADABLE', 'Cannot read the instruction at 0x%08X.' % address)
         return code
 
-    def _run_to(self, stop, address):
-        return self._resume(stop, 'to', word(address), wait=True)
+    def _esp_of(self, stop):
+        return self._top(stop)['regs']['esp']
+
+    def _run_to(self, stop, address, min_esp=None):
+        """Run to a temporary stop site. The site is only valid in the game's code (the companion writes an int3 at
+        any address it is given). With min_esp, a stop at the site with a lower esp is a deeper recursion of the same
+        call: it is passed on and the run continues to the real return."""
+        lo, hi = fnv_engine.EXE_RANGE
+        if not lo <= address < hi:
+            raise ConvError('BAD_LOCATION', 'Cannot run to 0x%08X: it is outside the game\'s code, and a temporary stop '
+                            'site written there would corrupt memory. Next: use a function or an address in the exe.'
+                            % address)
+        cur = stop
+        for _ in range(STEP_LIMIT):
+            new = self._resume(cur, 'to', word(address), wait=True)
+            if _addr(new['eip']) == address and address in self.pending_to:
+                self.pending_to.discard(address)
+                self._persist()
+            if min_esp is None or _addr(new['eip']) != address or self._esp_of(new) >= min_esp:
+                return new
+            cur = new
+        raise ConvError('STEP_LIMIT', 'The return was not reached within %d recursive calls. Next: continue.' % STEP_LIMIT)
 
     def _over(self, stop):
         eip = _addr(stop['eip'])
         length = _call_length(self._code(eip))
         if length:
-            after = self._run_to(stop, eip + length)
+            after = self._run_to(stop, eip + length, self._esp_of(stop))
             return after
         return self._resume(stop, 'step', wait=True)
 
@@ -993,7 +1202,12 @@ class Debugger:
         top = self._top(stop)
         if top['ready']:
             return self._read_u32(top['ebp'] + 4)
-        return self._read_u32(top['regs']['esp'])
+        ret, _ = self._prologue_caller(top)
+        if ret is None:
+            raise ConvError('FRAME_NOT_SET_UP', 'The stop is inside the prologue of a function whose frame setup is not '
+                            'the standard one, so its return address is not known. Next: step instruction until the '
+                            'frame is set up, or continue.')
+        return ret
 
     def _read_u32(self, address):
         value = self._u32_at(address)
@@ -1012,7 +1226,7 @@ class Debugger:
             eip = _addr(cur['eip'])
             length = _call_length(self._code(eip))
             if length:
-                cur = self._run_to(cur, eip + length)
+                cur = self._run_to(cur, eip + length, self._esp_of(cur))
                 if _addr(cur['eip']) != eip + length:
                     return cur
             else:
@@ -1032,19 +1246,53 @@ class Debugger:
             raise ConvError('BAD_MODE', 'until needs a break or step stop. Next: continue, or set a break at the '
                             'location first.')
         new = self._run_to(stop, address)
-        return verdict('Stopped at %s.' % _hx(_addr(new['eip'])), 'Reached %s.' % location, stop=self.status_view(new))
+        here = _addr(new['eip'])
+        if here != address:
+            # Another stop came first (a break, a fault): the temporary site at the location stays armed in the game.
+            self.pending_to.add(address)
+            self._persist()
+            return verdict('Stopped at %s before reaching %s.' % (_hx(here), location),
+                           '%s came first; the temporary stop at %s is still armed (continue runs on to it, break '
+                           'clear removes it).' % (new.get('why') or 'another stop', _hx(address)),
+                           reached=False, stop=self.status_view(new))
+        return verdict('Stopped at %s.' % _hx(here), 'Reached %s.' % location, reached=True,
+                       stop=self.status_view(new))
 
     def return_(self, value_text):
         value = _parse_number(value_text if value_text is not None else '0')
         stop = self._current()
         eax = int(value) & 0xFFFFFFFF
         if stop['kind'] == 'hook':
+            record = next((b for b in self.breaks.values() if b['mechanism'] == 'hook' and b.get('id') == stop.get('id')),
+                          None)
+            if record is None or not record.get('popKnown', True):
+                # The hold's skip pops the bytes it was armed with; without the function's signature that is 0, which
+                # corrupts the stack of a callee-cleans function.
+                raise ConvError('POP_UNKNOWN', 'Cannot return from this hook stop: the bytes the function pops are not '
+                                'known (it is not in the symbol database, or the hold was not set by fnv_debug break). '
+                                'Next: continue, or set a break on a line inside the function.')
             self._resume(stop, 'skip', word(eax))
             return verdict('Returned %s from the hooked function without running it.' % value_text,
                            'The hook resumed with a skip.', state='running')
         eip = _addr(stop['eip'])
         db = self._symdb()
         fn = db.function_containing(eip) if db else None
+        if fn:
+            start = fn['addr']
+        else:
+            hit = self._engine().containing(eip)
+            start = hit[0] if hit else None
+        if start is None:
+            raise ConvError('NOT_FOUND', 'No function of the engine map contains 0x%08X, so its start and epilogue are '
+                            'unknown. Next: continue.' % eip)
+        if eip != start and not fn:
+            raise ConvError('NO_EPILOGUE', 'This function is not in the symbol database, so its epilogue is unknown and '
+                            'a bare return from the middle of it would jump to garbage. Next: continue, or break at its '
+                            'first instruction and return there.')
+        if eip != start and not self._frame_ready(eip):
+            raise ConvError('FRAME_NOT_SET_UP', 'The stop is inside the prologue, where the frame is half built: neither '
+                            'a return nor the epilogue is valid. Next: step instruction until the prologue is done, or '
+                            'set a break on its first instruction and return there.')
         if fn and eip != fn['addr']:
             # Inside the function its frame (and saved ebx/esi/edi) is built, so a bare `ret` would pop a local as the
             # return address. Run the function's own epilogue instead: eax = the value, continue at its last line
@@ -1070,24 +1318,34 @@ class Debugger:
                            'eax was set and the function ran its own epilogue (%s:%d), so its saved registers and stack '
                            'frame were restored; the game runs on.' % (last_file, last_line), state='running',
                            epilogue=_hx(target))
-        pop = self._pop_bytes(stop)
+        pop = self._pop_bytes_of(start)
+        if pop is None:
+            raise ConvError('POP_UNKNOWN', 'Cannot return: the bytes this function pops are not known (it is not in the '
+                            'symbol database), and a wrong count corrupts the stack of the caller. Next: continue.')
         self._resume(stop, 'ret', word(eax), word(pop))
         return verdict('Returned %s from the current function.' % value_text,
                        'At its first instruction: the stack popped %d argument bytes; the game runs on.' % pop,
                        state='running')
 
-    def _pop_bytes(self, stop):
-        """Argument bytes the current function pops on return (0 for cdecl or when unknown)."""
+    def _pop_bytes_of(self, function):
+        """Argument bytes the function at this start address pops on return (0 for cdecl), or None when the symbol
+        database does not know the function (the count is then unknown, not 0)."""
         db = self._symdb()
-        fn = db.function_containing(_addr(stop['eip'])) if db else None
+        fn = db.function(function) if db and function is not None else None
         if not fn:
-            return 0
+            return None
         signature = (self._engine().functions.get(fn['addr']) or {}).get('signature') or ''
         if '__cdecl' in signature:
             return 0
         ends = [(local['offset'] or 0) + max(4, ((local['size'] or 4) + 3) // 4 * 4) for local in db.locals_of(fn['addr'])
                 if local['kind'] == 'bprel' and local['param'] and (local['offset'] or 0) >= 8]
         return max(ends, default=8) - 8
+
+    def _pop_bytes(self, stop):
+        """Argument bytes the current function pops on return (0 for cdecl or when unknown)."""
+        db = self._symdb()
+        fn = db.function_containing(_addr(stop['eip'])) if db else None
+        return (self._pop_bytes_of(fn['addr']) if fn else 0) or 0
 
     def skip(self, location):
         address, _, _ = self._resolve(location)
@@ -1105,24 +1363,52 @@ class Debugger:
                        'until the next break.', state='running')
 
     # ================================================================ process control
+    def _pipe_thread(self):
+        """The companion's pipe thread id when the companion reports it in its ping (hello), else None."""
+        hello = getattr(self.link, 'hello', None) or {}
+        for key in ('pipeThread', 'pipeThreadId', 'pipeTid'):
+            if hello.get(key):
+                try:
+                    return _num(hello[key])
+                except ValueError:
+                    return None
+        return None
+
     def freeze(self):
         if self.frozen:
             return verdict('Already frozen.', 'Call fnv_debug thaw to resume the game.', frozen=self.frozen)
+        keep = [t for t in (self._pipe_thread(),) if t]
         with fnv_procmem.GameProcess(self.pid) as proc:
-            self.frozen = proc.suspend_all()
-        return verdict('Froze %d threads.' % len(self.frozen), 'Engine calls are unavailable until fnv_debug thaw.',
-                       frozen=self.frozen, state='frozen')
+            self.frozen = proc.suspend_all(keep=keep) if keep else proc.suspend_all()
+        self._persist()
+        return verdict('Froze %d threads.' % len(self.frozen),
+                       'Engine calls are unavailable until fnv_debug thaw, and the dead-man switch cannot fire '
+                       '(its thread is suspended). thaw and status work without the companion and the freeze is kept '
+                       'in the state file, so a restarted server can still thaw it.',
+                       frozen=self.frozen, state='frozen', pipeThreadKept=bool(keep))
 
     def thaw(self):
+        was = list(self.frozen)
         with fnv_procmem.GameProcess(self.pid) as proc:
-            done = proc.resume_all(self.frozen)
+            if was:
+                done = proc.resume_all(was)
+            else:
+                # Nothing on record (a freeze from before a restart with no state file, or another tool): resume every
+                # thread once. ResumeThread on a thread that is not suspended does nothing.
+                done = proc.resume_all(proc.threads())
         self.frozen = []
-        return verdict('Thawed %d threads.' % len(done), 'The game runs again.', resumed=done, state='running')
+        self._persist()
+        return verdict('Thawed %d threads.' % len(done), 'The game runs again.' if was else
+                       'Nothing was on record as frozen: every thread of the game was resumed once (a thread that was not '
+                       'suspended is unaffected).', resumed=done, state='running', forced=not was)
 
     def threads(self):
         stops = {}
-        for stop in self._stops():
-            stops.setdefault(_num(stop.get('thread')), stop['seq'])
+        try:
+            for stop in self._stops():
+                stops.setdefault(_num(stop.get('thread')), stop['seq'])
+        except (ConvError, LinkError):
+            pass       # a frozen game cannot answer: the stop column stays empty
         rows = []
         with fnv_procmem.GameProcess(self.pid) as proc:
             ids = proc.threads()

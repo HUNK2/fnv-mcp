@@ -66,7 +66,7 @@ class Authoring:
 
     # -- inputs -----------------------------------------------------------------------
     def load_spec(self, override=None):
-        spec = builder.check_spec(override) if override is not None else builder.load_spec(self.spec_path.read_text())
+        spec = builder.check_spec(override) if override is not None else builder.load_spec(self.spec_path.read_text(encoding="utf-8"))
         if spec['plugin'] != self.project.plugin:
             raise SpecError('plugin', 'spec builds %s but the project is configured for %s'
                             % (spec['plugin'], self.project.plugin))
@@ -93,7 +93,7 @@ class Authoring:
     def receipt(self):
         if not self.receipt_path.exists():
             raise AuthoringError('NOT_BUILT', 'No build receipt yet; build first')
-        return json.loads(self.receipt_path.read_text())
+        return json.loads(self.receipt_path.read_text(encoding="utf-8"))
 
     def mod_roots(self):
         """Loose-file roots of the MO2 dev profile (fnv.mo2_root / mo2_profile): the enabled mods, highest priority
@@ -230,7 +230,7 @@ class Authoring:
             raise AuthoringError('UNSAVED_CHANGES', 'GECK has %s open with unsaved changes; '
                                  'save or discard them before installing' % plugin)
         history_path = self.project.state_dir / 'installs' / (spec_id + '.json')
-        history = json.loads(history_path.read_text()) if history_path.exists() else []
+        history = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else []
         target = self.data_dir / plugin
         previous = target.read_bytes() if target.exists() else None
         previous_sha = sha(previous) if previous is not None else None

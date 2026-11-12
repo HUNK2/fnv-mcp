@@ -237,7 +237,7 @@ class DeepTools:
         engine = self.live.engine()
         address = engine.resolve(name)
         record = engine.summary(address)
-        if record.get('status') not in ('proven', 'class proven'):
+        if record.get('status') not in ('proven', 'class proven', 'class_proven'):   # the engine map writes class_proven
             raise HookError('UNPROVEN_FUNCTION', '%s is %s: watch hooks go on proven functions only' % (name, record.get('status')))
         return address, record
 
@@ -257,7 +257,14 @@ class DeepTools:
                 return h
         address, record = self._function(spec['function'])
         for h in installed:
-            if int(h['target'], 16) == address:  # installed under another label: replace
+            if int(h['target'], 16) == address:
+                other = h.get('label') or ''
+                if other and other not in WATCHES:
+                    # Another tool's hook (a debugger hold, the script debugger's statement hook, an act or tracepoint
+                    # hook): removing it would silently end that tool's break. Only a watch of this module is replaced.
+                    raise HookError('ALREADY_HOOKED', '%s already carries the hook %r (set by another tool). Next: stop '
+                                    'that tool first (fnv_debug break clear, fnv_script_debug break clear) or remove it '
+                                    'with fnv_hooks.' % (spec['function'], other), {'hook': other})
                 self.remove(h['id'])
         live = self.live.reads([(address, 24)])[0]
         if live is None:
@@ -400,6 +407,7 @@ class DeepTools:
         if action == 'stop':
             removed = []
             keep = self._crash_context_on()
+            self._baseline.pop('profile', None)      # a later read starts a fresh window, not one counted from this run
             for h in self.hooks():
                 if h['label'] in PROFILE and not (keep and h['label'] in PROFILE):
                     self.remove(h['id'])
@@ -628,6 +636,7 @@ class DeepTools:
             if action == 'disable':
                 self._baseline['crash_context'] = False
                 removed = []
+                # profile stop pops its baseline, so a baseline here means a profile run is still collecting
                 if not self._baseline.get('profile'):
                     for h in self.hooks():
                         if h['label'] in PROFILE:

@@ -78,7 +78,13 @@ class EngineMap:
             names = {f['name'], f.get('decompName')}
             proof = f.get('proof') or {}
             if proof.get('name'):
-                names.add(proof['name'])
+                if proof['name'].endswith('::'):
+                    # A class proof names only the class ("Actor::"): Class::Method then picks this function.
+                    short = (f['name'] or '').split('::')[-1]
+                    if short:
+                        names.add(proof['name'] + short)
+                else:
+                    names.add(proof['name'])
             for n in names:
                 if n:
                     self.by_name.setdefault(n.lower(), set()).add(address)
@@ -143,6 +149,12 @@ class EngineMap:
             return int(m.group(1), 16)
         key = str(ref).strip().lower()
         hits = self.by_name.get(key, set())
+        if not hits and '::' in key:
+            short = self.by_name.get(key.split('::')[-1], set())
+            if short:
+                raise EngineMapError('NOT_FOUND', 'No function named %r; %d function(s) are named %r: pick one by '
+                                     'address or by the class name shown' % (ref, len(short), key.split('::')[-1]),
+                                     {'candidates': [self.summary(a) for a in sorted(short)[:25]]})
         if not hits:
             raise EngineMapError('NOT_FOUND', 'No function named %r; try fnv_func_find' % ref)
         if len(hits) > 1:

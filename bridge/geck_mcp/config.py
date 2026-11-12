@@ -114,7 +114,7 @@ class Project(BaseModel):
     @classmethod
     def load(cls, path):
         path = Path(path).resolve(strict=True)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
         for key in ('wine', 'bottle', 'game_root', 'state_dir', 'helper'):
             if data.get(key) is None:
                 continue

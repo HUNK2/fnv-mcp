@@ -1381,4 +1381,45 @@ plugins). Five were wrong and are fixed; one was removed. Tests: 858 pass.
   subtitle is still not seen.
 - `fnv_asset reload .kf` with `ref=`: Sunny's animation object was rebuilt (0x1C5D2888 -> 0x1B293158) with her 287
   groups; without `ref` only unused copies are dropped.
-- Still to run: `fnv_bisect` (mods, then records), from the MCP server once it serves the new tool list.
+- **Rays were broken everywhere** (found while building surface alignment): bhkPickData::SetFilter 0x004A3F70 takes
+  its filter on the stack (`mov [ebp-4],ecx`, the filter read at `[ebp+8]`, `ret 4`), but both ray callers
+  (fnv_hands, fnv_engine_ai) passed it in edx, so the filter was whatever the stack held (seen: 0x05EAC25D, layer
+  93) and rays missed indoors and out. Fixed: a downward ray now meets the saloon floor at the player's feet (3,456)
+  and a sight line to Sunny stops on the wall between (NVGSWallONLY). `fnv_raycast`, `fnv_place snap/check`, the walk
+  planner and `fnv_physics query` all use these rays. Outdoor Havok coordinates have no origin shift (a crate's
+  body is its position / 6.9991).
+- `fnv_place snap align=true` built: the slope from five rays 24 units apart (the pick output has no normal), then
+  SetAngle X and Y. Measured from the 3D's world rotation (+0x68; translation +0x8C): the up axis is
+  (-sin Y, sin X cos Y, cos X cos Y) whatever the heading, so X = asin(n_y / cos Y), Y = -asin(n_x). Three crates
+  on a 22 to 46 degree slope at headings 0, 37 and 200: up axis = surface normal (dot 1.0). A side that rises
+  more than 96 units over the 48 is a step or a wall and is left out (a 71 degree rock face was laid flat that way).
+- `fnv_script_debug` **fixed**: the script's variable list is embedded in the Script at +0x4C (its first node), not a
+  pointer there, so every variable name came back empty (vars, set by name). Types come from ScriptVariableInfo
+  +0x10 (0 float, 1 integer); a local variable is 16 bytes and has no type byte (the old "string" flag read past
+  it). **Built**: a `when` that names script variables (`fTimer >= 0 and bChooseSex == 0`), checked by the bridge at
+  each stop because the predicate language cannot read doubles; a stop whose condition is false is passed on like
+  the refused save/load stops (VCG01SCRIPT: false condition, 2 then 4 refused stops and no stop; true condition,
+  a stop with the 12 variables named; an unknown name lists the script's variables). The stop's opcode is read
+  from the compiled script at the stop's offset - 4 (it equals arg1). In VCG01SCRIPT's inactive MenuMode 1036
+  block the statement counter still runs one ahead of the source mapping; not resolved (that block was not
+  running, and no stop in an active block of that script came while checking).
+- `fnv_audio subtitles` caught live: "Evening." from a spawned Trudy greeting the player, through the tool with
+  `enable=true`. The text is a temporary string, so the tool now reads it while recording (records polled every
+  0.15 s); read after the recording it was garbage. The call carries no speaker form (argument 1 is the sound id,
+  argument 2 part of the voice handle), so the result is text, frame and sound id. `Say` on an NPC that has already
+  spoken does not reliably speak again; a fresh NPC's own greeting does.
+- MCP protocol: an error the SDK writes itself (arguments failing the input schema, an unknown tool) now carries the
+  same structured result as the tools' errors (BridgeServer in server.py), so every result matches the declared
+  output schema (checked over raw stdio, 8 calls including errors). `fnv_globals`, `fnv_hud`, `fnv_physics` are
+  annotated as acting on the game.
+- Code reloads without a restart: `run_mcp.py` is now a supervisor that reloads the server when `geck_mcp/`
+  changes and sends the client a tool-list change (MCP-QUICKSTART.md, "Code changes reload by themselves"). Checked
+  in the Claude app (Claude Code 2.1.321): the app speaks 2026-07-28 (`server/discover`, then `subscriptions/listen`
+  for tools, prompts and resources), the server declares `tools.listChanged`, reloads swap the process between calls,
+  and the stamped notices reach the listen stream. The app never sends `tools/list` itself: it keeps a saved tool
+  list, which is why new tools needed a reconnect. On connections the app re-made after the server process was
+  killed, it did not refetch on the notice; whether it refetches on a session's first connection (the normal case
+  now) is not yet checked. The supervisor writes its events to `state/supervisor.log` (the app shows any server
+  stderr as an error, so routine events go only to that file).
+- Still to run: `fnv_bisect` (mods, then records), from the MCP server (the in-process runner cannot launch through
+  MO2).

@@ -185,11 +185,28 @@ static bool write_bytes(uint32_t address, const void *data, size_t length) {
     MEMORY_BASIC_INFORMATION info;
     if (address < 0x10000 || !VirtualQuery((LPCVOID)(uintptr_t)address, &info, sizeof(info)) || info.State != MEM_COMMIT)
         return false;
-    DWORD old = 0;
-    bool unprotected = VirtualProtect((LPVOID)(uintptr_t)address, length, PAGE_EXECUTE_READWRITE, &old);
+    /* VirtualProtect reports only the first page's old protection: remember each region's own and put each back,
+     * so a write from a read-only page into a read-write one leaves the second one writable. */
+    struct { uint32_t base, size; DWORD old; bool set; } regions[8];
+    unsigned nregions = 0;
+    bool ok = true;
+    for (uint32_t at = address; at < address + length && nregions < 8;) {
+        if (!VirtualQuery((LPCVOID)(uintptr_t)at, &info, sizeof(info)) || info.State != MEM_COMMIT) { ok = false; break; }
+        uint32_t base = (uint32_t)(uintptr_t)info.BaseAddress, end = base + (uint32_t)info.RegionSize;
+        uint32_t stop = end < address + length ? end : address + (uint32_t)length;
+        regions[nregions].base = at;
+        regions[nregions].size = stop - at;
+        regions[nregions].set = VirtualProtect((LPVOID)(uintptr_t)at, stop - at, PAGE_EXECUTE_READWRITE,
+                                               &regions[nregions].old);
+        nregions++;
+        at = stop;
+    }
     SIZE_T done = 0;
-    bool ok = WriteProcessMemory(GetCurrentProcess(), (LPVOID)(uintptr_t)address, data, length, &done) && done == length;
-    if (unprotected) VirtualProtect((LPVOID)(uintptr_t)address, length, old, &old);
+    ok = ok && WriteProcessMemory(GetCurrentProcess(), (LPVOID)(uintptr_t)address, data, length, &done) && done == length;
+    for (unsigned k = 0; k < nregions; k++) {
+        DWORD ignored;
+        if (regions[k].set) VirtualProtect((LPVOID)(uintptr_t)regions[k].base, regions[k].size, regions[k].old, &ignored);
+    }
     FlushInstructionCache(GetCurrentProcess(), (LPCVOID)(uintptr_t)address, length);
     return ok;
 }
@@ -677,6 +694,8 @@ static Hook *hook_find(uint32_t id) {
         if (hooks[i]->id == id) return hooks[i];
     return NULL;
 }
+static int code_write_frozen(uint32_t address, const void *bytes, size_t length); /* after probe_suspend */
+static void cov_release_range(uint32_t addr, uint32_t len);                       /* w6_cov.c */
 static bool code_write(uint32_t address, const void *bytes, size_t length) {
     DWORD old;
     if (!VirtualProtect((void *)(uintptr_t)address, length, PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -729,6 +748,7 @@ static void op_hook(int argc, char **argv) {
         return fail("not_executable");
     Hook *h = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Hook));
     if (!h) return fail("out_of_memory");
+    cov_release_range(target, stolen); /* never save a coverage 0xCC as an original byte */
     if (!read_bytes(target, h->original, stolen)) { HeapFree(GetProcessHeap(), 0, h); return fail("unreadable"); }
     if (!hook_code) hook_code = VirtualAlloc(NULL, 65536, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     /* Ring and table are only allocated when used, and never freed: a call that entered before an unhook
@@ -784,7 +804,8 @@ static void op_hook(int argc, char **argv) {
     value = (uint32_t)(uintptr_t)entry - (target + 5);
     memcpy(patch + 1, &value, 4);
     hooks[hook_count++] = h;
-    if (!code_write(target, patch, stolen)) { hook_count--; return fail("unwritable"); }
+    int written = code_write_frozen(target, patch, stolen);
+    if (written) { hook_count--; return fail(written == 1 ? "busy" : "unwritable"); }
     emit("{\"ok\":true,\"hook\":");
     emit_hook(h);
     emit("}");
@@ -804,7 +825,11 @@ static void op_unhook(int argc, char **argv) {
     h->act_mode = ACT_NONE;
     if (!read_bytes(h->target, now, 5)) return fail("unreadable");
     if (memcmp(now, expected, 5)) return fail("overwritten_by_another_patch");
-    if (!code_write(h->target, h->original, h->stolen)) return fail("unwritable");
+    int written = code_write_frozen(h->target, h->original, h->stolen);
+    if (written) {
+        h->active = 1; /* still hooked: keep recording until a later unhook succeeds */
+        return fail(written == 1 ? "busy" : "unwritable");
+    }
     h->stolen = 0;
     emit("{\"ok\":true,\"id\":%u}", id);
 }
@@ -816,10 +841,12 @@ static void op_hookctl(int argc, char **argv) {
     if (!h) return fail("unknown_hook");
     h->active = active ? 1 : 0;
     if (argc == 4 && !strcmp(argv[3], "clear")) {
-        while (InterlockedCompareExchange(&h->lock, 1, 0)) YieldProcessor();
-        memset(h->table, 0, HOOK_TABLE * sizeof(HookStat));
-        h->table_used = h->table_full = 0;
-        InterlockedExchange(&h->lock, 0);
+        if (h->table) { /* only hooks made with a call table have one */
+            while (InterlockedCompareExchange(&h->lock, 1, 0)) YieldProcessor();
+            memset(h->table, 0, HOOK_TABLE * sizeof(HookStat));
+            h->table_used = h->table_full = 0;
+            InterlockedExchange(&h->lock, 0);
+        }
     }
     emit("{\"ok\":true,\"hook\":");
     emit_hook(h);
@@ -1237,9 +1264,10 @@ static DWORD WINAPI dbg_worker(LPVOID arg) {
 static DWORD dbg_apply(void) {
     HANDLE t = CreateThread(NULL, 0, dbg_worker, NULL, 0, NULL);
     if (!t) return 0;
-    WaitForSingleObject(t, 5000);
+    DWORD waited = WaitForSingleObject(t, 5000);
     DWORD n = 0;
-    GetExitCodeThread(t, &n);
+    if (waited != WAIT_OBJECT_0 || !GetExitCodeThread(t, &n) || n == STILL_ACTIVE)
+        n = (DWORD)-1; /* timed out: the registers may not be on every thread yet */
     CloseHandle(t);
     return n;
 }
@@ -1261,7 +1289,9 @@ static void op_dbg(int argc, char **argv) {
         dbg_active |= 1u << v[0];
         dbg_scope[v[0]] = v[4];
         DWORD n = dbg_apply();
-        emit("{\"ok\":%s,\"slot\":%u,\"threads\":%lu,\"seq\":%ld}", n ? "true" : "false", v[0], (unsigned long)n, dbg_seq);
+        bool timed_out = n == (DWORD)-1;
+        emit("{\"ok\":%s,\"slot\":%u,\"threads\":%lu,\"seq\":%ld%s}", n && !timed_out ? "true" : "false", v[0],
+             (unsigned long)(timed_out ? 0 : n), dbg_seq, timed_out ? ",\"error\":\"timeout\"" : "");
         return;
     }
     if (!strcmp(what, "clear")) {
@@ -1272,7 +1302,9 @@ static void op_dbg(int argc, char **argv) {
             dbg_active &= ~(1u << v[0]);
         } else return fail("bad_arguments");
         DWORD n = dbg_apply(); /* every thread is visited, so a cleared slot comes off everywhere */
-        emit("{\"ok\":true,\"active\":%u,\"threads\":%lu}", dbg_active, (unsigned long)n);
+        bool timed_out = n == (DWORD)-1;
+        emit("{\"ok\":%s,\"active\":%u,\"threads\":%lu%s}", timed_out ? "false" : "true", dbg_active,
+             (unsigned long)(timed_out ? 0 : n), timed_out ? ",\"error\":\"timeout\"" : "");
         return;
     }
     if (!strcmp(what, "read")) {
@@ -1361,6 +1393,16 @@ static bool probe_thread_inside(uint32_t start, uint32_t end) {
     for (unsigned k = 0; k < probe_thread_count; k++)
         if (probe_eips[k] > start && probe_eips[k] < end) return true;
     return false;
+}
+/* Writes code with every other thread suspended, refusing when one of them stands inside the bytes (it would resume
+ * in the middle of the new instruction). 0 written, 1 busy, 2 unwritable. Nothing between suspend and resume
+ * allocates or emits. */
+static int code_write_frozen(uint32_t address, const void *bytes, size_t length) {
+    probe_suspend();
+    bool busy = probe_thread_inside(address, address + (uint32_t)length);
+    bool written = !busy && code_write(address, bytes, length);
+    probe_resume();
+    return busy ? 1 : written ? 0 : 2;
 }
 static void probe_arm(void) {
     unsigned armed = 0, busy = 0, changed = 0, sites = 0, site_changed = 0, unwritable = 0;
@@ -1616,6 +1658,28 @@ static void op_probe(int argc, char **argv) {
  * exception address and time. */
 static char context_dir[MAX_PATH];
 static volatile LONG context_files, serving_request, exiting;
+/* At the game's exit message: one small file next to the crash-context files saying how the game was asked to quit
+ * (the console's qqq or a script's QuitGame give the console exit message; closing the window or the menu's Quit give
+ * the plain one), whether the companion was serving a request then, and the frame. fnv_status / fnv_crash_explain and
+ * the bridge's quit log read it to tell who closed the game. */
+static void exit_note(unsigned type) {
+    char path[MAX_PATH + 64], text[256];
+    if (!context_dir[0]) return;
+    snprintf(path, sizeof(path), "%s\\exit-%lu.json", context_dir, (unsigned long)pid);
+    FILETIME now;
+    GetSystemTimeAsFileTime(&now);
+    int n = snprintf(text, sizeof(text),
+                     "{\"schema\":1,\"pid\":%lu,\"how\":\"%s\",\"fileTime\":\"%llu\",\"frame\":%ld,"
+                     "\"servingRequest\":%s,\"thread\":%lu,\"mainThread\":%lu}\n",
+                     (unsigned long)pid, type == MSG_EXIT_CONSOLE ? "console" : "window_or_menu",
+                     ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime, frame,
+                     serving_request ? "true" : "false", (unsigned long)GetCurrentThreadId(), (unsigned long)main_thread);
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD written;
+    WriteFile(f, text, n > 0 ? (DWORD)n : 0, &written, NULL);
+    CloseHandle(f);
+}
 static char op_now[256]; /* the op being served (its text before parsing), for the crash context */
 static const char *console_line_now;
 static char context_buffer[16384];
@@ -1646,8 +1710,10 @@ static void ctx_form(const char *name, uint32_t address) {
         ctx(",\"%sFormId\":\"%08X\",\"%sFormType\":%u", name, form_id, name, type);
 }
 static LONG stop_fault(EXCEPTION_POINTERS *e); /* w2_stop.c: faulthold, the crash hold (8.3) */
+static bool guard_on_this_thread(void); /* w1_guard.c */
 static LONG CALLBACK on_exception(EXCEPTION_POINTERS *e) {
     DWORD code = e->ExceptionRecord->ExceptionCode;
+    if (guard_on_this_thread()) return EXCEPTION_CONTINUE_SEARCH; /* a guarded call: handled, not a crash */
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_INT_DIVIDE_BY_ZERO &&
         code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_ARRAY_BOUNDS_EXCEEDED)
         return EXCEPTION_CONTINUE_SEARCH;
@@ -1814,6 +1880,7 @@ static void call_guarded(uint32_t target, bool is_float, uint32_t ecx, uint32_t 
  * the call guarded (w1_guard.c): a fault comes back as a result instead of a crash. */
 static void op_call(int argc, char **argv) {
     uint32_t target, ecx, edx, words[32];
+    if (argc < 5 || argc > 37) return fail("bad_arguments"); /* before argv[2] is read */
     bool guarded = strlen(argv[2]) == 2 && argv[2][1] == 'g';
     if (argc < 5 || argc > 37 || !parse_u32(argv[1], &target) || (!guarded && target < 0x10000) ||
         (strlen(argv[2]) != 1 && !guarded) || !strchr("ifv", argv[2][0]) || !parse_u32(argv[3], &ecx) ||
@@ -2146,17 +2213,21 @@ static bool write_all(HANDLE pipe, const char *data, size_t length) {
 }
 static void ping(HANDLE pipe, char *id) {
     char text[768];
+    int live_hooks = 0; /* removed hooks keep their slot until the table fills: count only the armed ones */
+    for (int i = 0; i < hook_count; i++)
+        if (hooks[i] && hooks[i]->stolen) live_hooks++;
     for (char *c = id; *c; c++)
         if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '-')) *c = '_';
     ULONGLONG now = GetTickCount64(), last = last_frame_tick;
     snprintf(text, sizeof(text),
              "{\"id\":\"%.64s\",\"pong\":true,\"pid\":%lu,\"started\":\"%llu\",\"companion\":%d,\"wire\":%d,\"frame\":%ld,"
              "\"msSinceFrame\":%lld,\"loaded\":%s,\"deferredInit\":%s,\"lastMessage\":\"%s\",\"busy\":%s,"
-             "\"mainThreadId\":%lu,\"hooks\":%d,\"held\":%s,\"stepLeft\":%ld,\"parked\":%u,\"lastFrameTick\":%llu}\n",
+             "\"mainThreadId\":%lu,\"pipeThread\":%lu,\"hooks\":%d,\"held\":%s,\"stepLeft\":%ld,\"parked\":%u,"
+             "\"lastFrameTick\":%llu}\n",
              id, (unsigned long)pid, started, COMPANION_VERSION, WIRE_VERSION, frame, last ? (long long)(now - last) : -1LL,
              loaded ? "true" : "false", deferred_init ? "true" : "false", message_name(last_message),
-             pending ? "true" : "false", (unsigned long)main_thread, hook_count, gate_held ? "true" : "false",
-             (long)step_left, stop_parked(), (unsigned long long)last);
+             pending ? "true" : "false", (unsigned long)main_thread, (unsigned long)GetCurrentThreadId(), live_hooks,
+             gate_held ? "true" : "false", (long)step_left, stop_parked(), (unsigned long long)last);
     write_all(pipe, text, strlen(text));
 }
 static bool client_gone(HANDLE pipe) {
@@ -2265,6 +2336,7 @@ static void on_message(Message *m) {
     if (type == MSG_POSTLOAD) loaded = m->data != NULL;
     if (type == MSG_EXIT || type == MSG_EXIT_CONSOLE) {
         InterlockedExchange(&exiting, 1);
+        exit_note(type);
         gate_exit();
         run_due(true);
     }

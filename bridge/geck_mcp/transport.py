@@ -33,6 +33,7 @@ class Transport:
         command = p.helper_command(operation, *args)
         try:
             result = subprocess.run(command, env=env, capture_output=True, text=True,
+                                    encoding='utf-8', errors='replace',
                                     timeout=p.helper_timeout_seconds)
         except subprocess.TimeoutExpired as e:
             raise BridgeError('OUTCOME_UNKNOWN', 'Helper exceeded deadline; inspect before retry',

@@ -30,7 +30,12 @@ static const char *bp_resume_prepare(const Stop *s, uint32_t mode, uint32_t arg,
 static void bp_resume_undo(const Stop *s, uint32_t mode, uint32_t arg);
 
 static Stop stops_table[STOPS];
-static unsigned char *stop_stubs; /* one 16-byte skip stub per stop slot, executable; made by the main thread */
+/* Skip stubs, 16 bytes each, executable; made by the main thread. They are not tied to a stop slot: the slot is freed
+ * before the parked thread returns into its stub, and another stop could claim that slot and rewrite the stub first.
+ * Each skip takes the next stub of a ring instead, which comes round again only after STOP_STUBS more skips. */
+#define STOP_STUBS 256u
+static unsigned char *stop_stubs;
+static volatile LONG stop_stub_next;
 static volatile LONG stop_seq, main_stops, fault_hold;
 static bool stop_closed_gate; /* the main thread's stop closed the gate (it was open before), so it opens it again */
 
@@ -43,7 +48,7 @@ static unsigned stop_parked(void) {
     return n;
 }
 static bool stop_stub_init(void) {
-    if (!stop_stubs) stop_stubs = VirtualAlloc(NULL, 16u * STOPS, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!stop_stubs) stop_stubs = VirtualAlloc(NULL, 16u * STOP_STUBS, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     return stop_stubs != NULL;
 }
 static int stop_claim(void) {
@@ -165,9 +170,10 @@ static int stop_park(uint32_t kind, uint32_t id, uint32_t eip, uint32_t regs, ui
     return slot;
 }
 
-/* The skip stub of a stop slot: mov eax, value; ret [pop] (what the existing skip action does). */
+/* A fresh skip stub: mov eax, value; ret [pop] (what the existing skip action does). */
 static uint32_t stop_skip_stub(int slot, uint32_t value, uint32_t pop) {
     unsigned char stub[16], *q = stub;
+    (void)slot;
     if (!stop_stubs) return 0;
     *q++ = 0xB8; /* mov eax, imm32 */
     memcpy(q, &value, 4);
@@ -179,8 +185,10 @@ static uint32_t stop_skip_stub(int slot, uint32_t value, uint32_t pop) {
     } else {
         *q++ = 0xC3;
     }
-    memcpy(stop_stubs + 16u * (unsigned)slot, stub, (size_t)(q - stub));
-    return (uint32_t)(uintptr_t)(stop_stubs + 16u * (unsigned)slot);
+    unsigned index = (unsigned)InterlockedIncrement(&stop_stub_next) % STOP_STUBS;
+    memcpy(stop_stubs + 16u * index, stub, (size_t)(q - stub));
+    FlushInstructionCache(GetCurrentProcess(), stop_stubs + 16u * index, 16);
+    return (uint32_t)(uintptr_t)(stop_stubs + 16u * index);
 }
 
 /* The predicate context of a hook: the saved register block (contract 8.1) with this = ecx and the arguments. */

@@ -7,14 +7,19 @@ ecx is the runner.
 
 A break is a hook hold with one predicate: the script (its form id, read through arg0), the line (`arg6:u32`) and
 the opcode (`arg1:u16`), each optional, with an optional `when`; several breaks are joined with `or`. The predicate
-text reads an argument's own value with `argN:type` (FNV-COMPANION-V2.md 2, base 4). A `when` over the script's
-variables by name is not built: use vars.
+text reads an argument's own value with `argN:type` (FNV-COMPANION-V2.md 2, base 4). A `when` that names the script's
+variables (`HelloBugLevel > 50 and bDone == 0`) is checked by the bridge at each stop: the variables are doubles,
+which the predicate language cannot read, so the hold stops on the script, line and opcode and a stop whose
+condition is false is passed on (resume run), like the refused stops inside save/load.
 
 Refused stops: a statement reached inside save/load (the locals loader runs the scripts' init pass) is passed on
 with resume next and counted, not shown.
 """
+import ast
+import operator
 import re
 import struct
+import threading
 import time
 
 from .fnv_conv import ConvError, verdict
@@ -22,7 +27,7 @@ from .fnv_debugger import Debugger
 from .fnv_deep import HF_RECORD, SELECTORS
 from .fnv_flow import engine_address, hook_at
 from .fnv_link import word
-from .fnv_pred import compile_predicate
+from .fnv_pred import ProcState, compile_predicate
 
 EVAL_NAME, EVAL_ADDR, EVAL_ARGS = 'ScriptRunner::EvaluateLine', 0x005E1550, 8
 EVAL_LABEL = 'script_line_dbg'
@@ -33,7 +38,7 @@ FLAG_LABELS = ('script_flag', 'locals_flag')
 FORM_ID = 0x0C                      # TESForm::iFormID
 RUNNER_LOCALS, RUNNER_SCRIPT, RUNNER_IF_DEPTH = 0x08, 0x14, 0x20
 SCRIPT_VARS = 0x4C                  # Script::m_kVariableList (BSSimpleList of ScriptVariableInfo*)
-VAR_TYPE = 0x10                     # ScriptLocalVariable::m_bIsString
+INFO_TYPE = 0x10                    # ScriptVariableInfo type: 0 float, 1 integer (short/long); a local is 16 bytes
 VAR_VALUE = 0x08                    # ScriptLocalVariable::fValue (double)
 LOCALS_VARS, LOCALS_OWNER = 0x0C, 0x00
 NAME_PTR, NAME_LEN = 0x18, 0x1C     # ScriptVariableInfo::m_kName (BSStringT: pointer, u16 length)
@@ -41,6 +46,7 @@ REF_EXTRA_LIST = 0x44               # TESObjectREFR extra data list (the ext arg
 SAVE_LOAD = re.compile(r'LoadGame|SaveGame|SaveLoad|ScriptLocals::Load|ScriptLocals::Save|FinishLoading')
 STEP_LIMIT = 4096
 STOP_WAIT = 10.0
+SETTLE_WAIT = 30.0       # most a continue spends passing on stops whose condition is false
 RING = 200
 LIST_LIMIT = 256
 FLAGS = {0x1: 'OnAdd', 0x2: 'OnEquip', 0x4: 'OnDrop', 0x8: 'OnUnequip', 0x10: 'OnDeath', 0x20: 'OnMurder',
@@ -77,6 +83,7 @@ class EvalHook:
         self.hook_id = None
         self.holding = False            # a hold predicate is set (breaks armed); the companion has no release
         self.log_on = False             # fnv_script_log commands mode=start asked for the ring: keep the hook
+        self.lock = threading.RLock()   # replaced by the Debugger's lock, so slot 56 and the hook are set one at a time
 
     @property
     def link(self):
@@ -118,15 +125,16 @@ class EvalHook:
 
     def hold(self, pred_hex):
         # The hold takes a predicate slot (wire 2): store the program in this tool's slot first.
-        stored = self.link.one('pred', 'set', word(PRED_SLOT), pred_hex)
-        if not stored.get('ok'):
-            raise ConvError('COMPANION_REFUSED', 'The companion refused the break condition (%s).' % stored.get('error'),
-                            stored)
-        result = self.link.one('hookact', word(self.hook_id), 'hold', word(PRED_SLOT))
-        if not result.get('ok'):
-            raise ConvError('COMPANION_REFUSED', 'The companion refused the statement hold (%s).' % result.get('error'),
-                            result)
-        self.holding = True
+        with self.lock:
+            stored = self.link.one('pred', 'set', word(PRED_SLOT), pred_hex)
+            if not stored.get('ok'):
+                raise ConvError('COMPANION_REFUSED', 'The companion refused the break condition (%s).'
+                                % stored.get('error'), stored)
+            result = self.link.one('hookact', word(self.hook_id), 'hold', word(PRED_SLOT))
+            if not result.get('ok'):
+                raise ConvError('COMPANION_REFUSED', 'The companion refused the statement hold (%s).'
+                                % result.get('error'), result)
+            self.holding = True
 
     def filter(self, selector, value):
         result = self.link.one('hookfilter', word(self.hook_id), word(selector), word(value))
@@ -161,12 +169,21 @@ class ScriptDebugger:
         self.live = live
         self.data = data
         self._sources = {}
+        self._types = {}                # variable id -> float | integer, filled by _names
         self.eval = eval_hook or EvalHook(live)
         self.dbg = dbg or Debugger(live, sleep=sleep, clock=clock)
+        self.lock = getattr(self.dbg, 'lock', None) or threading.RLock()   # one lock for every tool that
+        try:                                                                 # allocates ids and slots
+            self.eval.lock = self.lock
+        except AttributeError:
+            pass
+        self.state = ProcState(live)
+        self.pid = self.start = None
         self.breaks = {}
         self.next_number = 1
         self.saved_scripts = None
         self.skipped = 0
+        self.refused = 0                # stops the last settle passed on
 
     @property
     def link(self):
@@ -186,7 +203,39 @@ class ScriptDebugger:
             'thaw': self.thaw,
         }
         self.live.ready()
+        self._sync()
         return _dispatch(action, table)
+
+    # ================================================================ state kept across restarts
+    def _sync(self):
+        """Follow the game process. A new game (pid or start time changed) starts clean: breaks, the hook id and the
+        script-freeze flag of the old one are dropped. The same game after a server restart gets its breaks and its
+        script-freeze flag back from the state file."""
+        try:
+            found = self.live.game.process()
+        except Exception:  # noqa: BLE001 - no process lookup: nothing to follow
+            return
+        if not found:
+            return
+        pid, start = found[0], (found[1] if len(found) > 1 else None)
+        if pid == self.pid and start == self.start:
+            return
+        self.pid, self.start = pid, start
+        self.eval.hook_id = None
+        self.eval.holding = False
+        saved = self.state.load('sdbg_breaks', pid, start) or {}
+        self.breaks = {int(b['number']): b for b in saved.get('breaks', []) if isinstance(b, dict) and 'number' in b}
+        self.next_number = max([int(saved.get('next') or 1)] + [n + 1 for n in self.breaks])
+        self.saved_scripts = self.state.load('sdbg_freeze', pid, start)
+        self.eval.holding = bool(self.breaks)
+
+    def _persist(self):
+        if self.pid is None:
+            return
+        records = [dict(b) for _, b in sorted(self.breaks.items())]
+        self.state.save('sdbg_breaks', self.pid, self.start,
+                        {'next': self.next_number, 'breaks': records} if records else None)
+        self.state.save('sdbg_freeze', self.pid, self.start, self.saved_scripts)
 
     # ================================================================ breaks
     def break_(self, op, script, line, opcode, when, break_id):
@@ -207,34 +256,55 @@ class ScriptDebugger:
         statement, note = (int(line) if line is not None else None), None
         if line is not None and fid is not None:
             statement, note = self._statement_of(fid, int(line))
-        record = {'number': self.next_number, 'script': fid, 'scriptName': script_name, 'line': line, 'opcode': opcode,
-                  'when': when or None, 'filter': filt, 'statement': statement, 'lineNote': note}
-        self.breaks[record['number']] = record
-        try:
-            self._arm()
-        except ConvError:
-            del self.breaks[record['number']]
-            self._arm()
-            raise
-        self.next_number += 1
+        var_when = None
+        if when and var_names(when):
+            if fid is None:
+                raise ConvError('BAD_ARGUMENTS', 'A when that names script variables (%s) needs the script. Next: pass '
+                                'script too.' % ', '.join(sorted(var_names(when))))
+            known = {n.lower() for n in self._names(self.live.deep.script_form('%08X' % fid)[0]).values() if n}
+            unknown = sorted(n for n in var_names(when) if n.lower() not in known)
+            if unknown:
+                raise ConvError('NO_SUCH_VARIABLE', '%s: not a variable of the script (it has %s).' % (
+                    ', '.join(unknown), ', '.join(sorted(known)) or 'none'))
+            compile_var_when(when)
+            var_when, when = when, None
+        with self.lock:
+            record = {'number': self.next_number, 'script': fid, 'scriptName': script_name, 'line': line,
+                      'opcode': opcode, 'when': when or None, 'varWhen': var_when, 'filter': filt,
+                      'statement': statement, 'lineNote': note}
+            self.breaks[record['number']] = record
+            try:
+                self._arm()
+            except ConvError:
+                del self.breaks[record['number']]
+                self._arm()
+                raise
+            self.next_number += 1
+            self._persist()
         return verdict('Break %d set on %s.' % (record['number'], _where(record)),
                        record['lineNote'] or 'The game stops when that statement runs; status shows the line, continue '
                        'runs to the next one.', **{'break': _public(record)})
 
     def _clear(self, break_id):
-        targets = sorted(self.breaks) if break_id is None else [int(break_id)]
-        cleared = []
-        for n in targets:
-            if n not in self.breaks:
-                raise ConvError('NO_BREAK', 'No script break %s. Next: call fnv_script_debug break list.' % n)
-            del self.breaks[n]
-            cleared.append(n)
-        self._arm()
+        with self.lock:
+            targets = sorted(self.breaks) if break_id is None else [int(break_id)]
+            cleared = []
+            for n in targets:
+                if n not in self.breaks:
+                    raise ConvError('NO_BREAK', 'No script break %s. Next: call fnv_script_debug break list.' % n)
+                del self.breaks[n]
+                cleared.append(n)
+            self._arm()
+            self._persist()
         return verdict('Cleared %d script break(s).' % len(cleared), None, cleared=cleared)
 
     def _arm(self):
         """Hold and filter of the shared hook follow the breaks. With no break left the hook goes (it would record every
         statement of every script for the rest of the session), unless the statement log asked for its ring."""
+        with self.lock:
+            self._arm_locked()
+
+    def _arm_locked(self):
         if not self.breaks:
             if self.eval.log_on:
                 if self.eval.holding:
@@ -326,7 +396,15 @@ class ScriptDebugger:
 
     # ================================================================ stopped state
     def _ours(self, stop):
-        return stop.get('kind') == 'hook' and self.eval.hook_id is not None and int(stop.get('id')) == self.eval.hook_id
+        if stop.get('kind') != 'hook':
+            return False
+        if self.eval.hook_id is None:
+            # After a server restart the hook is still in the game: find it by its label before judging the stop.
+            try:
+                self.eval.existing()
+            except ConvError:
+                return False
+        return self.eval.hook_id is not None and int(stop.get('id')) == self.eval.hook_id
 
     def _stopped(self):
         """The newest stop on the statement hook, or None."""
@@ -353,14 +431,45 @@ class ScriptDebugger:
                 return True
         return False
 
-    def _settle(self, stop):
-        """A stop inside save/load is passed on with resume next and counted (the refused stop)."""
-        while stop is not None and self._in_save_load(stop):
+    def _settle(self, stop, wait=False):
+        """A stop inside save/load, or one whose variable condition is false, is passed on with resume run and counted
+        (the refused stop)."""
+        self.refused = 0
+        deadline = self.dbg.clock() + SETTLE_WAIT
+        while stop is not None and (self._in_save_load(stop) or not self._wanted(stop)):
             self.skipped += 1
+            self.refused += 1
             # run, not next: next parks at the very next statement and ignores the hold's condition
             self.dbg._resume(stop, 'run')
-            stop = self._await_ours(stop['seq'], wait=False)
+            if self.refused >= STEP_LIMIT or self.dbg.clock() >= deadline:
+                return None         # the script keeps producing stops that are not wanted: give up, the game runs on
+            stop = self._await_ours(stop['seq'], wait=wait)
         return stop
+
+    def _wanted(self, stop):
+        """False when every break that matches this stop has a variable condition and none holds now."""
+        if not any(b.get('varWhen') for b in self.breaks.values()):
+            return True
+        st = self._state(stop)
+        info = self.live.form_ids([st['script']])[0] or {}
+        form = int(info['formId'], 16) if info.get('formId') else None
+        values = None
+        for b in self.breaks.values():
+            if b['script'] is not None and b['script'] != form:
+                continue
+            if b.get('statement') is not None and b.get('line') is not None and b['statement'] != st['line']:
+                continue
+            if b.get('opcode') is not None and int(b['opcode']) != (st['opcode'] & 0xFFFF):
+                continue
+            if not b.get('varWhen'):
+                return True
+            if values is None:
+                names = self._names(st['script'])
+                values = {(names.get(rec['id']) or '').lower(): rec['value']
+                          for _, rec in self._var_items(st['runner'])}
+            if eval_var_when(compile_var_when(b['varWhen']), values):
+                return True
+        return False
 
     def _await_ours(self, after, wait=True):
         deadline = self.dbg.clock() + STOP_WAIT
@@ -383,11 +492,11 @@ class ScriptDebugger:
             state = 'stopped elsewhere' if others else 'running'
             return verdict('Not stopped on a statement (%s).' % state, '%d script breaks armed.' % len(self.breaks),
                            state=state, breaks=[_public(b) for _, b in sorted(self.breaks.items())])
-        if self._in_save_load(stop):
+        if self._in_save_load(stop) or not self._wanted(stop):
             stop = self._settle(stop)
             if stop is None:
-                return verdict('Passed a statement inside save/load.', 'Refused stops are counted; call status again.',
-                               state='running', skipped=self.skipped)
+                return verdict('Passed a stop that is not wanted (inside save/load, or its variable condition is false).',
+                               'Refused stops are counted; call status again.', state='running', skipped=self.skipped)
         return self._view(stop)
 
     def _view(self, stop):
@@ -397,12 +506,28 @@ class ScriptDebugger:
         line, text = self._line_of(form, st['line'], st['script'])
         depth = self.live.u32s([st['runner'] + RUNNER_IF_DEPTH])[0] if st['runner'] else None
         view = {'seq': stop['seq'], 'script': info.get('formId'), 'scriptPointer': _hx(st['script']),
-                'line': line if line is not None else st['line'], 'statement': st['line'], 'opcode': st['opcode'],
+                'line': line if line is not None else st['line'], 'statement': st['line'],
+                'opcode': self._opcode_at(st),
                 'reference': _hx(st['reference']) if st['reference'] else None,
                 'ifDepth': depth, 'sourceLine': text, 'skipped': st['skip'], 'skippedRefused': self.skipped}
         return verdict('Stopped in script %s at line %s.' % (info.get('formId') or _hx(st['script']), view['line']),
                        'The statement is about to run. vars lists the script variables; step runs one statement.',
                        stop=view)
+
+    def _opcode_at(self, st):
+        """The statement's opcode from the compiled script at the stop's offset (arg1 is the runner's output mode and
+        differs inside a block the runner skips)."""
+        try:
+            from .fnv_data import SCRIPT_DATA
+            data = self.live.u32s([st['script'] + SCRIPT_DATA])[0] if st['script'] else 0
+            # the offset is past the statement's header (u16 opcode, u16 length)
+            at = data + st['offset'] - 4 if data and st['offset'] and st['offset'] >= 4 else 0
+            raw = self.live.reads([(at, 2)])[0] if at else None
+            if raw:
+                return struct.unpack('<H', raw)[0]
+        except Exception:  # noqa: BLE001 - fall back to the hook argument
+            pass
+        return st['opcode'] & 0xFFFF
 
     def vars_(self):
         stop = self._current()
@@ -412,7 +537,7 @@ class ScriptDebugger:
         for item, record in self._var_items(st['runner']):
             uid = record['id']
             out.append({'name': names.get(uid), 'id': uid, 'value': record['value'],
-                        'type': 'string' if record['string'] else 'number'})
+                        'type': self._types.get(uid)})
         return verdict('%d script variables.' % len(out), 'Names come from the script; a None name is a variable the '
                        'script does not name.', variables=out, total=len(out))
 
@@ -429,15 +554,15 @@ class ScriptDebugger:
             if raw_node is None:
                 return
             item, nxt = _u32(raw_node, 0), _u32(raw_node, 4)
-            raw = self.live.reads([(item, 0x18)])[0] if item else None
+            raw = self.live.reads([(item, 0x10)])[0] if item else None   # id, pad, double
             if raw is not None:
                 value = struct.unpack_from('<d', raw, VAR_VALUE)[0]
-                yield item, {'id': _u32(raw, 0), 'value': value, 'string': bool(raw[VAR_TYPE])}
+                yield item, {'id': _u32(raw, 0), 'value': value}
             node = nxt
 
     def _names(self, script):
         names = {}
-        node = self.live.u32s([script + SCRIPT_VARS])[0] if script else 0
+        node = script + SCRIPT_VARS if script else 0     # the list's first node is inside the Script (item, next)
         for _ in range(LIST_LIMIT):
             if not node:
                 break
@@ -452,6 +577,7 @@ class ScriptDebugger:
             ptr, length = _u32(raw, NAME_PTR), struct.unpack_from('<H', raw, NAME_LEN)[0]
             text = self.live.reads([(ptr, length)])[0] if ptr and length else None
             names[_u32(raw, 0)] = text.decode('latin-1') if text else None
+            self._types[_u32(raw, 0)] = {0: 'float', 1: 'integer'}.get(raw[INFO_TYPE], 'type %d' % raw[INFO_TYPE])
         return names
 
     def set_(self, name, value):
@@ -501,8 +627,9 @@ class ScriptDebugger:
         if mode == 'out':
             return self._step_out(stop, here)
         script_pred = compile_predicate('arg0.[%d]:u32 == %d' % (FORM_ID, self._form_of(here['script'])))['hex']
-        self.eval.filter(SELECTORS['none'], 0)
-        self.eval.hold(script_pred)
+        with self.lock:
+            self.eval.filter(SELECTORS['none'], 0)
+            self.eval.hold(script_pred)
         try:
             cur = stop
             for _ in range(STEP_LIMIT):
@@ -523,8 +650,9 @@ class ScriptDebugger:
                         'line.' % STEP_LIMIT)
 
     def _step_out(self, stop, here):
-        self.eval.filter(SELECTORS['none'], 0)
-        self.eval.hold(compile_predicate('1')['hex'])
+        with self.lock:
+            self.eval.filter(SELECTORS['none'], 0)
+            self.eval.hold(compile_predicate('1')['hex'])
         try:
             cur, last = stop, here['offset']
             for _ in range(STEP_LIMIT):
@@ -565,10 +693,15 @@ class ScriptDebugger:
                                skipped=self.skipped)
         self.dbg._resume(stop, 'run')         # the hold's condition (the breaks) decides the next stop
         new = self._await_ours(stop['seq'])
+        new = self._settle(new, wait=True) if new is not None else None
         if new is None:
-            return verdict('Running: no break was reached within %d s.' % STOP_WAIT,
-                           'The next break stops the game; status shows it.', state='running')
-        return self._view(self._settle(new) or new)
+            note = 'The next break stops the game; status shows it.'
+            if self.refused:
+                note = ('%d stops were passed on (their condition was false, or they were inside save/load); the game '
+                        'runs on. ' % self.refused) + note
+            return verdict('Running: no break was reached within %d s.' % STOP_WAIT, note, state='running',
+                           skipped=self.skipped, refused=self.refused)
+        return self._view(new)
 
     def freeze(self):
         if self.saved_scripts is not None:
@@ -578,14 +711,22 @@ class ScriptDebugger:
             raise ConvError('UNEXPECTED_VALUE', 'The process-scripts byte is %s, not 0 or 1; refusing to change it.' % prev)
         self._set_byte(0)
         self.saved_scripts = prev
+        self._persist()
         return verdict('Scripts are off: the frame no longer runs them.', 'Call thaw before continuing a long run.',
                        state='frozen', previous=prev)
 
     def thaw(self):
         if self.saved_scripts is None:
+            if self._byte() == 0:
+                # Nothing on record (a freeze from before a restart without a state file, or another tool), yet scripts
+                # are off: the byte is 1 whenever the game runs scripts, so thaw sets it.
+                self._set_byte(1)
+                return verdict('Scripts run again.', 'Nothing was on record as frozen, but the process-scripts byte was '
+                               '0: it was set to 1.', state='running', restored=1, forced=True)
             return verdict('Scripts were not frozen by the debugger.', None, state='running')
         self._set_byte(self.saved_scripts)
         prev, self.saved_scripts = self.saved_scripts, None
+        self._persist()
         return verdict('Scripts run again.', None, state='running', restored=prev)
 
     def _byte(self):
@@ -777,4 +918,75 @@ def _where(b):
 
 def _public(b):
     keep = ('number', 'script', 'scriptName', 'line', 'statement', 'opcode', 'when')
-    return {k: b.get(k) for k in keep}
+    out = {k: b.get(k) for k in keep}
+    if b.get('varWhen'):
+        out['when'] = b['varWhen']
+        out['whenChecked'] = 'by the bridge at each stop (script variables)'
+    return out
+
+
+PRED_WORDS = {'and', 'or', 'not', 'frame', 'main', 'this', 'reg', 'eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi',
+              'edi', 'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32'}
+_BIN = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv}
+_CMP = {ast.Eq: operator.eq, ast.NotEq: operator.ne, ast.Lt: operator.lt, ast.LtE: operator.le, ast.Gt: operator.gt,
+        ast.GtE: operator.ge}
+
+
+def var_names(text):
+    """The identifiers of a `when` that are not predicate words (argN, this, reg, types, and/or/not, frame...).
+    Number literals (0x0C, 12, 1.5) are dropped first, or the x of a hex literal would read as a name."""
+    text = re.sub(r'(?<![\w.])(?:0[xX][0-9A-Fa-f]+|\d+(?:\.\d+)?)(?!\w)', ' ', text or '')
+    return {n for n in re.findall(r'[A-Za-z_]\w*', text) if n.lower() not in PRED_WORDS
+            and not re.fullmatch(r'arg\d{1,3}', n.lower())}
+
+
+def compile_var_when(text):
+    """Parse a variable condition (names, numbers, + - * /, comparisons, and/or/not, parentheses) into a checked
+    expression tree. Raises ConvError on anything else."""
+    try:
+        tree = ast.parse(text.replace('&&', ' and ').replace('||', ' or '), mode='eval')
+    except SyntaxError as exc:
+        raise ConvError('BAD_PREDICATE', 'The condition %r does not parse (%s). Next: use names, numbers, comparisons '
+                        'and and/or/not.' % (text, exc.msg))
+    allowed = (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not, ast.USub, ast.BinOp, ast.Compare,
+               ast.Name, ast.Load, ast.Constant) + tuple(_BIN) + tuple(_CMP)
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed) or (isinstance(node, ast.Constant) and not isinstance(node.value, (int, float))):
+            raise ConvError('BAD_PREDICATE', 'The condition %r uses %s; only names, numbers, + - * /, comparisons and '
+                            'and/or/not are allowed.' % (text, type(node).__name__))
+    return tree
+
+
+def eval_var_when(tree, values):
+    """Evaluate a compiled condition with {lower-case name: value}; an unknown name raises ConvError."""
+    def ev(node):
+        if isinstance(node, ast.Expression):
+            return ev(node.body)
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            key = node.id.lower()
+            if key not in values:
+                raise ConvError('NO_SUCH_VARIABLE', 'The condition names %s, which the script does not have.' % node.id)
+            return values[key]
+        if isinstance(node, ast.UnaryOp):
+            v = ev(node.operand)
+            return (not v) if isinstance(node.op, ast.Not) else -v
+        if isinstance(node, ast.BinOp):
+            return _BIN[type(node.op)](ev(node.left), ev(node.right))
+        if isinstance(node, ast.BoolOp):
+            vals = [ev(v) for v in node.values]
+            return all(vals) if isinstance(node.op, ast.And) else any(vals)
+        if isinstance(node, ast.Compare):
+            left = ev(node.left)
+            for op, right in zip(node.ops, node.comparators):
+                r = ev(right)
+                if not _CMP[type(op)](left, r):
+                    return False
+                left = r
+            return True
+        raise ConvError('BAD_PREDICATE', 'Unsupported condition element %s.' % type(node).__name__)
+    try:
+        return bool(ev(tree))
+    except (ZeroDivisionError, OverflowError, ValueError):
+        return False        # a condition that cannot be computed (a / 0) does not hold

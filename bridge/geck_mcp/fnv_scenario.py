@@ -26,6 +26,7 @@ import copy
 import json
 import math
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -52,13 +53,22 @@ class ScenarioError(Exception):
 
 
 # ====================================================================== YAML subset
+def _starts_scalar(line, i):
+    """A quote opens a quoted scalar only where a scalar starts (line start, or after ':', '-', ',', '[' or '{'),
+    not as an apostrophe inside plain text (MessageBox Mitchell's)."""
+    j = i - 1
+    while j >= 0 and line[j] == ' ':
+        j -= 1
+    return j < 0 or line[j] in ':-,[{'
+
+
 def _strip_comment(line):
     quote = None
     for i, c in enumerate(line):
         if quote:
             if c == quote:
                 quote = None
-        elif c in '"\'':
+        elif c in '"\'' and _starts_scalar(line, i):
             quote = c
         elif c == '#' and (i == 0 or line[i - 1] in ' \t'):
             return line[:i].rstrip()
@@ -71,7 +81,13 @@ def _scalar(text):
         return None
     if text[0] in '"\'' and text[-1] == text[0] and len(text) > 1:
         body = text[1:-1]
-        return body.replace("''", "'") if text[0] == "'" else json.loads('"%s"' % body.replace('\\\'', '\''))
+        if text[0] == "'":
+            return body.replace("''", "'")
+        try:
+            return json.loads('"%s"' % body.replace('\\\'', '\''))
+        except ValueError as e:
+            raise ScenarioError('YAML', 'Bad escape in the double-quoted text %s (%s); use single quotes for a '
+                                'Windows path' % (text, e))
     lowered = text.lower()
     if lowered in ('true', 'yes', 'on'):
         return True
@@ -83,7 +99,7 @@ def _scalar(text):
         return text   # leading zero: a form id (00138562), kept as written
     if re.fullmatch(r'[-+]?\d+', text):
         return int(text)
-    if re.fullmatch(r'[-+]?(\d+\.\d*|\.\d+|\d+)([eE][-+]?\d+)?', text):
+    if re.fullmatch(r'[-+]?(\d+\.\d*|\.\d+)([eE][-+]?\d+)?', text):    # 1E5 stays text (an id, not a float)
         return float(text)
     if re.fullmatch(r'0x[0-9A-Fa-f]+', text):
         return text
@@ -425,19 +441,28 @@ class ScenarioRunner:
         except (GameError, LinkError, ScenarioError) as e:
             report['failures'].append({'phase': 'prepare', 'reason': str(e), 'code': getattr(e, 'code', None),
                                        'evidence': getattr(e, 'evidence', None)})
-        if not report['crash']:
-            for number, step in enumerate(scenario.get('teardown') or [], 1):
-                try:
-                    result = self.step(step, None)
-                except _Crash as crash:
-                    report['crash'] = crash.diagnosis
-                    break
-                result['step'] = number
-                report['teardown'].append(result)
-        if deterministic:
-            self._settle()
-        if not report['crash']:
-            self.game.stop_task(unpause)
+        except Exception as e:  # noqa: BLE001 - LiveError, HookError, ValueError...: still clean up and report
+            report['failures'].append({'phase': 'prepare', 'reason': '%s: %s' % (type(e).__name__, e),
+                                       'code': getattr(e, 'code', None), 'evidence': getattr(e, 'evidence', None)})
+        try:
+            if not report['crash']:
+                for number, step in enumerate(scenario.get('teardown') or [], 1):
+                    try:
+                        result = self.step(step, None)
+                    except _Crash as crash:
+                        report['crash'] = crash.diagnosis
+                        break
+                    result['step'] = number
+                    report['teardown'].append(result)
+        except Exception as e:  # noqa: BLE001 - a broken teardown must not skip the cleanup below
+            report['failures'].append({'phase': 'teardown', 'reason': '%s: %s' % (type(e).__name__, e)})
+        finally:
+            try:
+                if deterministic:
+                    self._settle()
+            finally:
+                if not report['crash']:
+                    self.game.stop_task(unpause)
         if not report['passed'] and not report['crash'] and not (report.get('debug') or {}).get('screenshot'):
             report['screenshot'] = self.screenshot(scenario['name'])
         report['seconds'] = round(time.time() - started, 1)
@@ -1034,7 +1059,7 @@ class ScenarioRunner:
             if not found:
                 return None
             safe = re.sub(r'[^A-Za-z0-9_-]+', '_', name)[:60]
-            path = Path(self.live.project.state_dir) / 'fnv/test-screens' / ('%s-%d.png' % (safe, time.time()))
+            path = Path(self.live.project.state_dir) / 'fnv/test-screens' / ('%s-%s.png' % (safe, _stamp()))
             shot = wincapture.capture({'hwnd': found[0]}, path)
             return {'path': shot['path'], 'blank': shot['blank']}
         except Exception as e:  # evidence is best effort
@@ -1044,9 +1069,21 @@ class ScenarioRunner:
         folder = Path(self.live.project.state_dir) / 'fnv/test-reports'
         folder.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r'[^A-Za-z0-9_-]+', '_', report['name'])[:60]
-        path = folder / ('%s-%d.json' % (safe, time.time()))
+        path = folder / ('%s-%s.json' % (safe, _stamp()))
         path.write_text(json.dumps(report, indent=2, default=str) + '\n', encoding='utf-8')
         report['report'] = str(path)
+
+
+_stamp_lock = threading.Lock()
+_stamp_count = [0]
+
+
+def _stamp():
+    """A file name part unique within the process: whole seconds plus a counter, so reports and screenshots made in
+    the same second (repeat runs, the aggregate report) never overwrite each other."""
+    with _stamp_lock:
+        _stamp_count[0] += 1
+        return '%d-%03d' % (time.time(), _stamp_count[0] % 1000)
 
 
 def _truthy(arg):

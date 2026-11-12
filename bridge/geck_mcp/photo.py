@@ -13,13 +13,23 @@ Flow of geck_actor_photo (resumable; call it again with the same subject until s
 import hashlib
 import json
 import math
+import os
+import uuid
 from pathlib import Path
+import sys
 import time
 
 from .authoring import Authoring, AuthoringError
 from .config import Project
 from .transport import BridgeError
 from . import imaging
+
+
+
+def platform_supported():
+    """The capture and window lister in imaging.py are macOS-only."""
+    return sys.platform == 'darwin'
+
 
 PLUGIN = 'GeckPhotoStudio.esp'
 CELL = 'GeckPhotoStudio'
@@ -110,6 +120,10 @@ class PhotoStudio:
     # -- main entry ---------------------------------------------------------------------------
     def photo(self, subject, rotation=180, pitch=DEFAULT_PITCH, fill=0.86, lighting='auto', render_size=None):
         started = time.monotonic()
+        if not platform_supported():
+            raise BridgeError('UNSUPPORTED_PLATFORM', 'geck_actor_photo captures the GECK render window with '
+                              'macOS tools (screencapture, Swift) and cannot run on this operating system. Nothing was '
+                              'loaded into GECK. Use geck_render_capture for a render-window image on Windows.')
         actor = self.resolve(subject)
         spec = self.spec_for(actor['editorId'], rotation)
         text = json.dumps(spec, indent=1) + '\n'
@@ -197,7 +211,9 @@ class PhotoStudio:
             # Deselect before measuring: the selection box lines would inflate the subject's box.
             svc.call('render.steps', CELL, 'realclick:6:%d;sleep:300;redraw' % (client[1] - 6), session=session)
             window = imaging.render_window(CELL)
-            work = self.folder / 'work'
+            # A folder per call, so two photos never overwrite each other's fit and raw frames.
+            work = self.folder / 'work' / ('%d-%s' % (os.getpid(), uuid.uuid4().hex[:8]))
+            work.mkdir(parents=True, exist_ok=True)
             chosen = lighting
             if lighting == 'auto':
                 # GECK toggles between a dark cell-lit view and a bright editor light with "A"; keep the brighter.
@@ -213,7 +229,7 @@ class PhotoStudio:
                 raise BridgeError('FRAMING_FAILED', 'Could not frame the subject automatically', fit)
             # Let FaceGen textures settle and force a redraw before the final capture.
             svc.call('render.steps', CELL, 'sleep:1500;redraw;sleep:300', session=session)
-            stamp = time.strftime('%Y%m%d-%H%M%S')
+            stamp = '%s-%s' % (time.strftime('%Y%m%d-%H%M%S'), uuid.uuid4().hex[:6])  # unique within a second
             self.output_dir.mkdir(parents=True, exist_ok=True)
             raw = imaging.capture_window(window['id'], work / 'final-raw.png')
             np, Image = imaging._np()

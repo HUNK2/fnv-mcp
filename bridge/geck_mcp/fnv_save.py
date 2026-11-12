@@ -22,6 +22,7 @@ CHANGE_TYPES = ['REFR', 'ACHR', 'ACRE', 'PMIS', 'PGRE', 'PBEA', 'PFLA', 'CELL', 
                 'CSNO', 'LSCT', 'CHAL', 'AMEF', 'CCRD', 'CMNY', 'CDCK']
 REF_TYPES = {'REFR', 'ACHR', 'ACRE', 'PMIS', 'PGRE', 'PBEA', 'PFLA'}
 ACTOR_TYPES = {'ACHR', 'ACRE'}
+PROJECTILE_TYPES = {'PMIS', 'PGRE', 'PBEA', 'PFLA'}
 
 GLOBAL_TYPES = {0: 'misc stats', 1: 'player location', 2: 'TES (grid and cells)', 3: 'global variables',
                 4: 'created objects', 5: 'combat', 6: 'interface', 7: 'image-space modifiers', 8: 'sky and weather',
@@ -133,7 +134,10 @@ class Buffer:
     def count(self):
         if self.p >= len(self.b):
             raise SaveFormatError('buffer ended at byte %d' % self.p)
-        size = (1, 2, 4)[self.b[self.p] & 3]
+        selector = self.b[self.p] & 3
+        if selector == 3:
+            raise SaveFormatError('bad count size selector 3 at byte %d' % self.p)
+        size = (1, 2, 4)[selector]
         return int.from_bytes(self.raw(size), 'little') >> 2
 
     def string(self):
@@ -148,8 +152,22 @@ def fid(v):
     return None if v is None else '%08X' % v
 
 
+def width_max(tbyte):
+    return (1, 2, 4, 4)[tbyte >> 6]
+
+
 class Save:
     def __init__(self, path):
+        try:
+            self._parse(path)
+        except SaveFormatError:
+            raise
+        except (IndexError, struct.error, ValueError, UnicodeDecodeError) as e:
+            # a truncated save (an autosave still being written) or a damaged one: one clear error
+            raise SaveFormatError('%s could not be read (%s: %s); it may be truncated or still being written'
+                                  % (Path(path).name, type(e).__name__, e))
+
+    def _parse(self, path):
         self.path = Path(path)
         data = self.path.read_bytes()
         if data[:11] != MAGIC:
@@ -192,6 +210,9 @@ class Save:
             three = d[p:p + 3]
             flags, tbyte, version = struct.unpack_from('<IBB', d, p + 3)
             p += 9
+            if tbyte >> 6 == 3 or p + width_max(tbyte) > len(d):
+                raise SaveFormatError('change form %d: bad length selector or truncated save at byte %d'
+                                      % (len(out), p))
             width = (1, 2, 4)[tbyte >> 6]
             length = int.from_bytes(d[p:p + width], 'little')
             p += width
@@ -272,12 +293,48 @@ class Save:
             out['quest'] = self._quest(r, change['flags'], change['version'])
             out['complete'] = r.done()
         elif change['type'] not in ACTOR_TYPES and change['type'] in REF_TYPES and change['flags'] & 1:
+            # References with initial data (kinds 4-6) and projectiles carry the Havok state before the form flags:
+            # spaced single bytes, then for a body that was moving 12- or 16-byte float blocks (real saves:
+            # '|00|29000000|', '|10|02|04|49000000|', '|88|02|08|<12>|<16>|49000000|', projectiles '|ff|...'; a bottle
+            # disabled mid-flight saved '|78|03|04|<velocity 12>|<angular velocity 12>|0b080000|' and its live form
+            # flags were 0x80B). Read them first.
+            if kind in (4, 5, 6) or change['type'] in PROJECTILE_TYPES:
+                extra, blocks = self._havok_prefix(r)
+                if extra:
+                    out['extraBytes'] = extra
+                if blocks:
+                    out['havokBlocks'] = blocks
             out['formFlags'] = '%08X' % r.u32()
             if change['flags'] & 0x10:
                 out['scale'] = round(r.f32(), 4)
         elif change['type'] not in REF_TYPES and change['flags'] & 1:
             out['formFlags'] = '%08X' % r.u32()
         return out
+
+    @staticmethod
+    def _havok_prefix(r):
+        """The spaced Havok state before a reference's form flags: single bytes and 12/16-byte float blocks, read
+        until the next item is the u32 form flags (4 bytes then '|'). A byte followed by '|' is a single byte unless
+        the same position also reads as a u32 whose spacer is in place and the single-byte reading would not be
+        followed by one."""
+        b, extra, blocks = r.b, [], []
+        n = len(b)
+
+        def spacer(at):
+            return at < n and b[at] == 0x7C
+
+        for _ in range(16):
+            p = r.p
+            as_u32 = spacer(p + 4)
+            if spacer(p + 1) and (not as_u32 or spacer(p + 6)):
+                extra.append(r.u8())
+            elif not as_u32 and spacer(p + 12):
+                blocks.append([round(v, 4) for v in struct.unpack('<3f', r.raw(12))])
+            elif not as_u32 and spacer(p + 16):
+                blocks.append([round(v, 4) for v in struct.unpack('<4f', r.raw(16))])
+            else:
+                break
+        return extra, blocks
 
     def _initial(self, kind, block, r):
         info = {'kind': INITIAL_KINDS[kind]}
@@ -358,13 +415,18 @@ class Namer:
                                          (save.plugins[high].lower(), form & 0xFFFFFF)).fetchone()
         return row[0] if row else None
 
-    def variables(self, form):
+    def variables(self, save, form):
         """{index: name} of the quest's script, from its SCRI script record (SLSD index, then SCVR name)."""
-        if form in self._vars:
-            return self._vars[form]
+        key = (tuple(save.plugins), form)
+        if key in self._vars:
+            return self._vars[key]
         names = {}
         try:
-            quest = self.data.record_show('%08X' % form, all_versions=False)
+            # The save's own plugin list says which plugin the top byte means (the load order may have changed)
+            high = form >> 24
+            if high >= len(save.plugins):
+                raise LookupError('form %08X has no plugin in the save' % form)
+            quest = self.data.record_show('%s:%06X' % (save.plugins[high], form & 0xFFFFFF), all_versions=False)
             script = next((f['form']['formId'] for f in quest['fields'] if f['tag'] == 'SCRI' and f.get('form')), None)
             if script:
                 index = None
@@ -376,7 +438,7 @@ class Namer:
                         index = None
         except Exception:
             pass
-        self._vars[form] = names
+        self._vars[key] = names
         return names
 
 
@@ -399,7 +461,7 @@ def summarise_change(save, change, decode=True, namer=None):
         except SaveFormatError as e:
             out['decodeError'] = str(e)
         if namer and change['type'] == 'QUST':
-            _name_variables(out, namer.variables(change['form']))
+            _name_variables(out, namer.variables(save, change['form']))
     return out
 
 
@@ -483,7 +545,7 @@ def diff(path_a, path_b, types=None, forms=None, limit=200, namer=None):
         try:
             body_a, body_b = a.decode(ca), b.decode(cb)
             if namer and key[1] == 'QUST':
-                names = namer.variables(cb['form'])
+                names = namer.variables(b, cb['form'])
                 _name_variables(body_a, names)
                 _name_variables(body_b, names)
             fields = _diff_values(body_a, body_b)

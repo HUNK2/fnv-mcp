@@ -13,8 +13,10 @@ engine's own functions. Kinds as everywhere: read (changes nothing), act (journa
   fnv_spawn          act      place a form near a ref and return the new refs; undoable
 """
 import json
+import math
 import re
 import struct
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -520,7 +522,7 @@ class AgentTools:
         folder = Path(self.live.project.state_dir) / 'fnv/screens'
         folder.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r'[^A-Za-z0-9_-]+', '_', name or 'screen')[:60]
-        stamp = time.strftime('%Y%m%d-%H%M%S')
+        stamp = '%s-%03d' % (time.strftime('%Y%m%d-%H%M%S'), _next_shot())
         png = folder / ('%s-%s.png' % (safe, stamp))
         tried = []
         if method in ('auto', 'engine'):
@@ -531,10 +533,16 @@ class AgentTools:
                 ok, why = False, str(e)
             tried.append({'method': 'engine SaveScreenshot', 'ok': ok, 'detail': why})
             if ok:
-                image = Image.open(bmp)
-                image.load()
+                try:
+                    image = Image.open(bmp)
+                    image.load()
+                except Exception as e:  # a truncated file: fall back to the window capture
+                    ok, why = False, 'the BMP could not be read: %s' % str(e)[:120]
+                    tried[-1].update(ok=False, detail=why)
+                    image = None
                 bmp.unlink(missing_ok=True)
-                return self._finish(image, png, max_width, 'engine back buffer (SaveScreenshot 0x00878860)', tried)
+                if image is not None:
+                    return self._finish(image, png, max_width, 'engine back buffer (SaveScreenshot 0x00878860)', tried)
             if method == 'engine':
                 raise LiveError('ENGINE_CAPTURE_FAILED', 'The engine could not capture the back buffer: %s' % why,
                                 {'tried': tried})
@@ -544,7 +552,7 @@ class AgentTools:
             raise LiveError('CAPTURE_FAILED', 'No screenshot could be taken', {'tried': tried})
         image = Image.open(shot['path'])
         image.load()
-        out = self._finish(image, png, max_width, 'window capture', tried)
+        out = self._finish(image, png, max_width, 'window capture (%s)' % (shot.get('method') or 'unknown'), tried)
         out['blank'] = shot.get('blank')
         if shot.get('blank'):
             out['note'] = ('The window capture is blank: the game window is covered, minimised or does not draw '
@@ -566,9 +574,16 @@ class AgentTools:
         result = self.link.one('call', word(SAVE_SCREENSHOT), 'v', '0', '0', word(text), timeout=15)
         if not result.get('ok'):
             return False, 'call refused: %s' % result.get('error')
-        for _ in range(20):
+        for _ in range(30):
             if path.exists() and path.stat().st_size > 54:
-                return True, 'ok'
+                # Done when the size matches the BMP header's bfSize (a half-written file is shorter).
+                try:
+                    with open(path, 'rb') as f:
+                        head = f.read(6)
+                    if head[:2] == b'BM' and path.stat().st_size >= struct.unpack('<I', head[2:6])[0]:
+                        return True, 'ok'
+                except OSError:
+                    pass
             time.sleep(0.1)
         return False, ('no file written: the device refused to lock the back buffer (multisampling on, or '
                        'bAllowScreenShot=0 at startup)')
@@ -742,6 +757,11 @@ class AgentTools:
         self.live.changing('move %s' % ref)
         pid = self.game.process()[0]
         outputs = []
+        # Journaled before the first line runs: a timeout or a failure half way still leaves it undoable.
+        undo_lines = self._undo_place(before)
+        entry = self.live.journal.add({'kind': 'move', 'ref': r['formId'], 'lines': lines, 'before': before,
+                                       'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': undo_lines}
+                                       if undo_lines else None})
         if wait and (cell or to):
             # The cell change runs after the reply: queue it, then wait for gameplay.
             for line in lines:
@@ -760,10 +780,6 @@ class AgentTools:
                 outputs.append({'line': line, 'ok': result['accepted'], 'output': result['output'][:5]})
             ready = None
         after = self._place(r)
-        undo_lines = self._undo_place(before)
-        entry = self.live.journal.add({'kind': 'move', 'ref': r['formId'], 'lines': lines, 'before': before,
-                                       'undo': {'op': 'console_ref', 'ref': r['formId'], 'lines': undo_lines}
-                                       if undo_lines else None})
         moved = None
         if before.get('position') and after.get('position') and before['cell'] == after['cell']:
             moved = round(sum((after['position'][a] - before['position'][a]) ** 2 for a in 'xyz') ** 0.5, 1)
@@ -791,27 +807,53 @@ class AgentTools:
             raise ValueError('count is 1..20')
         base = self.live.resolve(form) if not hasattr(self.live, 'base_form') else self.live.base_form(form)
         anchor = self.live.resolve(near)
+        distance, direction = int(distance), int(direction)
+        want = self._spawn_spot(anchor['ptr'], distance, direction) if distance else None
         self.live.changing('spawn %s' % form)
         made = []
         for _ in range(int(count)):
             result = self.link.eval('PlaceAtMe %s 1 %d %d' % (base['formId'] if base.get('formId') else base['expr'],
-                                                              int(distance), int(direction)), anchor['ptr'])
+                                                              distance, direction), anchor['ptr'])
             element = result.get('result') or {}
             if not result.get('ok') or element.get('type') != 'form' or not element.get('ptr'):
-                raise LiveError('SPAWN_FAILED', 'PlaceAtMe did not return a reference', {'result': result, 'made': made})
-            made.append({'ptr': int(element['ptr'], 16), 'formId': element.get('formId')})
+                raise LiveError('SPAWN_FAILED', 'PlaceAtMe did not return a reference',
+                                {'result': result, 'made': made})
+            # Journaled at once: a later failure must not leave refs that fnv_undo cannot remove.
+            entry = self.live.journal.add({'kind': 'spawn', 'base': base.get('formId'), 'ref': element.get('formId'),
+                                           'near': anchor['formId'],
+                                           'undo': {'op': 'console_ref', 'ref': element.get('formId'),
+                                                    'lines': ['Disable', 'MarkForDelete']}})
+            made.append({'ptr': int(element['ptr'], 16), 'formId': element.get('formId'), 'journalId': entry['id']})
         refs = []
         for m in made:
-            entry = self.live.journal.add({'kind': 'spawn', 'base': base.get('formId'), 'ref': m['formId'],
-                                           'near': anchor['formId'],
-                                           'undo': {'op': 'console_ref', 'ref': m['formId'],
-                                                    'lines': ['Disable', 'MarkForDelete']}})
-            v = self.live.values(['GetPos X', 'GetPos Y', 'GetPos Z', 'GetDistance player', 'GetName'], m['ptr'])
-            refs.append({'ref': m['formId'], 'ptr': '0x%08X' % m['ptr'], 'name': v[4],
-                         'position': {'x': v[0], 'y': v[1], 'z': v[2]}, 'distanceToPlayer': v[3],
-                         'journalId': entry['id']})
+            moved = None
+            probe = ['GetPos X', 'GetPos Y', 'GetPos Z', 'GetDistance %s' % anchor['formId'], 'GetName',
+                     'GetDistance player']
+            v = self.live.values(probe, m['ptr'])
+            if want and (v[3] is None or float(v[3]) < 0.5 * distance):
+                # The engine put it on the anchor (PlaceAtMe's distance was not applied): move it to the spot.
+                for axis, value in zip('XYZ', want):
+                    self.live.console('SetPos %s %s' % (axis, value), m['ptr'])
+                v = self.live.values(probe, m['ptr'])
+                moved = True
+            row = {'ref': m['formId'], 'ptr': '0x%08X' % m['ptr'], 'name': v[4],
+                   'position': {'x': v[0], 'y': v[1], 'z': v[2]}, 'distanceToPlayer': v[5],
+                   'distanceToAnchor': v[3], 'journalId': m['journalId']}
+            if distance:
+                row['placedAtDistance'] = v[3] is not None and abs(float(v[3]) - distance) <= max(5.0, 0.1 * distance)
+                if moved:
+                    row['movedAfterPlacing'] = True
+            refs.append(row)
         return {'base': base.get('formId'), 'near': anchor['formId'], 'refs': refs, 'count': len(refs),
                 'note': 'fnv_undo or fnv_revert_all disables and deletes the spawned refs.'}
+
+    def _spawn_spot(self, ptr, distance, direction):
+        """Where PlaceAtMe's distance/direction point from the anchor: direction 0 front, 1 back, 2 left, 3 right
+        (relative to the anchor's heading, GetAngle Z in degrees clockwise from north)."""
+        x, y, z, heading = self.live.values(['GetPos X', 'GetPos Y', 'GetPos Z', 'GetAngle Z'], ptr)
+        angle = math.radians((float(heading or 0) + {0: 0, 1: 180, 2: 270, 3: 90}.get(int(direction) % 4, 0)))
+        return (round(float(x) + distance * math.sin(angle), 3), round(float(y) + distance * math.cos(angle), 3),
+                float(z))
 
 
     # ================================================================== fnv_condition_eval
@@ -1466,12 +1508,18 @@ class AgentTools:
         # The function counts player+0x654 (sleep/wait hours) down and full-heals when it reaches 0: keep it above.
         ops = [('wr', word(player + 0x654), struct.pack('<i', n + 2).hex())]
         ops += [('call', word(self.WAIT_ONE_HOUR), 'v', word(player), '0') for _ in range(n)]
-        ops.append(('wr', word(player + 0x654), struct.pack('<i', counter).hex()))
-        results = []
-        for chunk in _chunks(ops, 26):
-            results += self.link.batch(chunk, timeout=60)
-        failed = [r for r in results if not r.get('ok')]
         entry = self.live.journal.add({'kind': 'time', 'hours': n, 'how': 'engine_wait', 'undo': None})
+        results = []
+        try:
+            for chunk in _chunks(ops, 26):
+                results += self.link.batch(chunk, timeout=60)
+        finally:
+            # The counter goes back even when a chunk in the middle fails (a separate write, so it always runs).
+            try:
+                self.link.batch([('wr', word(player + 0x654), struct.pack('<i', counter).hex())], timeout=60)
+            except Exception:  # noqa: BLE001 - the original error is the one to report
+                pass
+        failed = [r for r in results if not r.get('ok')]
         return {'advancedHours': n, 'how': 'engine_wait (0x0094DF80 x %d)' % n, 'failedOps': len(failed),
                 'journalId': entry['id']}
 
@@ -1599,7 +1647,7 @@ def window_capture(game, path):
         if not found:
             return {'error': 'no visible game window'}
         shot = wincapture.capture({'hwnd': found[0]}, path)
-        return {'path': shot['path'], 'blank': shot['blank']}
+        return {'path': shot['path'], 'blank': shot['blank'], 'method': shot.get('method')}
     except Exception as e:  # evidence is best effort
         return {'error': str(e)}
 
@@ -1614,6 +1662,17 @@ MENU_NAMES = {1001: 'MessageMenu', 1002: 'InventoryMenu', 1003: 'StatsMenu', 100
               1074: 'LoveTesterMenu', 1075: 'CompanionWheelMenu', 1076: 'TraitSelectMenu', 1077: 'RecipeMenu',
               1080: 'SlotMachineMenu', 1081: 'BlackJackMenu', 1082: 'RouletteMenu', 1083: 'CaravanMenu',
               1084: 'TraitMenu'}
+
+
+_shot_lock = threading.Lock()
+_shot_count = [0]
+
+
+def _next_shot():
+    """A counter for file names, so two screenshots in the same second never share a name."""
+    with _shot_lock:
+        _shot_count[0] += 1
+        return _shot_count[0] % 1000
 
 
 def _chunks(items, n):

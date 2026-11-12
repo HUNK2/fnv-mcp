@@ -18,6 +18,7 @@ import json
 import re
 import sqlite3
 import struct
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -121,11 +122,24 @@ def plugin_masters(path):
 
 
 # ===================================================================================== record index
+_ENSURE_LOCKS = {}
+_ENSURE_LOCKS_GUARD = threading.Lock()
+
+
+def _ensure_lock(path):
+    """One lock per plugin path, shared by every RecordIndex in this process: two parallel first uses of a plugin
+    index it once (the second waits, then finds the fresh row)."""
+    key = str(path).lower()
+    with _ENSURE_LOCKS_GUARD:
+        return _ENSURE_LOCKS.setdefault(key, threading.Lock())
+
+
 class RecordIndex:
     def __init__(self, state_dir):
         path = Path(state_dir) / 'fnv' / 'records.sqlite'
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path))
+        self._path = path
+        self._local = threading.local()
         self.db.executescript('''
             create table if not exists files(id integer primary key, path text unique, name text, size integer,
                 mtime real, version integer, masters text, records integer, built real);
@@ -136,27 +150,80 @@ class RecordIndex:
             create index if not exists records_file on records(file);
         ''')
 
-    def ensure(self, path):
-        """Index a plugin file unless the cached index matches its size and time. Returns its file id."""
-        path = Path(path)
-        st = path.stat()
+    @property
+    def db(self):
+        """This thread's connection. The MCP server runs tools on worker threads, and a SQLite connection may
+        only be used by the thread that opened it, so each thread opens its own on the same file."""
+        db = getattr(self._local, 'db', None)
+        if db is None:
+            db = self._local.db = sqlite3.connect(str(self._path), timeout=30)
+        return db
+
+    def _fresh(self, path, st):
         row = self.db.execute('select id, size, mtime, version from files where path = ?', (str(path),)).fetchone()
         if row and row[1] == st.st_size and abs(row[2] - st.st_mtime) < 1e-3 and row[3] == INDEX_VERSION:
-            return row[0]
-        if row:
-            self.db.execute('delete from records where file = ?', (row[0],))
-            self.db.execute('delete from files where id = ?', (row[0],))
-        masters, rows = scan_plugin(path)
-        cur = self.db.execute('insert into files(path, name, size, mtime, version, masters, records, built) '
-                              'values (?, ?, ?, ?, ?, ?, ?, ?)', (str(path), path.name, st.st_size, st.st_mtime,
-                                                                  INDEX_VERSION, json.dumps(masters), len(rows), time.time()))
-        file_id = cur.lastrowid
-        own = masters + [path.name]
-        self.db.executemany('insert into records values (?, ?, ?, ?, ?, ?, ?, ?)',
-                            ((file_id, own[min(fid >> 24, len(own) - 1)].lower(), fid & 0xFFFFFF, rtype, edid, full, off, flags)
-                             for fid, rtype, edid, full, off, flags in rows))
-        self.db.commit()
-        return file_id
+            return row[0], row
+        return None, row
+
+    def ensure(self, path):
+        """Index a plugin file unless the cached index matches its size and time. Returns its file id.
+
+        Serialized per path; the plugin is scanned before any write, and the delete + insert run in one
+        transaction that rolls back on any error, so a failed rebuild never leaves this thread's connection
+        holding the write lock. A rebuilt plugin gets a new file id (never a reused one) and the old id's
+        reference rows go with it: the refs index is keyed by file id."""
+        path = Path(path)
+        st = path.stat()
+        file_id, row = self._fresh(path, st)
+        if file_id is not None:
+            return file_id
+        with _ensure_lock(path):
+            st = path.stat()
+            file_id, row = self._fresh(path, st)
+            if file_id is not None:
+                return file_id
+            masters, rows = scan_plugin(path)
+            db = self.db
+            if db.in_transaction:  # never build on top of a transaction an earlier failure left open
+                db.rollback()
+            try:
+                with db:
+                    if row:
+                        db.execute('delete from records where file = ?', (row[0],))
+                        db.execute('delete from files where id = ?', (row[0],))
+                        self._drop_refs(db, row[0])
+                    next_id = max(db.execute('select coalesce(max(id), 0) from files').fetchone()[0],
+                                  self._last_id(db)) + 1
+                    db.execute('insert into files(id, path, name, size, mtime, version, masters, records, built) '
+                               'values (?, ?, ?, ?, ?, ?, ?, ?, ?)', (next_id, str(path), path.name, st.st_size,
+                                                                      st.st_mtime, INDEX_VERSION, json.dumps(masters),
+                                                                      len(rows), time.time()))
+                    self._set_last_id(db, next_id)
+                    own = masters + [path.name]
+                    db.executemany('insert into records values (?, ?, ?, ?, ?, ?, ?, ?)',
+                                   ((next_id, own[min(fid >> 24, len(own) - 1)].lower(), fid & 0xFFFFFF, rtype, edid,
+                                     full, off, flags) for fid, rtype, edid, full, off, flags in rows))
+            except Exception:
+                if db.in_transaction:
+                    db.rollback()
+                raise
+            return next_id
+
+    @staticmethod
+    def _drop_refs(db, file_id):
+        for table in ('refs', 'ref_files'):
+            if db.execute("select 1 from sqlite_master where type = 'table' and name = ?", (table,)).fetchone():
+                db.execute('delete from %s where file = ?' % table, (file_id,))
+
+    @staticmethod
+    def _last_id(db):
+        db.execute('create table if not exists meta(key text primary key, value integer)')
+        row = db.execute("select value from meta where key = 'last_file_id'").fetchone()
+        return row[0] if row else 0
+
+    @staticmethod
+    def _set_last_id(db, value):
+        db.execute("insert or replace into meta values ('last_file_id', ?)", (value,))
 
     def file(self, file_id):
         row = self.db.execute('select path, name, masters from files where id = ?', (file_id,)).fetchone()
@@ -277,8 +344,9 @@ class DataTools:
             clauses.append('owner = ? and local = ?')
             args += [local.group(1).lower(), int(local.group(2), 16)]
         elif q:
-            clauses.append('(edid like ? or full like ?)')
-            args += ['%' + q.replace('%', '') + '%'] * 2
+            clauses.append("(edid like ? escape '\\' or full like ? escape '\\')")
+            pattern = q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            args += ['%' + pattern + '%'] * 2
         if record_type:
             clauses.append('type = ?')
             args.append(record_type.upper())
@@ -310,7 +378,13 @@ class DataTools:
         local = re.match(r'^(.+\.es[mp]):(?:0x)?([0-9A-Fa-f]{1,6})$', ref, re.I)
         if m:
             value = int(m.group(1), 16)
+            if value >> 24 == 0xFF:
+                raise DataError('RUNTIME_FORM', '%s is a runtime form id (0xFF...): the game made it while running, so '
+                                'no plugin has a record for it. Next: inspect it live with fnv_ref.' % ref)
             owner = next((e['name'].lower() for e in entries if e['index'] == value >> 24), None)
+            if owner is None:
+                raise DataError('RECORD_NOT_FOUND', 'No plugin at load-order index %02X, so no record %s'
+                                % (value >> 24, ref))
             return owner, value & 0xFFFFFF
         if local:
             return local.group(1).lower(), int(local.group(2), 16)
@@ -548,13 +622,19 @@ class DataTools:
 
     # ------------------------------------------------------------------ fnv_script_lint
     def script_lint(self, source, plugin=None, check_forms=True):
-        return lint_script(source, self.live.engine() if self.live else None,
-                           self._edid_lookup if check_forms else None)
+        lookup = None
+        if check_forms:
+            entries = []  # the load order and file ids of this call (they change when a plugin is rebuilt)
 
-    def _edid_lookup(self, edid):
-        if not hasattr(self, '_lint_entries'):
-            self._lint_entries = self._active()[0]
-        files = ','.join(str(e['fileId']) for e in self._lint_entries)
+            def lookup(edid):
+                if not entries:
+                    entries.extend(self._active()[0])
+                return self._edid_lookup(edid, entries)
+        return lint_script(source, self.live.engine() if self.live else None, lookup)
+
+    def _edid_lookup(self, edid, entries=None):
+        entries = entries if entries is not None else self._active()[0]
+        files = ','.join(str(e['fileId']) for e in entries) or '-1'
         rows = self.index.db.execute('select type from records where edid = ? collate nocase and file in (%s)' % files,
                                      (edid,)).fetchall()
         return {r[0] for r in rows}
@@ -690,9 +770,16 @@ def decode_subrecord(rtype, tag, data):
     if rtype == 'WEAP' and tag == 'DATA' and len(data) >= 15:
         value, health, weight, damage, clip = struct.unpack_from('<iifhB', data)
         return {'value': value, 'health': health, 'weight': round(weight, 3), 'damage': damage, 'clipSize': clip}
-    if rtype in ('MISC', 'KEYM', 'AMMO') and tag == 'DATA' and len(data) >= 8:
+    if rtype in ('MISC', 'KEYM') and tag == 'DATA' and len(data) >= 8:
         value, weight = struct.unpack_from('<if', data)
         return {'value': value, 'weight': round(weight, 3)}
+    if rtype == 'AMMO' and tag == 'DATA' and len(data) >= 13:
+        # speed, flags (+3 unused), value, clip rounds: the weight is in DAT2
+        speed, flags, value, clip = struct.unpack_from('<fB3xiB', data)
+        return {'speed': round(speed, 3), 'flags': flags, 'value': value, 'clipRounds': clip}
+    if rtype == 'AMMO' and tag == 'DAT2' and len(data) >= 12:
+        per_shot, projectile, weight = struct.unpack_from('<IIf', data)
+        return {'projectilesPerShot': per_shot, 'projectile': '%08X' % projectile, 'weight': round(weight, 3)}
     if rtype == 'ARMO' and tag == 'DATA' and len(data) >= 12:
         value, health, weight = struct.unpack_from('<iif', data)
         return {'value': value, 'health': health, 'weight': round(weight, 3)}

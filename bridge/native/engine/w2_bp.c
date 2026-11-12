@@ -118,6 +118,7 @@ static int isite_add(uint32_t addr, int bp, DWORD owner, uint32_t purpose) {
         }
     }
     if (slot < 0) return -1;
+    if (!shared) cov_release_range(addr, 1); /* an armed coverage byte is put back first, never saved as orig */
     if (!shared && !read_bytes(addr, &orig, 1)) return -1;
     isites[slot].live = true;
     isites[slot].addr = addr;
@@ -638,7 +639,7 @@ static void op_bp_set(int argc, char **argv) {
 /* bp clear <id|ff> */
 static void op_bp_clear(int argc, char **argv) {
     uint32_t id = 0;
-    unsigned cleared = 0;
+    unsigned cleared = 0, to_sites = 0;
     bool dr = false;
     if (argc != 3) return fail("bad_arguments");
     if (!strcmp(argv[2], "ff")) {
@@ -649,7 +650,7 @@ static void op_bp_clear(int argc, char **argv) {
             }
         probe_suspend();
         for (int i = 0; i < (int)ISITES; i++)
-            if (isites[i].live && isites[i].purpose == SITE_TO) isite_remove(i);
+            if (isites[i].live && isites[i].purpose == SITE_TO) { isite_remove(i); to_sites++; }
         probe_resume();
     } else {
         if (!parse_u32(argv[2], &id) || id >= BPS) return fail("bad_arguments");
@@ -658,7 +659,7 @@ static void op_bp_clear(int argc, char **argv) {
         cleared = 1;
     }
     if (dr) dbg_apply();
-    emit("{\"ok\":true,\"cleared\":%u}", cleared);
+    emit("{\"ok\":true,\"cleared\":%u,\"toSites\":%u}", cleared, to_sites);
 }
 static void op_bp_list(void) {
     bool comma = false;

@@ -462,7 +462,7 @@ class OracleTools:
         # a float result is in st0 (eax then holds whatever the function left there) and an int, bool or pointer
         # result is in eax: compare each only with oracles of its own kind
         floaty = any(v.get('float') is not None for v in values.values())
-        self._formids = {}
+        formids = {}  # per call: two parallel matches must never read each other's pointers
         if not floaty:  # result pointers -> form ids, read once (not once per object per form oracle)
             ptrs = sorted({v['raw'] for v in values.values() if v.get('raw') and 0x10000 <= v['raw'] < 0x7FFF0000
                            and not v['raw'] & 3})
@@ -478,7 +478,7 @@ class OracleTools:
                         except Exception:  # noqa: BLE001
                             ids.append(None)
                 for q, fid in zip(chunk, ids):
-                    self._formids[q] = fid
+                    formids[q] = fid
         for name, ov in oracles.items():
             shared = [p for p in values if p in ov]
             if len(shared) < 3:
@@ -486,7 +486,7 @@ class OracleTools:
             kind = _oracle_kind(name)
             if (kind == 'float') != floaty:
                 continue
-            pairs = [(_candidate(values[p], kind, self, engine), ov[p]) for p in shared]
+            pairs = [(_candidate(values[p], kind, formids, engine), ov[p]) for p in shared]
             same = [_equal(a, b, kind) for a, b in pairs]
             mismatches = same.count(False)
             if mismatches:
@@ -925,14 +925,14 @@ def _oracle_kind(name):
     return 'int'
 
 
-def _candidate(v, kind, tools, engine):
+def _candidate(v, kind, formids, engine):
     if kind == 'float':
         return v.get('float') if v.get('float') is not None else struct.unpack('<f', struct.pack('<I', v['raw'] & 0xFFFFFFFF))[0]
     if kind == 'form':
         ptr = v['raw']
         if not ptr:
             return '00000000'
-        fid = getattr(tools, '_formids', {}).get(ptr)
+        fid = (formids or {}).get(ptr)
         return '%08X' % fid if fid is not None else None
     if kind == 'bool':
         # a bool result is 0 or 1: anything else (a pointer's low byte, say) is not a bool and matches nothing

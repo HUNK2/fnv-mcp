@@ -17,7 +17,10 @@ Facts checked in the game (1.4.0.525, 2026-11-11):
 import math
 import re
 import struct
+import threading
 import time
+import uuid
+from functools import wraps
 from pathlib import Path
 
 from .fnv_link import word
@@ -56,6 +59,25 @@ TYPE_GROUPS = {'actors': {42, 43}, 'doors': {28}, 'containers': {27}, 'activator
                'items': {24, 25, 26, 29, 31, 40, 41, 46, 47, 49}, 'furniture': {39},
                'statics': {32, 33, 34, 35, 36, 37, 38}, 'lights': {30}}
 DEFAULT_SKIP = TYPE_GROUPS['statics'] | TYPE_GROUPS['lights']
+MENUS_HIDDEN_FLAG = 0x0118C6F0      # byte: non-zero while the HUD and menus are hidden (tm), see fnv_render.TOGGLES
+# There is one fly camera, one saved state and one HUD toggle: every camera use (set, orbit, pov, restore and whole
+# photo runs) holds this lock, so two calls cannot interleave their moves, captures and restores.
+_CAMERA_LOCK = threading.RLock()
+
+
+def _locked(fn):
+    @wraps(fn)
+    def inner(*args, **kw):
+        with _CAMERA_LOCK:
+            return fn(*args, **kw)
+    return inner
+
+
+def _uniq():
+    """A per-call token for capture file names (the agent stamps only whole seconds)."""
+    return '%d%s' % (int(time.time() * 1000) % 100000000, uuid.uuid4().hex[:4])
+
+
 PHOTO_ANGLES = {'front': (180.0, 10.0), 'three_quarter': (135.0, 15.0), 'side': (90.0, 10.0),
                 'back': (0.0, 10.0), 'top': (180.0, 80.0)}
 
@@ -253,8 +275,20 @@ class EyesTools:
         state = self.fly_state()
         self.saved = {'pid': pid, 'fly': state['fly'], 'pose': state.get('pose'), 'fov': self.camera().fov}
         self.live.changing('camera')
-        self.live.journal.add({'kind': 'camera', 'saved': self.saved,
-                               'undo': {'op': 'console', 'line': 'tfc'} if not state['fly'] else None})
+        entry = self.live.journal.add({'kind': 'camera', 'saved': self.saved,
+                                       'undo': {'op': 'console', 'line': 'tfc'} if not state['fly'] else None})
+        self.saved['journalId'] = (entry or {}).get('id')
+
+    def _mark_camera_undone(self, saved):
+        """restore() puts the camera back itself, so the journal's blind `tfc` undo must not run again (it would
+        turn the fly camera ON)."""
+        jid = (saved or {}).get('journalId')
+        mark = getattr(self.live.journal, 'mark_undone', None)
+        if jid and mark:
+            try:
+                mark([jid])
+            except Exception:  # noqa: BLE001 - the journal is a record; a failed mark must not block the restore
+                pass
 
     def _fly(self, on, freeze=False):
         state = self.fly_state()
@@ -306,6 +340,7 @@ class EyesTools:
         render = self.live.u32s([ptr + REF_RENDER])[0]
         return self.live.u32s([render + RENDER_ROOT])[0] if render else 0
 
+    @_locked
     def set(self, position=None, yaw=None, pitch=None, look_at=None, fov=None, freeze=True):
         self.live.in_game()
         cam = self.camera()
@@ -328,6 +363,7 @@ class EyesTools:
                                       'around the player, not the camera.')
         return out
 
+    @_locked
     def orbit(self, ref, yaw=None, pitch=15.0, distance=None, fit=False, freeze=True, relative=True):
         """Place the camera around a reference looking at its bound centre. yaw is relative to the reference's
         heading when relative (0 = behind it, 180 = in front of it), else absolute."""
@@ -349,6 +385,7 @@ class EyesTools:
                    distance=_r(distance))
         return out
 
+    @_locked
     def pov(self, view):
         self.live.in_game()
         if view not in ('first', 'third'):
@@ -365,6 +402,7 @@ class EyesTools:
         return {'view': 'third' if after else 'first', 'switched': after == (view == 'third'),
                 'how': 'the POV control for four frames through the input injector'}
 
+    @_locked
     def restore(self):
         self.live.ready()
         if not self.saved:
@@ -375,6 +413,7 @@ class EyesTools:
             return {'restored': False, 'note': 'Nothing to restore: the camera was not changed by this tool.',
                     'changed': False}
         saved, self.saved = self.saved, None
+        self._mark_camera_undone(saved)
         if saved.get('pid') != (self.live.identity() or {}).get('pid'):
             return {'restored': False, 'note': 'The game restarted since the change; nothing to restore.',
                     'changed': False}
@@ -570,7 +609,7 @@ class EyesTools:
             head = self.live.form_ids([cross])[0]
             cross_info = {'formId': head['formId'] if head else None,
                           'name': self.live.values(['GetName'], cross)[0] if head else None}
-        out = {'crosshair': cross_info, 'prompt': text['prompt'], 'message': text['message'],
+        out = {'crosshair': cross_info, 'prompt': text['prompt'] if cross_info else None, 'message': text['message'],
                'subtitle': text['subtitle'], 'name': text['name']}
         if brief:
             return out
@@ -697,6 +736,9 @@ class EyesTools:
         """Toggle menus (tm) off for a capture; returns a restore function."""
         if not hide:
             return lambda: None
+        flag = (self.live.reads([(MENUS_HIDDEN_FLAG, 1)])[0] or b'\x00')[0]
+        if flag:
+            return lambda: None            # already hidden (by the user): leave it hidden, toggle nothing
         self.live.console('tm')
         self._frames(2)
 
@@ -704,6 +746,7 @@ class EyesTools:
             self.live.console('tm')
         return back
 
+    @_locked
     def photo(self, action, ref=None, angles=None, size=960, hide_hud=True, label=False, frames=None, every=1,
               baseline=None, name=None, distance=None):
         self.live.in_game()
@@ -729,7 +772,7 @@ class EyesTools:
     def _photo_view(self, hide_hud, label, size, name):
         back = self._hud_off(hide_hud)
         try:
-            shot = self._shot(name or 'view', size)
+            shot = self._shot('%s-%s' % (name or 'view', _uniq()), size)
         finally:
             back()
         out = {'path': shot['path'], 'size': shot['size'], 'method': shot['method']}
@@ -741,6 +784,7 @@ class EyesTools:
 
     def _photo_ref(self, ref, angles, size, hide_hud, name, distance):
         shots, labels = [], []
+        token = _uniq()
         back = self._hud_off(hide_hud)
         try:
             for angle in angles:
@@ -751,9 +795,9 @@ class EyesTools:
                     tag = angle
                 else:
                     yaw, pitch = float(angle[0]), float(angle[1])
-                    tag = 'yaw%d_pitch%d' % (yaw, pitch)
+                    tag = 'yaw%g_pitch%g' % (round(yaw, 2), round(pitch, 2))
                 self.orbit(ref, yaw=yaw, pitch=pitch, distance=distance, fit=distance is None)
-                shot = self._shot('%s-%s' % (name or 'photo', tag), size)
+                shot = self._shot('%s-%s-%s' % (name or 'photo', tag, token), size)
                 shots.append(shot['path'])
                 labels.append(tag)
         finally:
@@ -780,11 +824,12 @@ class EyesTools:
             yaw, pitch = heading_to(pos, (cx, cy, min(zs)))
             views.append(('corner%d' % (k + 1), pos, yaw, min(pitch, 60.0)))
         shots, labels = [], []
+        token = _uniq()
         back = self._hud_off(hide_hud)
         try:
             for tag, pos, yaw, pitch in views:
                 self.set(position=pos, yaw=yaw, pitch=pitch)
-                shots.append(self._shot('%s-%s' % (name or 'cell', tag), size)['path'])
+                shots.append(self._shot('%s-%s-%s' % (name or 'cell', tag, token), size)['path'])
                 labels.append(tag)
         finally:
             back()
@@ -798,15 +843,21 @@ class EyesTools:
         from .fnv_inject import shared_time
         control, _ = shared_time(self.live)
         shots = []
+        token = _uniq()
+        try:
+            was_held = bool((control.batch([('gate',)])[0] or {}).get('held'))
+        except Exception:  # noqa: BLE001 - unreadable gate: assume it was open (release afterwards, as before)
+            was_held = False
         back = self._hud_off(hide_hud)
         try:
             control.run('hold')
             for k in range(count):
                 if k:
                     control.run('step', frames=every)
-                shots.append(self._shot('%s-%03d' % (name or 'seq', k), size)['path'])
+                shots.append(self._shot('%s-%03d-%s' % (name or 'seq', k, token), size)['path'])
         finally:
-            control.run('release')
+            if not was_held:
+                control.run('release')      # leave a gate the user had closed closed
             back()
         return {'sheet': self._sheet(shots, ['f%d' % (k * every) for k in range(len(shots))], name or 'seq-sheet'),
                 'frames': shots, 'every': every,
@@ -816,7 +867,7 @@ class EyesTools:
         from PIL import Image, ImageChops
         if not baseline or not Path(baseline).exists():
             raise ValueError('baseline is the path of an earlier photo')
-        now = self._shot(name or 'compare', size)['path']
+        now = self._shot('%s-%s' % (name or 'compare', _uniq()), size)['path']
         a = Image.open(baseline).convert('RGB')
         b = Image.open(now).convert('RGB').resize(a.size)
         diff = ImageChops.difference(a, b).convert('L')
@@ -842,7 +893,7 @@ class EyesTools:
             x, y = (k % cols) * tw, (k // cols) * (th + 18)
             sheet.paste(img.resize((tw, th)), (x, y + 18))
             draw.text((x + 4, y + 3), str(label), fill=(255, 220, 120))
-        out = Path(paths[0]).with_name(re.sub(r'[^A-Za-z0-9_-]+', '_', name)[:60] + '-%d.png' % int(time.time()))
+        out = Path(paths[0]).with_name(re.sub(r'[^A-Za-z0-9_-]+', '_', name)[:60] + '-%d-%s.png' % (int(time.time()), uuid.uuid4().hex[:6]))
         sheet.save(out)
         return str(out)
 

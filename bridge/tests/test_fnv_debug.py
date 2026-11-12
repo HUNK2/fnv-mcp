@@ -34,6 +34,7 @@ class FakeLink:
         self.stops = []
         self.bps = {}
         self.hooks = []
+        self.preds = {}
         self.on_resume = None
 
     def region(self, address, length):
@@ -72,8 +73,20 @@ class FakeLink:
         if name == 'bp' and op[1] == 'list':
             return {'bps': list(self.bps.values())}
         if name == 'bp' and op[1] == 'clear':
+            if op[2] == 'ff':
+                n = len(self.bps)
+                self.bps.clear()
+                return {'ok': True, 'cleared': n}
             self.bps.pop(int(op[2]), None)
             return {'ok': True}
+        if name == 'pred':
+            if op[1] == 'set':
+                self.preds[int(op[2], 16)] = op[3]
+                return {'ok': True, 'id': int(op[2], 16)}
+            if op[1] == 'clear':
+                self.preds.pop(int(op[2], 16), None) if op[2] != 'ff' else self.preds.clear()
+                return {'ok': True}
+            return {'preds': [{'id': i} for i in sorted(self.preds)]}
         if name == 'hooks':
             return {'ok': True, 'hooks': list(self.hooks)}
         if name == 'hook':
@@ -206,7 +219,8 @@ class BreakTests(DebugTestBase):
         self.assertEqual(out['break']['mechanism'], 'hook')
         self.assertEqual(out['break']['address'], '0x00401000')
         self.assertTrue(self.link.sent('hook'))
-        self.assertEqual(self.link.sent('hookact')[0][2:], ('hold', 'ff'))
+        # E24: thread=main (the default) holds on the shared `main` predicate (slot 55 = 0x37), so a worker is not parked
+        self.assertEqual(self.link.sent('hookact')[0][2:], ('hold', '37', '4'))   # E2: and the 4 bytes it pops
 
     def test_line_break_is_a_hardware_breakpoint(self):
         out = self.run_tool('break', op='set', location='src/actor.cpp:7')

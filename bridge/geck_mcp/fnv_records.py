@@ -21,7 +21,7 @@ from pathlib import Path
 from .esp import assets
 from .fnv_data import DataError, NOT_FORMS, STRING_TAGS, load_order, read_record
 
-REFS_VERSION = 2
+REFS_VERSION = 3  # 3: text-or-form tags (RNAM...) are scanned when they are not text
 SKIP_REFS = {b'LAND', b'NAVM', b'NAVI', b'TES4'}  # terrain and navmesh hold no useful form references
 # subrecord -> byte offsets of form ids the game reads there (beyond the generic small-field rule)
 FORM_FIELDS = {
@@ -93,7 +93,9 @@ def scan_references(path, exists, condition_params=None):
                 continue
             sub = stag.decode('latin-1')
             start = p + 6
-            if sub in STRING_TAGS or sub == 'EDID':
+            if sub == 'EDID' or (sub in STRING_TAGS and _is_text(body[start:start + ssize])):
+                # Tags like RNAM, TNAM, ONAM, NNAM are text in some record types and form ids in others (NPC_ RNAM
+                # is the race): skip them only when the field reads as text.
                 p = start + ssize
                 continue
             offsets = TYPED_FORM_FIELDS.get((rtype, sub)) or FORM_FIELDS.get(sub)
@@ -123,6 +125,11 @@ def scan_references(path, exists, condition_params=None):
     return out
 
 
+def _is_text(data):
+    """A zero-terminated printable string (the check decode_subrecord uses), or empty."""
+    return not data or (data.endswith(b'\0') and all(c >= 0x20 or c in (9, 10, 13) for c in data[:-1]))
+
+
 class RecordsTools:
     """Offline load-order tools on top of DataTools' record index."""
 
@@ -147,20 +154,23 @@ class RecordsTools:
     # ------------------------------------------------------------------ index
     def _condition_params(self):
         """{condition function index: [param is a form, ...]} from the game's command table (engine map)."""
-        if getattr(self, '_cond', None) is None:
-            self._cond = {}
-            try:
-                from . import fnv_engine
-                e = fnv_engine.load(*fnv_engine.default_paths(self.data.project))
-                for c in e.commands:
-                    if c.get('source') != 'vanilla' or not c.get('opcode'):
-                        continue
-                    op = int(c['opcode'], 16)
-                    if 0x1000 <= op < 0x1400:
-                        self._cond[op - 0x1000] = [p.get('type') not in NOT_FORM_PARAMS for p in c.get('params') or []]
-            except Exception:  # no engine map: fall back to treating both parameters as candidates
-                self._cond = {}
-        return self._cond
+        cond = getattr(self, '_cond', None)
+        if cond is not None:
+            return cond
+        cond = {}  # built privately and published whole, so a parallel call never sees a half-filled table
+        try:
+            from . import fnv_engine
+            e = fnv_engine.load(*fnv_engine.default_paths(self.data.project))
+            for c in e.commands:
+                if c.get('source') != 'vanilla' or not c.get('opcode'):
+                    continue
+                op = int(c['opcode'], 16)
+                if 0x1000 <= op < 0x1400:
+                    cond[op - 0x1000] = [p.get('type') not in NOT_FORM_PARAMS for p in c.get('params') or []]
+        except Exception:  # no engine map: both parameters are candidates; not cached, so a later call retries
+            return {}
+        self._cond = cond
+        return cond
 
     def _ensure_refs(self, entries):
         """Make sure every active plugin has its references indexed. Returns the names built now."""
@@ -230,10 +240,12 @@ class RecordsTools:
             if latest.get(key) == fid:
                 u['inWinner'] = True
         names = {}
-        if users:
+        keys = list(users)
+        for i in range(0, len(keys), 500):  # SQLite allows 32,766 bound variables: look names up in chunks
+            chunk = keys[i:i + 500]
             for o, l, edid, full in self.db.execute(
                     'select owner, local, edid, full from records where (owner, local) in (%s)' %
-                    ','.join('(?, ?)' for _ in users), [x for k in users for x in k]):
+                    ','.join('(?, ?)' for _ in chunk), [x for k in chunk for x in k]):
                 names.setdefault((o, l), (edid, full))
         out = []
         for key, u in users.items():

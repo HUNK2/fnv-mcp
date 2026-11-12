@@ -729,7 +729,7 @@ class EngineAITools:
                ('call', word(PICK_CTOR), 'i', word(pick), '0'),
                ('call', word(PICK_FROM), 'i', word(pick), '0', word(pts)),
                ('call', word(PICK_TO), 'i', word(pick), '0', word(pts + 12)),
-               ('call', word(PICK_FILTER), 'i', word(pick), word(layers[layer])),  # __fastcall (self, filter)
+               ('call', word(PICK_FILTER), 'i', word(pick), '0', word(layers[layer])),  # self in ecx, filter on the stack
                ('call', word(TES_PICK), 'i', word(tes), '0', word(pick)),
                ('rd', word(pick), word(0xB0))]
         replies = self.link.batch(ops, timeout=20)

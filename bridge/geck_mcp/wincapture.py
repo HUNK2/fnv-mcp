@@ -216,7 +216,7 @@ def capture(window, out_path, repaint=False):
         own = user32.GetWindowDpiAwarenessContext(hwnd)
     except AttributeError:
         own = None
-    attempts, image, stats = [], None, None
+    attempts, image, stats, used = [], None, None, None
     if repaint:
         # PrintWindow can return only the window background (flat grey) for GECK's Direct3D view (jobs 054/055);
         # ask GECK to repaint and give it time to draw before the next try.
@@ -231,7 +231,7 @@ def capture(window, out_path, repaint=False):
                 _dpi_context(user32, previous)
         attempts.append(got['attempt'])
         if got['image'] is not None:
-            image, stats, client = got['image'], got['attempt']['stats'], got['client']
+            image, stats, client, used = got['image'], got['attempt']['stats'], got['client'], method
             if not is_blank(stats):
                 break
     if image is None:
@@ -240,7 +240,7 @@ def capture(window, out_path, repaint=False):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(out_path)
     return {'path': str(out_path), 'size': [image.width, image.height], 'client': client,
-            'method': attempts[-1]['method'], 'attempts': attempts, 'stats': stats, 'blank': is_blank(stats)}
+            'method': used, 'attempts': attempts, 'stats': stats, 'blank': is_blank(stats)}
 
 
 def _grab(hwnd, method):
@@ -273,12 +273,15 @@ def _grab(hwnd, method):
             ok = gdi32.BitBlt(memdc, 0, 0, width, height, screen, origin.x, origin.y, SRCCOPY | CAPTUREBLT)
         image = None
         if ok:
+            gdi32.SelectObject(memdc, old)      # GetDIBits needs the bitmap deselected from the DC
+            old = None
             raw = _bitmap_bytes(gdi32, memdc, bitmap, width, height)
             image = Image.frombuffer('RGB', (width, height), raw, 'raw', 'BGRX', 0, 1)
             attempt['stats'] = image_stats(image)
         attempt['ok'] = bool(ok)
     finally:
-        gdi32.SelectObject(memdc, old)
+        if old is not None:
+            gdi32.SelectObject(memdc, old)
         gdi32.DeleteObject(bitmap)
         gdi32.DeleteDC(memdc)
         user32.ReleaseDC(None, screen)

@@ -231,7 +231,7 @@ class StaticIndex:
 
     def claims(self, address):
         if self._claims is None:
-            self._claims = defaultdict(list)
+            claims = defaultdict(list)  # filled privately, then published whole (parallel calls)
             folder = FNVSYM / 'evidence'
             for path in sorted(folder.glob('*.jsonl')) if folder.exists() else []:
                 with open(path, encoding='utf-8') as f:
@@ -241,7 +241,8 @@ class StaticIndex:
                         except ValueError:
                             continue
                         if isinstance(d.get('addr'), int):
-                            self._claims[d['addr']].append({k: d.get(k) for k in ('pass', 'kind', 'value', 'conf', 'why')})
+                            claims[d['addr']].append({k: d.get(k) for k in ('pass', 'kind', 'value', 'conf', 'why')})
+            self._claims = claims
         return self._claims.get(address, [])
 
     def names_row(self, address):
@@ -268,11 +269,12 @@ class StaticIndex:
 
     def statics(self):
         if self._statics is None:
-            self._statics = {}
+            statics = {}
             for s in self.engine.statics:
                 for key in (s.get('name'), s.get('setting')):
                     if key and len(key) > 3:
-                        self._statics[key] = s
+                        statics[key] = s
+            self._statics = statics
         return self._statics
 
 

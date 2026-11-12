@@ -1,6 +1,7 @@
 """Local stdio MCP entry point. No editor or file modifications on startup."""
 import argparse
 import json
+import uuid
 from functools import partial
 from typing import Annotated, Literal, Any
 
@@ -79,9 +80,34 @@ class Envelope(BaseModel):
 Result = Annotated[CallToolResult, Envelope]
 
 
+class BridgeServer(MCPServer):
+    """The SDK server, with one change: an error the SDK writes itself (arguments that fail the input schema, an
+    unknown tool) gets the same structured result as the tools' own errors, so every result matches the declared
+    output schema (the Envelope)."""
+
+    def __init__(self, *args, project_id='', **kwargs):
+        super().__init__(*args, **kwargs)
+        self._project_id = project_id
+
+    async def _handle_call_tool(self, ctx, params):
+        result = await super()._handle_call_tool(ctx, params)
+        if isinstance(result, CallToolResult) and result.is_error and result.structured_content is None:
+            text = ' '.join(getattr(c, 'text', '') for c in result.content).strip()
+            code = ('INVALID_ARGUMENTS' if 'validation error' in text else
+                    'UNKNOWN_TOOL' if text.startswith('Unknown tool') else 'TOOL_ERROR')
+            envelope = {'ok': False, 'operationId': str(uuid.uuid4()), 'operation': params.name,
+                        'projectId': self._project_id, 'outcome': 'failed_before_change', 'data': None,
+                        'error': {'code': code, 'message': text, 'retrySafe': True,
+                                  'recovery': 'Fix the arguments (the message names each field) and call again.'
+                                  if code == 'INVALID_ARGUMENTS' else 'Check the tool name and arguments.'},
+                        'elapsedMs': 0, 'replayed': False}
+            result = CallToolResult(content=result.content, structured_content=envelope, is_error=True)
+        return result
+
+
 def make_server(project, service=None):
     service = service or Service(project)
-    server = MCPServer('geck-bridge', version=__version__,
+    server = BridgeServer('geck-bridge', version=__version__, project_id=project.project_id,
                        instructions='Use status then attach. editor_session is optional (omit it to use the running '
                        'GECK); always pass the expected values (title, plugin hash, models). '
                        'If GECK windows are hidden, geck_show_windows shows them. '
@@ -473,10 +499,10 @@ def make_server(project, service=None):
     return server
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--project', required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     project = Project.load(args.project)
     service = Service(project)
     try:

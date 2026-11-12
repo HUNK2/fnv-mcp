@@ -185,5 +185,47 @@ class BisectRecordTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), codec.write(plugin))
 
 
+class VariableConditionTests(unittest.TestCase):
+    def test_names_exclude_the_predicate_words(self):
+        from geck_mcp.fnv_scriptdbg import var_names
+        self.assertEqual(var_names('fTimer >= 0 and not arg6:u32 == 3 or frame > 9'), {'fTimer'})
+
+    def test_conditions_evaluate_case_blind_and_refuse_calls(self):
+        from geck_mcp.fnv_conv import ConvError
+        from geck_mcp.fnv_scriptdbg import compile_var_when, eval_var_when
+        tree = compile_var_when('fTimer >= 2 * 3 and not bDone == 1')
+        self.assertTrue(eval_var_when(tree, {'ftimer': 6.0, 'bdone': 0.0}))
+        self.assertFalse(eval_var_when(tree, {'ftimer': 5.9, 'bdone': 0.0}))
+        with self.assertRaises(ConvError):
+            compile_var_when('__import__("os")')
+        with self.assertRaises(ConvError):
+            eval_var_when(compile_var_when('missing > 1'), {})
+
+
+class SurfaceAlignTests(unittest.TestCase):
+    def test_tilt_turns_the_up_axis_onto_the_normal(self):
+        import math
+        for dzdx, dzdy in ((0.6, -0.2), (-1.2, 0.5), (0.0, 0.0)):
+            x, y = (math.radians(a) for a in fnv_create.PlaceTools._tilt(dzdx, dzdy, 123.0))
+            up = (-math.sin(y), math.sin(x) * math.cos(y), math.cos(x) * math.cos(y))   # measured in the game
+            n = (-dzdx, -dzdy, 1.0)
+            length = math.sqrt(sum(v * v for v in n))
+            for a, b in zip(up, n):
+                self.assertAlmostEqual(a, b / length, places=6)
+
+
+class RayFilterTests(unittest.TestCase):
+    def test_the_filter_goes_on_the_stack(self):
+        # bhkPickData::SetFilter 0x004A3F70 reads its filter at [ebp+8] and returns with ret 4: edx is not used.
+        from geck_mcp import fnv_hands
+        sent = []
+        live = SimpleNamespace(identity=lambda: {'pid': 1}, u32s=lambda addrs: [0x1000 for _ in addrs])
+        live.link = SimpleNamespace(one=lambda *a: {'ok': True, 'eax': '0x20000000'},
+                                    batch=lambda ops, timeout=None: sent.extend(ops) or [{'ok': True, 'hex': '00' * 0xB0}] * len(ops))
+        fnv_hands.Rays(live).cast([((0, 0, 0), (0, 0, -10))], layer=0x26)
+        call = next(op for op in sent if op[0] == 'call' and int(op[1], 16) == fnv_hands.PICK_FILTER)
+        self.assertEqual(call[3:], (call[3], '0', fnv_hands.word(0x26)))
+
+
 if __name__ == '__main__':
     unittest.main()

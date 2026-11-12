@@ -60,6 +60,7 @@ class EngineLink:
         self.handle = None
         self.lock = threading.RLock()
         self.hello = None
+        self.last_frame = None      # frame of the last reply on this connection (identity without a ping)
 
     # ------------------------------------------------------------------ connection
     def connect(self, wait=0.0):
@@ -71,6 +72,7 @@ class EngineLink:
                 break
             except OSError as e:
                 if getattr(e, 'winerror', None) not in (ERROR_PIPE_BUSY, ERROR_FILE_NOT_FOUND) or time.monotonic() >= deadline:
+                    self.hello = None  # the game this hello came from is gone (or not answering): never report it
                     raise LinkError('COMPANION_UNREACHABLE', 'Engine companion pipe %s is not available (%s)' % (self.pipe, e))
                 if e.winerror == ERROR_PIPE_BUSY:
                     try:
@@ -90,6 +92,8 @@ class EngineLink:
             except OSError:
                 pass
         self.handle = None
+        self.hello = None  # a closed link no longer knows which game it talks to; the next ping says again
+        self.last_frame = None
 
     def _io(self, data, timeout):
         """Write one line and read one line back with a deadline (overlapped I/O, cancelled on timeout)."""
@@ -99,6 +103,10 @@ class EngineLink:
             ov, err = _winapi.WriteFile(self.handle, data, overlapped=True)
             if err == ERROR_IO_PENDING and _winapi.WaitForSingleObject(ov.event, int(timeout * 1000)) == WAIT_TIMEOUT:
                 ov.cancel()
+                try:  # wait for the cancel to land before the handle can be closed (as the read path does)
+                    ov.GetOverlappedResult(True)
+                except OSError:
+                    pass
                 raise LinkError('COMPANION_TIMEOUT', 'Write to the engine companion timed out')
             ov.GetOverlappedResult(True)
         except OSError as e:  # nothing was delivered: safe to retry on a new connection
@@ -141,6 +149,7 @@ class EngineLink:
                 except OSError as e:
                     # Sent but no complete reply: the request may have run, so never resend it.
                     self.close()
+                    self.hello = None
                     raise LinkError('COMPANION_DISCONNECTED', 'Engine companion pipe closed while waiting for the '
                                     'reply (the game may have quit or crashed; the request may have run): %s' % e)
 
@@ -165,6 +174,7 @@ class EngineLink:
         if reply.get('id') != request_id:
             self.close()
             raise LinkError('COMPANION_PROTOCOL', 'Reply for another request (%s)' % reply.get('id'))
+        self.last_frame = reply.get('frame', self.last_frame)
         if reply.get('error'):
             raise LinkError('COMPANION_ERROR', reply['error'], reply)
         results = reply.get('results', [])

@@ -3,13 +3,16 @@
 Workers finish bounded calls even if the MCP request is cancelled: a dispatched
 Windows message cannot be safely undone by killing the waiting client.
 """
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import json
+import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
+from pathlib import Path
 
 from bridge_lock import bottle_lock, reservation
 from esp_check import file_snapshot, read_model, subrecords, cstring
@@ -23,6 +26,27 @@ from .verify import match_cell_references
 from .authoring import Authoring, AuthoringError
 from .esp.records import SpecError
 from .fnv_tools import FNV_TOOLS
+
+# The bottle lock is a file-region lock: it also refuses other threads of this process at once. Tool calls run on
+# worker threads and clients send them in parallel, so threads of one process queue on this lock first (waiting up
+# to PROCESS_LOCK_WAIT seconds), and only other processes meet the bottle lock's immediate EDITOR_BUSY.
+PROCESS_LOCK_WAIT = 120.0
+_process_locks = {}
+_process_locks_guard = threading.Lock()
+
+
+@contextmanager
+def process_lock(root, wait=None):
+    key = os.path.normcase(str(Path(root).resolve()))
+    with _process_locks_guard:
+        lock = _process_locks.setdefault(key, threading.RLock())
+    if not lock.acquire(timeout=PROCESS_LOCK_WAIT if wait is None else wait):
+        raise BridgeError('EDITOR_BUSY', 'EDITOR_BUSY: another call of this server held the editor lock for more '
+                          'than %d s; nothing was sent. Call again when it is done.' % (PROCESS_LOCK_WAIT if wait is None else wait))
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 CAPABILITIES = {
@@ -198,8 +222,11 @@ class Service:
 
     def runtime_save_context(self, label):
         from .runtime_companion import set_save_context
-        return self.run('geck_runtime_save_context', {'label': label}, lambda: set_save_context(self.project, label),
-                        editor=False, lock_root=self.project.game_root / '.geck-runtime-lock')
+        # Its own Service instance, as runtime_call: run() keeps the operation context on the instance, and this
+        # runs under another lock, so it must not overwrite an editor operation's context on the shared one.
+        return Service(self.project, transport=self.transport).run(
+            'geck_runtime_save_context', {'label': label}, lambda: set_save_context(self.project, label),
+            editor=False, lock_root=self.project.game_root / '.geck-runtime-lock')
 
     def compile_start(self, request_key, deadline_seconds=1200):
         from .compilation import Compilation
@@ -369,7 +396,7 @@ class Service:
         try:
             if request_key is not None and not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', request_key):
                 raise ValueError('request_key must be 1..100 simple identifier characters')
-            with bottle_lock(lock_root or self.project.lock_root):
+            with process_lock(lock_root or self.project.lock_root), bottle_lock(lock_root or self.project.lock_root):
                 # Idempotent start replay precedes reservation checks: it cannot dispatch another phase.
                 if request_key:
                     with closing(self.db()) as db:
@@ -458,6 +485,14 @@ class Service:
 
     def failure(self, error, operation_id, name, modifies):
         code = getattr(error, 'code', 'INVALID_ARGUMENT' if isinstance(error, ValueError) else 'BRIDGE_ERROR')
+        if code == 'BRIDGE_ERROR' and str(error).startswith('EDITOR_BUSY'):
+            code = 'EDITOR_BUSY'
+        if code == 'EDITOR_BUSY':  # refused before anything was sent: safe to call again
+            return {'ok': False, 'operationId': operation_id, 'operation': name,
+                    'projectId': self.project.project_id, 'outcome': 'failed_before_change',
+                    'data': None, 'error': {'code': 'EDITOR_BUSY', 'message': str(error), 'retrySafe': True,
+                                            'recovery': 'Another editor operation is running; call again when it '
+                                                        'is done (geck_status shows it).'}}
         unknown = modifies or (getattr(error, 'uncertain', False) and name not in
                                ('geck_status', 'geck_inspect_windows', 'geck_plugin_validate', 'geck_project_attach'))
         return {'ok': False, 'operationId': operation_id, 'operation': name,

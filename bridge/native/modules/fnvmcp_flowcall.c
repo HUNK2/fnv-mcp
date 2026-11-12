@@ -3,18 +3,20 @@
  * callback). The bridge writes the call into fnvmcp_flow_slot, arms its breakpoint and the trace, then sets armed;
  * the next frame makes the call, stores eax and clears armed.
  *
- * Slot layout (u32 words): armed, function, this (ecx; 0 for cdecl/stdcall), nargs (0..12), args[12], eax, done.
+ * Slot layout (u32 words): armed, function, this (ecx; 0 for cdecl/stdcall), nargs (0..12), args[12], eax, done,
+ * edx (version 2: the second register argument of a fastcall function; 0 otherwise).
  * The callee's own convention pops its arguments or not: esp is put back after the call either way. */
 #include "fnvmcp_module.h"
 
 typedef struct {
-    volatile uint32_t armed, function, self, nargs, args[12], eax, done;
+    volatile uint32_t armed, function, self, nargs, args[12], eax, done, edx;
 } FlowSlot;
 
 FNVMCP_EXPORT FlowSlot fnvmcp_flow_slot;
+FNVMCP_EXPORT const uint32_t fnvmcp_flow_version = 2; /* the bridge writes edx only to a version-2 slot */
 static const FnvmcpApi *api;
 
-static uint32_t flow_call(uint32_t function, uint32_t self, uint32_t nargs, const uint32_t *args) {
+static uint32_t flow_call(uint32_t function, uint32_t self, uint32_t edx, uint32_t nargs, const uint32_t *args) {
     uint32_t result, count = nargs;
     uint32_t thisp = self;
     __asm__ volatile(
@@ -27,10 +29,11 @@ static uint32_t flow_call(uint32_t function, uint32_t self, uint32_t nargs, cons
         "jmp 1b\n\t"
         "2:\n\t"
         "movl %%edx, %%ecx\n\t"
+        "movl %%eax, %%edx\n\t"
         "call *%%ebx\n\t"
         "movl %%edi, %%esp\n\t"
         : "=a"(result), "+c"(count), "+d"(thisp)
-        : "b"(function), "S"(args)
+        : "b"(function), "S"(args), "a"(edx)
         : "edi", "memory", "cc");
     return result;
 }
@@ -43,7 +46,7 @@ static void on_frame(uint32_t frame, void *user) {
     fnvmcp_flow_slot.armed = 0;
     uint32_t n = fnvmcp_flow_slot.nargs > 12 ? 12 : fnvmcp_flow_slot.nargs;
     for (uint32_t i = 0; i < n; i++) args[i] = fnvmcp_flow_slot.args[i];
-    fnvmcp_flow_slot.eax = flow_call(fnvmcp_flow_slot.function, fnvmcp_flow_slot.self, n, args);
+    fnvmcp_flow_slot.eax = flow_call(fnvmcp_flow_slot.function, fnvmcp_flow_slot.self, fnvmcp_flow_slot.edx, n, args);
     fnvmcp_flow_slot.done = 1;
 }
 
@@ -51,5 +54,6 @@ FNVMCP_EXPORT int fnvmcp_module_init(const FnvmcpApi *a) {
     api = a;
     fnvmcp_flow_slot.armed = 0;
     fnvmcp_flow_slot.done = 0;
+    fnvmcp_flow_slot.edx = 0;
     return api->on_frame(on_frame, 0) < 0;
 }

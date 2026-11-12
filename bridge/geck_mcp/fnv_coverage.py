@@ -50,6 +50,9 @@ class CoverageTools:
         return sites
 
     def start(self, files=None, functions=None, name=None):
+        if name is not None and (not str(name).strip() or '/' in str(name) or chr(92) in str(name) or '..' in str(name)
+                                 or ':' in str(name) or str(name).startswith('.')):
+            raise ConvError('BAD_ARGUMENTS', 'name is a plain run name: no path separators, drive letters or "..".')
         self.live.ready()
         if self.active:
             raise ConvError('RUNNING', 'Coverage %s is running. Next: fnv_coverage stop.' % self.active['name'])

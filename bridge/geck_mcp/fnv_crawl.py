@@ -80,20 +80,46 @@ class CrawlTools:
             flags = rec.get('DATA')
             interior = bool(flags and flags[0] & 1)
             grid = rec.get('XCLC')
+            # An exterior cell sits in a group of type 1 (world children) whose label is the WRLD's file form id.
+            world = next((int.from_bytes(l[0], 'little') for l in labels
+                          if isinstance(l, tuple) and len(l) == 2 and l[1] == 1 and len(l[0]) == 4), None)
             cells.append({'formId': rec.form_id, 'editorId': rec.editor_id, 'interior': interior,
                           'grid': struct.unpack_from('<ii', grid, 0) if grid and len(grid) >= 8 else None,
-                          'world': next((l for l in labels if isinstance(l, int) and l > 0xFF), None)})
+                          'world': self._load_order_id(target, entries, world) if world else None})
         return target['name'], cells
+
+    @staticmethod
+    def _load_order_id(target, entries, file_form_id):
+        """A form id as written in the plugin file (top byte = index in its master list, the plugin's own index
+        past the last master) -> the load-order form id, or None when that master is not active."""
+        index = (file_form_id >> 24) & 0xFF
+        masters = target.get('masters') or []
+        if index < len(masters):
+            owner = next((e for e in entries if e['name'].lower() == str(masters[index]).lower() and e.get('active')),
+                         None)
+        else:
+            owner = target
+        if owner is None or owner.get('index') is None:
+            return None
+        return (int(owner['index']) << 24) | (file_form_id & 0xFFFFFF)
+
+    def _wait_loaded(self):
+        try:
+            from .fnv_inject import shared_time
+            _, waiter = shared_time(self.live)
+            waiter.run(loaded=True, timeout_seconds=120)
+        except Exception:  # noqa: BLE001 - fall back to wall time
+            self.sleep(8)
 
     def _go(self, cell):
         if cell['interior'] and cell['editorId']:
             return self.agent.move('player', None, cell['editorId'], None, None, 120)
         if cell['grid'] and cell['world']:
-            world = self.live.form_edid(cell['world']) if hasattr(self.live, 'form_edid') else None
+            world = self._edid('%08X' % cell['world'])
             if not world:
                 raise ConvError('NO_WORLD', 'Cannot name the worldspace of exterior cell %08X.' % cell['formId'])
             out = self.live.console('cow %s %d %d' % (world, cell['grid'][0], cell['grid'][1]))
-            self.live.wait_loaded(120) if hasattr(self.live, 'wait_loaded') else self.sleep(8)
+            self._wait_loaded()
             return out
         raise ConvError('CANNOT_VISIT', 'Cell %08X has no EditorID or grid.' % cell['formId'])
 
@@ -154,15 +180,38 @@ class CrawlTools:
         if not cells:
             return verdict('%s adds or edits no cells' % name, None, plugin=name, cells=[])
         capture = None
+        capture_ours = False
         if self.warnings:
             capture = self.warnings(self.live).capture
             try:
-                capture.start()
+                capture_ours = bool((capture.start() or {}).get('started'))
             except Exception:  # noqa: BLE001 - reported per cell as unknown
                 capture = None
-        rows = []
         started = time.time()
-        for cell in cells[:int(max_cells)]:
+        try:
+            rows = self._cells_rows(cells, capture, int(max_cells), settle_frames, photos)
+        finally:
+            # What the crawl switched on is switched off again, whatever a cell did.
+            if capture is not None and capture_ours:
+                try:
+                    capture.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+            if self.assets:
+                try:
+                    self.assets.file_log('stop')
+                except Exception:  # noqa: BLE001
+                    pass
+        rows.sort(key=lambda r: -r['problems'])
+        bad = [r for r in rows if r['problems']]
+        return verdict('%s: %d cells crawled, %d with problems' % (name, len(rows), len(bad)),
+                       'Each cell: visited, settled %d frames, then checked. Worst first.' % int(settle_frames),
+                       plugin=name, cells=rows, seconds=round(time.time() - started, 1),
+                       notCrawled=max(0, len(cells) - int(max_cells)))
+
+    def _cells_rows(self, cells, capture, max_cells, settle_frames, photos):
+        rows = []
+        for cell in cells[:max_cells]:
             row = {'cell': cell['editorId'] or '%08X' % cell['formId'], 'interior': cell['interior']}
             try:
                 events_since = (self.live.events(0) or {}).get('seq', 0)
@@ -200,12 +249,7 @@ class CrawlTools:
                                5 * len(row.get('missingFiles') or []) + 2 * len(row.get('refsWithout3D') or []) +
                                5 * len(row.get('doorsToNowhere') or []) + (50 if row.get('error') else 0))
             rows.append(row)
-        rows.sort(key=lambda r: -r['problems'])
-        bad = [r for r in rows if r['problems']]
-        return verdict('%s: %d cells crawled, %d with problems' % (name, len(rows), len(bad)),
-                       'Each cell: visited, settled %d frames, then checked. Worst first.' % int(settle_frames),
-                       plugin=name, cells=rows, seconds=round(time.time() - started, 1),
-                       notCrawled=max(0, len(cells) - int(max_cells)))
+        return rows
 
     # ================================================================ dialogue
     def _info_topic(self, info_form):
@@ -400,12 +444,46 @@ class CrawlTools:
         found = []
         for rec, _ in codec.iter_records(open(target['path'], 'rb').read(), types=list(ITEM_TYPES)):
             modl = rec.get('MODL')
-            found.append((rec.type, rec.form_id, rec.editor_id,
+            # An override of a master's item has the master's index in its top byte: map it through the plugin's
+            # master list to the load order (None when that master is not active: the record is skipped).
+            mapped = self._load_order_id(target, entries, rec.form_id)
+            if mapped is None:
+                continue
+            found.append((rec.type, mapped, rec.editor_id,
                           modl.split(b'\0', 1)[0].decode('cp1252', 'replace') if modl else None))
         rows = []
-        for rtype, local, edid, model in found[:int(limit)]:
+        worn = self._worn_items()
+        try:
+            self._items_rows(rows, found, int(limit), photos, target)
+        finally:
+            self._rewear(worn)
+        rows.sort(key=lambda r: -r['problems'])
+        return verdict('%s: %d items checked, %d with problems' % (target['name'], len(rows),
+                                                                   sum(1 for r in rows if r['problems'])),
+                       'Each new item given to the player (AddItem), equipped or used where it can be, then taken '
+                       'back; its model checked against the loose files and archives; script errors meanwhile.',
+                       plugin=target['name'], items=rows, notChecked=max(0, len(found) - int(limit)))
+
+    def _worn_items(self):
+        """The form ids the player has equipped now, so the crawl can put them back."""
+        try:
+            inv = self.live.inventory('player')
+            return [i['formId'] for i in inv.get('items', []) if i.get('equipped') and i.get('formId')]
+        except Exception:  # noqa: BLE001 - restoring is best effort
+            return []
+
+    def _rewear(self, worn):
+        for form in worn or []:
+            try:
+                self.live.console('player.EquipItem %s 0 1' % form)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _items_rows(self, rows, found, limit, photos, target):
+        worn_now = self._worn_items()
+        for rtype, local, edid, model in found[:limit]:
             # The running game keeps no EditorIDs for most forms: the console takes the load-order form id.
-            ref = '%02X%06X' % (target.get('index', 0), local & 0xFFFFFF)
+            ref = '%08X' % local
             row = {'item': ref, 'editorId': edid, 'type': rtype, 'model': model}
             try:
                 if model and self.assets:
@@ -413,6 +491,8 @@ class CrawlTools:
                     row['modelFound'] = bool(hit)
                 since = (self.live.events(0) or {}).get('seq', 0)
                 self.live.changing('crawl items')
+                had, = self.live.values(['player.GetItemCount %s' % ref])
+                had = int(had or 0)
                 added = self.live.console('player.AddItem %s 1 1' % ref)
                 row['added'] = bool(added.get('accepted'))
                 if rtype in EQUIPPABLE + USABLE:
@@ -426,9 +506,12 @@ class CrawlTools:
                             row['photo'] = 'not taken: %s' % str(e)[:80]
                     if rtype in EQUIPPABLE:
                         self.live.console('player.UnequipItem %s 0 1' % ref)
+                        self._rewear(worn_now)
                 count, = self.live.values(['player.GetItemCount %s' % ref])
                 row['countAfter'] = count
-                self.live.console('player.RemoveItem %s %d 1' % (ref, max(1, int(count or 1))))
+                extra = int(count or 0) - had          # only the copies this test added
+                if extra > 0:
+                    self.live.console('player.RemoveItem %s %d 1' % (ref, extra))
                 evts = (self.live.events(since) or {}).get('events', [])
                 row['scriptErrors'] = [e.get('text') for e in evts if e.get('type') == 'script_error'][:10]
             except Exception as e:  # noqa: BLE001 - one bad item does not stop the crawl
@@ -436,12 +519,6 @@ class CrawlTools:
             row['problems'] = (10 * len(row.get('scriptErrors') or []) + (5 if row.get('modelFound') is False else 0)
                                + (5 if row.get('added') is False else 0) + (50 if row.get('error') else 0))
             rows.append(row)
-        rows.sort(key=lambda r: -r['problems'])
-        return verdict('%s: %d items checked, %d with problems' % (target['name'], len(rows),
-                                                                   sum(1 for r in rows if r['problems'])),
-                       'Each new item given to the player (AddItem), equipped or used where it can be, then taken '
-                       'back; its model checked against the loose files and archives; script errors meanwhile.',
-                       plugin=target['name'], items=rows, notChecked=max(0, len(found) - int(limit)))
 
     def run(self, action, **a):
         if action == 'quest':

@@ -29,7 +29,7 @@ from .fnv_deep import HF_RECORD, SELECTORS
 from .fnv_engine import EXE_RANGE
 from .fnv_flow import hook_at
 from .fnv_link import word
-from .fnv_watch import ACCESS
+from .fnv_watch import ACCESS, claim_debug_register, hits_of_slot, release_debug_register
 
 PRESETS = (
     ('disable', ('TESObjectREFR::Disable',)),
@@ -75,14 +75,29 @@ class BlameTools:
         self.statement_hook = statement_hook  # the EvaluateLine hook (fnv_script_debug's), armed for exact context
         self.dbg = debugger or Debugger(live, sleep=sleep, clock=clock)
         self.hits = []
-        self.seen = {}
+        self.seen = {}          # hook label -> (hook id, last ring sequence): a new hook starts its ring at 0
         self.armed = {}
+        self._proc = None       # (pid, start) the hits belong to
 
     @property
     def link(self):
         return self.live.link
 
+    def _follow(self):
+        """A new game process drops the hits and ring positions of the old one."""
+        try:
+            found = self.live.game.process()
+        except Exception:  # noqa: BLE001 - no process lookup: nothing to follow
+            return
+        if not found:
+            return
+        key = (found[0], found[1] if len(found) > 1 else None)
+        if self._proc is not None and key != self._proc:
+            self.hits, self.seen, self.armed = [], {}, {}
+        self._proc = key
+
     def run(self, action, **args):
+        self._follow()
         if action == 'field':
             return self.field(args.get('address'), length=args.get('length') or 4, access=args.get('access') or 'write',
                               scope=args.get('scope') or 'main', seconds=args.get('seconds') or 5.0)
@@ -107,16 +122,33 @@ class BlameTools:
         self.live.ready()
         if not self.live.game.process():
             raise ConvError('NOT_RUNNING', 'Watching a field needs the game running.')
+        installed = False
         if self.statement_hook is not None:
             try:
+                existing = getattr(self.statement_hook, 'existing', None)
+                installed = existing is not None and existing() is None     # field installs it: field removes it
                 self.statement_hook.ensure()    # statement records, so a script's write names its line
             except Exception:  # noqa: BLE001 - without it the script context is approximate
                 pass
-        result = self.link.one('dbg', 'set', '0', word(address), word(int(length)), word(ACCESS[access]),
-                               '1' if scope == 'all' else '0')
-        if not result.get('ok'):
-            raise ConvError('WATCH_REFUSED', 'The companion could not set the watchpoint (%s). Next: the debug registers '
-                            'may be full (four in use).' % (result.get('error') or result), result)
+        try:
+            with self.dbg.lock:     # a hardware break must not take the register between the check and the set
+                slot = claim_debug_register(self.link)
+                if slot is None:
+                    raise ConvError('WATCH_REFUSED', 'All four debug registers are in use (watches or hardware breaks). '
+                                    'Next: clear a hardware break (fnv_debug break clear) or wait for the other watch.')
+                try:
+                    result = self.link.one('dbg', 'set', str(slot), word(address), word(int(length)),
+                                           word(ACCESS[access]), '1' if scope == 'all' else '0')
+                except BaseException:
+                    release_debug_register(self.link, slot)
+                    raise
+                if not result.get('ok'):
+                    release_debug_register(self.link, slot)
+                    raise ConvError('WATCH_REFUSED', 'The companion could not set the watchpoint (%s).'
+                                    % (result.get('error') or result), result)
+        except BaseException:
+            self._drop_statement_hook(installed)
+            raise
         seq = result['seq']
         rows = []
         self._hooks_cache = None
@@ -124,7 +156,7 @@ class BlameTools:
             end = self.clock() + float(seconds)
             while True:
                 self.sleep(min(POLL, max(0.0, end - self.clock())))
-                raw = self.link.one('dbg', 'read', word(seq)).get('hits') or []
+                raw = hits_of_slot(self.link.one('dbg', 'read', word(seq)).get('hits') or [], slot)
                 for h in raw:
                     seq = max(seq, int(h[0]))
                     if len(rows) < MAX_HITS:
@@ -132,13 +164,25 @@ class BlameTools:
                 if self.clock() >= end:
                     break
         finally:
-            self.link.one('dbg', 'clear', 'f')
+            release_debug_register(self.link, slot)        # only this watch's register; another watch keeps its own
+            self._drop_statement_hook(installed)
         self._keep(rows)
         return verdict('%d writes to %s in %s s.' % (len(rows), _hx(address), seconds),
                        'Each hit names the writer; a script runner on the stack adds the last statement its thread ran.'
                        if rows else 'No hits: the field was not written in that time. Make the game write it, then run '
                        'field again.', address=_hx(address), access=access, scope=scope, hits=rows[:200],
                        total=len(rows))
+
+    def _drop_statement_hook(self, installed):
+        """Remove the statement hook field installed, unless a break or the log needs it now (it would record every
+        statement of every script for the rest of the session)."""
+        hook = self.statement_hook
+        if not installed or hook is None or getattr(hook, 'holding', False) or getattr(hook, 'log_on', False):
+            return
+        try:
+            hook.remove()
+        except Exception:  # noqa: BLE001 - the hook stays; fnv_hooks can remove it
+            pass
 
     def _address(self, path):
         text = str(path or '').strip()
@@ -165,7 +209,9 @@ class BlameTools:
         row = {'source': 'field', 'address': _hx(address), 'writer': stack[0].get('function'),
                'line': stack[0].get('source'), 'thread': _thread_label(thread), 'value': value, 'stack': stack}
         if any((s.get('function') or '').startswith('ScriptRunner') for s in stack):
-            exact = self._statement_at(int(h[8]), int(h[9])) if len(h) >= 10 and h[8] and h[9] else None
+            # h[8] is the hook id (0 is a valid id: the statement hook is often the first of a session); h[9] is the
+            # record sequence, 0 when the thread wrote no record
+            exact = self._statement_at(int(h[8]), int(h[9])) if len(h) >= 10 and h[9] else None
             row['script'] = exact or self._script_context(_int(thread) if str(thread).lower().startswith('0x')
                                                           else int(thread))
         return row
@@ -238,7 +284,7 @@ class BlameTools:
                 status = (engine.summary(address, with_location=False) or {}).get('status')
             except Exception:      # noqa: BLE001 - a missing name is an answer here, not an error
                 continue
-            if status in ('proven', 'class proven'):
+            if status in ('proven', 'class proven', 'class_proven'):      # the engine map writes class_proven
                 return address, name
         return None, None
 
@@ -361,9 +407,10 @@ class BlameTools:
             if not label.startswith(LABEL):
                 continue
             meta = self.armed.get(label, {})
-            since = self.seen.get(label, 0)
+            last = self.seen.get(label)
+            since = last[1] if last and last[0] == h.get('id') else 0       # another hook: its ring starts at 0
             seq, recs, _ = self.live.deep.records(h, since, limit=RING_SCAN)
-            self.seen[label] = seq
+            self.seen[label] = (h.get('id'), seq)
             for r in recs:
                 caller = self.dbg._symbol(r[5], return_address=True) if r[5] else {}
                 hit = {'source': 'ref', 'what': label[len(LABEL):], 'function': meta.get('function'),

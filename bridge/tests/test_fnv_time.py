@@ -310,8 +310,12 @@ class TimeControlTests(TimeTestCase):
     def test_step_runs_exact_frames_at_a_fixed_rate(self):
         out = self.control.run('step', frames=60, fps=60)
         self.assertEqual(self.comp.requests[0], [('gatecfg', 'aa50a0', 'aa5040', '11f6394')])
-        self.assertEqual(self.comp.requests[1], FRAME_READ + [('call', '86d4c0', 'v', '11f6394', '0', '3c'),
-                                                              ('step', '3c'), ('gate',)])
+        # E22: the fixed step the game had is read first and put back at the stop frame (here: off, 0 fps)
+        self.assertEqual(self.comp.requests[1], [('rd', '11f6398', '4')])
+        self.assertEqual(self.comp.requests[2], FRAME_READ + [('call', '86d4c0', 'v', '11f6394', '0', '3c'),
+                                                              ('step', '3c'),
+                                                              ('call', '86d4c0', 'v', '11f6394', '0', '0'),
+                                                              ('gate',)])
         self.assertEqual(out['advanced'], 60)
         self.assertEqual((out['frameBefore'], out['frameAfter']), (100, 160))
         self.assertEqual(out['fixedFps'], 60)

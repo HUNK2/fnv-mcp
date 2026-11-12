@@ -210,8 +210,14 @@ class NativeTools:
                '-I', str(self.sdk), '-o', str(out), str(path or target)]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         if result.returncode:
-            raise ConvError('BUILD_FAILED', 'zig cc failed:\n%s' % result.stderr[-6000:],
-                            {'stderr': result.stderr[-6000:], 'command': ' '.join(cmd)})
+            text = (result.stderr or '').strip() or (result.stdout or '').strip()
+            if not text:
+                # The linker can stop with no message at all (seen with a .safeseh directive in inline asm).
+                text = ('no message (exit code %d). The compiler or linker stopped silently: check inline asm '
+                        'directives (.safeseh, sections) and run the command by hand to see more.' % result.returncode)
+            raise ConvError('BUILD_FAILED', 'zig cc failed:\n%s' % text[-6000:],
+                            {'stderr': result.stderr[-6000:], 'stdout': (result.stdout or '')[-2000:],
+                             'exitCode': result.returncode, 'command': ' '.join(cmd)})
         return verdict('Built %s' % out.name, 'Load it with fnv_native load name=%s.' % name, dll=str(out), name=name,
                        warnings=result.stderr.strip()[-3000:] or None)
 
@@ -229,6 +235,10 @@ class NativeTools:
         if key in self.loaded:
             raise ConvError('ALREADY_LOADED', '%s is loaded (module %d). Next: reload or unload.'
                             % (key, self.loaded[key]['id']))
+        listed = self._listed(key)
+        if listed:   # loaded by an earlier server process (the supervisor restarts it on code changes)
+            raise ConvError('ALREADY_LOADED', '%s is loaded (module %s, by an earlier server process). Next: call it, '
+                            'or reload / unload it.' % (key, listed['id']))
         self.live.changing('native load')
         out = self.live.link.one('mod', 'load', hexs(str(dll.resolve())), timeout=60)
         if not out.get('ok'):
@@ -283,6 +293,13 @@ class NativeTools:
                        hooksRemoved=out.get('hooksRemoved'), writesRestored=out.get('writesRestored'),
                        log=self._log_tail())
 
+    def _listed(self, key):
+        """The companion's record of a loaded module by name (it outlives a server restart), or None."""
+        for m in self.live.link.one('mod', 'list').get('modules', []):
+            if c_name(str(m['name']).rsplit('-', 1)[0]) == key:
+                return m
+        return None
+
     def _which(self, name):
         if name is None and len(self.loaded) == 1:
             key = next(iter(self.loaded))
@@ -313,7 +330,7 @@ class NativeTools:
             pe = struct.unpack('<I', self.live.reads([(base + 0x3C, 4)])[0])[0]
             rva, size = struct.unpack('<II', self.live.reads([(base + pe + 0x78, 8)])[0])
             raw = self.live.reads([(base + rva, 40)])[0]
-            count, names = struct.unpack_from('<II', raw, 24)[1], struct.unpack_from('<I', raw, 32)[0]
+            count, names = struct.unpack_from('<I', raw, 24)[0], struct.unpack_from('<I', raw, 32)[0]  # NumberOfNames
             funcs, ords = struct.unpack_from('<I', raw, 28)[0], struct.unpack_from('<I', raw, 36)[0]
             name_rvas = struct.unpack('<%dI' % count, self.live.reads([(base + names, 4 * count)])[0])
             texts = self.live.reads([(base + r, 64) for r in name_rvas])
@@ -333,16 +350,23 @@ class NativeTools:
             listed = self.live.link.one('mod', 'list').get('modules', [])
             for m in listed:      # loaded by an earlier bridge: find the slot in its export table in memory
                 if c_name(m['name'].rsplit('-', 1)[0]) == key:
-                    address = self._export_in_memory(int(str(m['base']), 16), 'fnvmcp_flow_slot')
-                    if address:
+                    base = int(str(m['base']), 16)
+                    address = self._export_in_memory(base, 'fnvmcp_flow_slot')
+                    version = self._export_in_memory(base, 'fnvmcp_flow_version')
+                    if address and version:
                         self.loaded[key] = {'id': m['id'], 'dll': m['name'], 'hooks': [],
-                                            'exports': {'fnvmcp_flow_slot': '0x%08X' % address}}
+                                            'exports': {'fnvmcp_flow_slot': '0x%08X' % address,
+                                                        'fnvmcp_flow_version': '0x%08X' % version}}
                         break
+                    # an older build (its slot has no edx word): unload it, the current one is loaded below
+                    self.live.link.one('mod', 'unload', word(int(m['id'])))
             if key not in self.loaded:
                 source = Path(__file__).resolve().parent.parent / 'native' / 'modules' / 'fnvmcp_flowcall.c'
                 try:
-                    self._newest(key)
+                    stale = self._newest(key).stat().st_mtime < source.stat().st_mtime
                 except ConvError:
+                    stale = True
+                if stale:  # never load a build older than the module's source
                     self.build(str(source), key)
                 self.load(key)
         exports = self.loaded.get(key, {}).get('exports', {})
@@ -356,8 +380,15 @@ class NativeTools:
         self.live.ready()
         key, _ = self._which(name)
         exports = self.loaded.get(key, {}).get('exports', {})
+        if export not in exports and key not in self.loaded:
+            # Loaded by an earlier server process: read the export from the DLL's export table in the game's memory.
+            listed = self._listed(key)
+            address = self._export_in_memory(int(str(listed['base']), 16), export) if listed else None
+            if address:
+                exports = {export: '0x%08X' % address}
         if export not in exports:
-            raise ConvError('NO_EXPORT', '%s has no export %r (exports: %s).' % (key, export, ', '.join(exports)))
+            raise ConvError('NO_EXPORT', '%s has no export %r (exports: %s).' % (key, export, ', '.join(exports)
+                                                                                 or 'none known'))
         words = []
         for a in args or []:
             if isinstance(a, float):
@@ -365,6 +396,11 @@ class NativeTools:
             else:
                 words.append(word(int(a)))
         out = self.live.link.one('call', word(int(exports[export], 16)), 'ig', '0', '0', *words, timeout=60)
+        if out.get('fault'):
+            fault = out['fault']
+            raise ConvError('CALL_FAULTED', '%s.%s faulted at %s (%s %s); the guard caught it and the game kept '
+                            'running, but state the function had half changed may remain (stateSuspect).'
+                            % (key, export, fault.get('address'), fault.get('access'), fault.get('code')), out)
         if not out.get('ok', True) or 'eax' not in out:
             raise ConvError('CALL_FAILED', 'The call failed (%s).' % (out.get('error') or out), out)
         eax = int(out['eax'], 16)

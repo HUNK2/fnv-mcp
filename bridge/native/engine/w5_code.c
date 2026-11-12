@@ -53,11 +53,11 @@ static void op_code(int argc, char **argv) {
         if (!parse_u32(argv[2], &value) || value < 0x10000) return fail("bad_arguments");
         long length = unhex(argv[3]);
         if (length <= 0 || length > (long)CODE_PATCH_MAX) return fail("bad_arguments");
+        cov_release_range(value, (uint32_t)length);
         if (!read_bytes(value, old, (size_t)length)) return fail("unreadable");
-        probe_suspend();
-        bool ok = code_write(value, argv[3], (size_t)length);
-        probe_resume();
-        if (!ok) return fail("unwritable");
+        int written = code_write_frozen(value, argv[3], (size_t)length);
+        if (written == 1) return fail("busy"); /* a thread stands inside the bytes: call again */
+        if (written) return fail("unwritable");
         emit("{\"ok\":true,\"length\":%ld,\"old\":\"", length);
         emit_hex_bytes(old, (size_t)length);
         emit("\"}");

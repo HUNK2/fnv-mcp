@@ -81,6 +81,15 @@ def _norm(path):
     return str(path).replace('/', '\\').strip('\\').lower()
 
 
+AUDIO_EXTS = ('.ogg', '.wav', '.mp3')
+
+
+def _data_rel(path):
+    """A path relative to Data: the engine sometimes names files with a leading data\\."""
+    p = _norm(path)
+    return p[len('data\\'):] if p.startswith('data\\') else p
+
+
 def _model_rel(path):
     """A model path as GetModelPath prints it: relative to meshes."""
     p = _norm(path)
@@ -121,6 +130,7 @@ def _node_children(data, head, i):
         return list(struct.unpack_from('<%di' % n_children, data, p + 4))
     except struct.error:
         return []
+
 
 
 
@@ -178,10 +188,12 @@ class AssetTools:
         live_refs = [p for p in ptrs if not (self.live.values(['GetDisabled'], p)[0])]
         for p in live_refs:
             self.live.console('Disable', p)
-        self.sleep(0.2)
-        self._purge()
-        for p in live_refs:
-            self.live.console('Enable', p)
+        try:
+            self.sleep(0.2)
+            self._purge()
+        finally:
+            for p in live_refs:             # always bring the references back, even when the purge failed
+                self.live.console('Enable', p)
         deadline = self.clock() + 20
         pending = list(live_refs)
         while pending and self.clock() < deadline:
@@ -395,7 +407,7 @@ class AssetTools:
                 name = texture_names.get(r[24]) or ''
                 if not name:
                     continue
-                rel = _norm(name)
+                rel = _data_rel(name)
                 rel = rel if rel.startswith('textures\\') else 'textures\\' + rel
                 try:
                     index = index or self._index()
@@ -424,6 +436,18 @@ class AssetTools:
             if not name:
                 continue
             found = bool(r[8]) if r[1] == 2 else None
+            found_as = None
+            if found is False and _norm(name).endswith(AUDIO_EXTS):
+                # The sound code asks for each audio extension in turn (.ogg first, then .wav...): a miss is only
+                # missing when no other extension of the same file exists.
+                stem = _data_rel(name).rsplit('.', 1)[0]
+                try:
+                    index = index or self._index()
+                    found_as = next((stem + e for e in AUDIO_EXTS if index.find(stem + e) is not None), None)
+                except LiveError:
+                    found_as = None
+                if found_as:
+                    found = True
             if found is False:
                 counts['missing'] += 1
             elif found:
@@ -435,7 +459,10 @@ class AssetTools:
                 continue
             if folder and _norm(folder) not in low:
                 continue
-            out.append({'path': name, 'found': found, 'source': source, 'thread': r[2], 'caller': '0x%08X' % r[5]})
+            entry = {'path': name, 'found': found, 'source': source, 'thread': r[2], 'caller': '0x%08X' % r[5]}
+            if found_as:
+                entry['foundAs'] = found_as
+            out.append(entry)
         names = {}
         try:
             engine = self.live.engine()
@@ -739,7 +766,15 @@ class FormTools:
         if modl is not None:
             ops.append(('model', modl.split(b'\0', 1)[0].decode('cp1252'), 'SetModelPathEX "%%s" %s' % form_id))
         data = rec.get('DATA')
-        if rtype in ('MISC', 'KEYM', 'AMMO') and data and len(data) >= 8:
+        if rtype == 'AMMO':
+            # AMMO DATA is speed f32, flags u8, 3 unused, value i32, clip rounds u8; weight is DAT2 at +8.
+            if data and len(data) >= 12:
+                ops.append(('value', struct.unpack_from('<i', data, 8)[0], 'SetBaseItemValue %s %%s' % form_id))
+            dat2 = rec.get('DAT2')
+            if dat2 and len(dat2) >= 12:
+                ops.append(('weight', round(struct.unpack_from('<f', dat2, 8)[0], 4),
+                            'SetWeight %%s %s' % form_id))
+        elif rtype in ('MISC', 'KEYM') and data and len(data) >= 8:
             value, weight = struct.unpack_from('<if', data, 0)
             ops += [('value', value, 'SetBaseItemValue %s %%s' % form_id),
                     ('weight', round(weight, 4), 'SetWeight %%s %s' % form_id)]
@@ -1083,16 +1118,49 @@ class PlaceTools:
                 self.live.journal.add({'kind': 'place_pose', 'ref': form_id, **pose, 'undo': None})
                 return
 
+    def _surface(self, x, y, z, ignore=0, d=24.0):
+        """The surface under (x, y): its height and the slope (dz/dx, dz/dy) from four more rays d units around
+        (the pick rays give no normal). None when the centre ray finds nothing."""
+        g = self._ground(x, y, z, ignore=ignore)
+        if g is None:
+            return None
+        around = [self._ground(x + dx, y + dy, z, ignore=ignore) for dx, dy in ((d, 0), (-d, 0), (0, d), (0, -d))]
+        xp, xm, yp, ym = [g if v is None or abs(v - g) > 4 * d else v for v in around]   # a step or a wall: flat
+        return g, (xp - xm) / (2 * d), (yp - ym) / (2 * d)
+
+    @staticmethod
+    def _tilt(dzdx, dzdy, heading):
+        """SetAngle X and Y (degrees) that turn an object's up axis onto the surface normal. Measured in the game from
+        the 3D's world rotation (+0x68): the up axis is (-sin Y, sin X cos Y, cos X cos Y) whatever the heading (Z
+        turns first, so it keeps the heading)."""
+        nx, ny, nz = -dzdx, -dzdy, 1.0
+        length = math.sqrt(nx * nx + ny * ny + nz * nz)
+        nx, ny = nx / length, ny / length
+        y = -math.asin(max(-1.0, min(1.0, nx)))
+        x = math.asin(max(-1.0, min(1.0, ny / max(1e-6, math.cos(y)))))
+        return math.degrees(x), math.degrees(y)
+
     def snap(self, ref, align=False):
         self.live.in_game()
         r = self.live.resolve(ref)
         pose = self._pose(r['ptr'])
         x, y, z = pose['position']
-        g = self._ground(x, y, z + 50, ignore=r['ptr'])
+        surface = self._surface(x, y, z + 50, ignore=r['ptr']) if align else None
+        g = surface[0] if surface else self._ground(x, y, z + 50, ignore=r['ptr'])
         if g is None:
             return {'ref': r['formId'], 'snapped': False, 'note': 'No surface found under it on the pick layers.'}
-        return {**self.adjust(ref, move=[0, 0, g - z]), 'snapped': True, 'ground': round(g, 2),
-                'note': None if not align else 'align to the surface normal is not built yet'}
+        if not align:
+            return {**self.adjust(ref, move=[0, 0, g - z]), 'snapped': True, 'ground': round(g, 2)}
+        _, dzdx, dzdy = surface
+        heading = pose['rotation'][2]
+        pitch, roll = self._tilt(dzdx, dzdy, heading)
+        rotate = [((pitch - pose['rotation'][0] + 180) % 360) - 180, ((roll - pose['rotation'][1] + 180) % 360) - 180,
+                  0]
+        out = self.adjust(ref, move=[0, 0, g - z], rotate=rotate)
+        slope = math.degrees(math.atan(math.hypot(dzdx, dzdy)))
+        return {**out, 'snapped': True, 'ground': round(g, 2), 'aligned': True, 'slopeDegrees': round(slope, 1),
+                'how': 'the surface slope from five rays 24 units apart (the pick rays carry no normal); SetAngle X '
+                       'and Y lay the object on it at its heading'}
 
     def check(self, ref):
         self.live.in_game()
@@ -1207,7 +1275,7 @@ class PlaceTools:
         if action == 'scale':
             return self.adjust(kw['ref'], scale=kw.get('scale'))
         if action == 'snap':
-            return self.snap(kw['ref'])
+            return self.snap(kw['ref'], kw.get('align', False))
         if action == 'check':
             return self.check(kw['ref'])
         if action == 'list':

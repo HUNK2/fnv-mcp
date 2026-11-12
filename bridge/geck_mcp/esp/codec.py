@@ -14,6 +14,7 @@ parse(write(x)) == x and write(parse(b)) == b for well-formed input. Compressed
 record payloads are kept verbatim until a caller replaces the subrecords, so
 round-trips never depend on zlib settings.
 """
+import codecs
 from dataclasses import dataclass, field
 import struct
 import zlib
@@ -142,15 +143,29 @@ class Plugin:
 
 # -- helpers -----------------------------------------------------------------------
 
+def _cp1252_bytes(error):
+    # cp1252 leaves 0x81, 0x8D, 0x8F, 0x90 and 0x9D undefined; plugins can still hold them. Read each as the
+    # same code point (as Latin-1 does), so the text survives and writes back to the same byte.
+    if isinstance(error, UnicodeDecodeError):
+        return ''.join(chr(b) for b in error.object[error.start:error.end]), error.end
+    text = error.object[error.start:error.end]
+    if isinstance(error, UnicodeEncodeError) and all(0x80 <= ord(c) <= 0x9F for c in text):
+        return bytes(ord(c) for c in text), error.end
+    raise error
+
+
+codecs.register_error('cp1252-bytes', _cp1252_bytes)
+
+
 def cstring(data):
-    """Decode a zero-terminated cp1252 string (tolerates a missing terminator)."""
+    """Decode a zero-terminated cp1252 string (tolerates a missing terminator and cp1252's undefined bytes)."""
     if data.endswith(b'\0'):
         data = data[:-1]
-    return data.decode('cp1252')
+    return data.decode('cp1252', 'cp1252-bytes')
 
 
 def zstring(text):
-    return text.encode('cp1252') + b'\0'
+    return text.encode('cp1252', 'cp1252-bytes') + b'\0'
 
 
 def decompress(payload):

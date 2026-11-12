@@ -221,9 +221,14 @@ class ExperimentTools:
         from .fnv_control import ACT_PREFIX
         pop = ret_pop(self.live.engine(), self.live.deep._image(required=True), int(function, 16))
         self.control.hook_set(function, action='skip', value=0, pop_bytes=pop, allow_unproven=True)
-        h = self.control.deep.hook(ACT_PREFIX + '%08X' % int(function, 16))
-        hook = {'id': h['id'], 'pop': pop}
-        self._switch(hook, False)
+        try:
+            # The skip is live from the moment the hook exists: any failure before it is switched off removes it.
+            h = self.control.deep.hook(ACT_PREFIX + '%08X' % int(function, 16))
+            hook = {'id': h['id'], 'pop': pop}
+            self._switch(hook, False)
+        except BaseException:
+            self._disarm(function)
+            raise
         return hook
 
     def _switch(self, hook, on):
@@ -363,9 +368,10 @@ class ExperimentTools:
                 ok = [bool(self.trial(spec, ptr)['effect']) for _ in range(3)]
                 baseline[p] = sum(ok) >= 2
             usable = [p for p in panels if targets.get(PANELS[p]['target']) and baseline[p]]
+            errors = {}
             for a in cands:
-                hook = self._arm(hx(a))
                 try:
+                    hook = self._arm(hx(a))
                     hits = {p: 0 for p in usable}
                     for r in range(reps):
                         # round 1: every panel; later rounds confirm, with a control, only what stayed blocked
@@ -375,9 +381,13 @@ class ExperimentTools:
                                 continue
                             if self.trial(spec, ptr, toggle=hook)['effect'] is False:
                                 hits[p] += 1
+                    results[a] = [p for p in usable if hits[p] == reps]
+                except LinkError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - one candidate's failure keeps the other results
+                    errors[hx(a)] = '%s: %s' % (type(e).__name__, str(e)[:200])
                 finally:
                     self._disarm(hx(a))
-                results[a] = [p for p in usable if hits[p] == reps]
         except LinkError as e:
             return {'error': 'the game stopped answering: %s' % e, 'partial': {hx(a): b for a, b in results.items()}}
         finally:
@@ -402,6 +412,8 @@ class ExperimentTools:
                          % reps, 'panels': panels, 'baseline': baseline, 'cases': len(cands), 'claims': correct + wrong,
                'correct': correct, 'wrong': wrong, 'abstained': abstained,
                'precision': round(correct / (correct + wrong), 4) if correct + wrong else None, 'detail': detail}
+        if errors:
+            out['errors'] = errors          # candidates whose run failed (counted as abstained)
         path = self.live.project.state_dir / ('experiment_battery_%s.json' % time.strftime('%Y%m%d-%H%M%S'))
         path.write_text(json.dumps(out, indent=1, default=str), encoding='utf-8')
         out['file'] = str(path)

@@ -110,7 +110,7 @@ class Rays:
                     ('call', word(PICK_CTOR), 'i', word(pick), '0'),
                     ('call', word(PICK_FROM), 'i', word(pick), '0', word(pts)),
                     ('call', word(PICK_TO), 'i', word(pick), '0', word(pts + 12)),
-                    ('call', word(PICK_FILTER), 'i', word(pick), word(layer)),
+                    ('call', word(PICK_FILTER), 'i', word(pick), '0', word(layer)),   # filter on the stack (ret 4)
                     ('call', word(TES_PICK), 'i', word(tes), '0', word(pick)),
                     ('rd', word(pick), word(0xB0))]
         replies = self.live.link.batch(ops, timeout=30)

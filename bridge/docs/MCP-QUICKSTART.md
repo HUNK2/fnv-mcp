@@ -145,7 +145,27 @@ A generic stdio client configuration uses:
 }
 ```
 
-On Windows use `.venv\Scripts\python.exe` and Windows paths. After changing the arguments **or the bridge code**, restart the MCP client (quit and reopen Claude desktop or Codex): a running server keeps the code and profile it loaded at startup.
+On Windows use `.venv\Scripts\python.exe` and Windows paths.
+
+### Code changes reload by themselves
+
+`run_mcp.py` is a small supervisor (`geck_mcp/supervisor.py`) that runs the server as a child process. When a file
+under `geck_mcp/` or the project JSON changes, it waits until no call is running, starts a new server with the new
+code, swaps it in and tells the client the tool list changed: `notifications/tools/list_changed` for clients that
+used the `initialize` handshake (the `initialize` result declares `tools.listChanged`), a change event on each
+`subscriptions/listen` stream for 2026-07-28 clients. A client that honours the notice lists the tools again, so
+new tools, arguments and descriptions arrive without a reconnect (the MCP SDK client does; for the Claude app see
+FNV-LIVE-TOOLS.md, "Live checks of the leftovers"). The code itself is new on the next call in any client. Other
+behaviour:
+
+- A change that does not start (a syntax error) leaves the old server serving; the traceback is in the MCP log
+  (stderr), and the reload is tried again on the next save.
+- A server process that exits during a call (a crash, a kill) fails only the calls it had running, with an error
+  that says so; the next call starts a new one. Killing the child to free the game's companion pipe still works.
+- A reload loses what the server held in memory (the same as any restart): a debugger stop, an operation being
+  polled. Reloads happen only between calls.
+- `--no-reload` (or `GECK_MCP_RELOAD=0`) serves in one process, as before. Changing the client's arguments, or
+  `run_mcp.py` / `supervisor.py` themselves, still needs the client to restart the server.
 
 ### Session argument (0.2.0)
 

@@ -21,11 +21,11 @@ ACTION = 0x005AC750
 LOCALS_ACTION = 0x005A8E20
 PROCESS = 0x0118C000
 PROCESS_BYTE = 0x0118C685
-SCRIPT = 0x30000000          # Script object: form id +0xC, variable list +0x4C
+SCRIPT = 0x30000000          # Script object: form id +0xC, variable list node embedded at +0x4C (item, next)
 RUNNER = 0x30010000          # ScriptRunner: locals +8, script +0x14
 LOCALS = 0x30020000          # ScriptLocals: variable list +0x0C
 NODE_V = 0x30030000          # BSSimpleList node of a local variable
-VAR = 0x30040000             # ScriptLocalVariable: id +0, fValue +8, string flag +0x10
+VAR = 0x30040000             # ScriptLocalVariable: id +0, fValue +8 (16 bytes; the type is in the variable info)
 NODE_S = 0x30050000          # BSSimpleList node of the script's variable info
 INFO = 0x30060000            # ScriptVariableInfo: id +0, name pointer +0x18, length +0x1C
 NAME = 0x30070000
@@ -142,7 +142,7 @@ class ScriptLive:
         return raw
 
     def _script(self):
-        raw = self._words({0x0C: FORM_ID, 0x4C: NODE_S}, 0x100)
+        raw = self._words({0x0C: FORM_ID, 0x4C: INFO, 0x50: 0}, 0x100)
         return raw
 
     def _var(self):
@@ -304,7 +304,7 @@ class StopTests(ScriptDebugTestBase):
         self.assertEqual(out['total'], 1)
         self.assertEqual(out['variables'][0]['name'], 'bossHP')
         self.assertEqual(out['variables'][0]['value'], 2.0)
-        self.assertEqual(out['variables'][0]['type'], 'number')
+        self.assertEqual(out['variables'][0]['type'], 'float')     # ScriptVariableInfo +0x10: 0 float, 1 integer
 
     def test_set_writes_the_variable_value(self):
         self.run_tool('break', op='set', script='QuestScript', line=LINE)

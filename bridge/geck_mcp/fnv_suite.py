@@ -13,7 +13,11 @@ engine-map identity, the singletons the tools read (player, TES, scene graph cam
 the prologues the hooks plan, the symbol database, the decomp checkout, and a cheap call into each family. Each row
 is ok, degraded (a fallback is in use) or broken, with the fact that failed.
 """
+import hashlib
+import json
+import os
 import struct
+import threading
 import time
 from pathlib import Path
 
@@ -30,6 +34,8 @@ class BisectTools:
         self.records = records
         self.runner_factory = runner_factory        # () -> ScenarioRunner
         self.quit_game = quit_game or (lambda: self.live.game.quit())
+        self._busy = threading.Lock()               # one bisect at a time: it owns the profile and the plugin file
+        self.inconclusive = False
 
     def _candidates(self, level, keep):
         if level == 'records':
@@ -42,7 +48,12 @@ class BisectTools:
             return [m for m in mods if m.lower() not in PROTECTED_MODS and m.lower() not in keep
                     and not m.endswith('_separator')]
         lines = (profile / 'plugins.txt').read_text(encoding='utf-8', errors='replace').splitlines()
-        active = [l[1:] for l in lines if l.startswith('*')]
+        # MO2's New Vegas plugins.txt has no leading '*' (a plugin is active when listed); the '*' style (newer games)
+        # is accepted too, and there only starred lines are active.
+        content = [l.strip() for l in lines if l.strip() and not l.strip().startswith('#')]
+        if any(l.startswith('*') for l in content):
+            content = [l for l in content if l.startswith('*')]
+        active = [l.lstrip('*') for l in content]
         return [p for p in active if p.lower() not in BASE_PLUGINS and p.lower() not in keep]
 
     def _set(self, level, on, off):
@@ -63,7 +74,13 @@ class BisectTools:
 
     def _passes(self, scenario):
         report = self.runner_factory().run(data=dict(scenario))
-        return bool(report.get('passed')), report.get('summary') or report.get('failures')
+        passed = bool(report.get('passed'))
+        failures = report.get('failures') or []
+        # A run that never got going (launch failed, a master was switched off under its dependent) says nothing
+        # about the scenario: every failure is phase 'prepare'.
+        self.inconclusive = (not passed and bool(failures) and not report.get('crash')
+                             and all(f.get('phase') == 'prepare' for f in failures))
+        return passed, report.get('summary') or report.get('failures')
 
     def _plugin_file(self):
         from .fnv_data import load_order
@@ -79,7 +96,8 @@ class BisectTools:
         if not getattr(self, 'plugin', None):
             raise ConvError('BAD_ARGUMENTS', 'level records needs plugin.')
         path = self._plugin_file()
-        if not hasattr(self, '_original'):
+        held = getattr(self, '_original', None)
+        if held is None or held[0] != path:         # never reuse another plugin's bytes
             self._original = (path, path.read_bytes())
         keep = {k.upper() for k in keep or []}
         out = []
@@ -108,65 +126,146 @@ class BisectTools:
                     kept.append(item)
             return kept
         plugin.groups = prune(plugin.groups)
-        path.write_bytes(codec.write(plugin))
+        _atomic_write(path, codec.write(plugin))
+
+    def _backup_original(self):
+        """Copy the plugin's original bytes to the project's state dir (named with their sha256) before any variant
+        is written, so a dead server leaves something to restore from."""
+        path, data = self._original
+        project = getattr(self.live, 'project', None)
+        if project is None or not getattr(project, 'state_dir', None):
+            return None
+        sha = hashlib.sha256(data).hexdigest()
+        folder = Path(project.state_dir) / 'fnv' / 'bisect'
+        folder.mkdir(parents=True, exist_ok=True)
+        backup = folder / ('%s.%s.orig' % (path.name, sha[:16]))
+        _atomic_write(backup, data)
+        (folder / (path.name + '.restore.json')).write_text(json.dumps(
+            {'plugin': str(path), 'backup': str(backup), 'sha256': sha}, indent=2) + '\n', encoding='utf-8')
+        return {'path': str(backup), 'sha256': sha}
 
     def _restore_plugin(self):
         original = getattr(self, '_original', None)
         if original:
-            original[0].write_bytes(original[1])
-            del self._original
+            _atomic_write(original[0], original[1])
+            if original[0].read_bytes() != original[1]:
+                raise OSError('the restored plugin does not match the original')
+            self._original = None
 
     def bisect(self, level, steps, start='continue', keep=None, max_rounds=10, plugin=None):
         if level not in ('mods', 'plugins', 'records'):
             raise ConvError('BAD_ARGUMENTS', 'level is mods, plugins or records (with plugin).')
-        self.plugin = plugin
-        if level == 'records' and self.live.game.process():
-            self.quit_game()
         if not steps:
             raise ConvError('BAD_ARGUMENTS', 'steps (the failing scenario, as for fnv_do) are needed.')
-        scenario = {'name': 'bisect', 'start': start, 'steps': list(steps), 'relaunch_on_crash': True}
-        everything = self._candidates(level, keep)
-        if len(everything) < 1:
-            raise ConvError('NO_CANDIDATES', 'No %s to bisect (protected ones are kept on).' % level)
-        rounds = []
+        if not self._busy.acquire(blocking=False):
+            raise ConvError('BUSY', 'Another fnv_bisect is running; it owns the profile and the plugin file.')
         try:
-            self._set(level, everything, [])
-            ok, why = self._passes(scenario)
-            rounds.append({'round': 0, 'off': [], 'passed': ok})
-            if ok:
-                return verdict('The scenario passes with every %s on: nothing to bisect' % level[:-1], str(why),
-                               rounds=rounds)
-            self._set(level, [], everything)
-            ok, why = self._passes(scenario)
-            rounds.append({'round': 0, 'off': list(everything), 'passed': ok})
-            if not ok:
-                return verdict('The scenario fails even with every candidate off: the cause is not one of them',
-                               str(why), rounds=rounds, candidates=everything)
-            suspects = list(everything)
-            n = 1
-            while len(suspects) > 1 and n <= max_rounds:
-                half = suspects[:len(suspects) // 2]
-                rest = [x for x in everything if x not in half]
-                self._set(level, half, rest)         # only the first half of the suspects on
-                ok, why = self._passes(scenario)
-                rounds.append({'round': n, 'on': half, 'passed': ok})
-                suspects = half if not ok else suspects[len(suspects) // 2:]
-                n += 1
-            culprit = suspects[0] if len(suspects) == 1 else None
-            return verdict('The culprit is %s (%d rounds)' % (culprit, n - 1) if culprit else
-                           'Narrowed to %d suspects in %d rounds' % (len(suspects), n - 1),
-                           'With only the culprit\'s half on, the scenario fails; with the other half on, it passes.',
-                           culprit=culprit, suspects=suspects, rounds=rounds, candidates=everything)
-        finally:
+            self.plugin = plugin
+            self._original = None                       # nothing carried over from an earlier call
+            restore_failed = []
+            result = None
+            touched = False                             # the game was closed or a variant written
+            everything = []
             try:
+                # Everything is validated before the game is closed.
+                everything = self._candidates(level, keep)
+                if len(everything) < 1:
+                    raise ConvError('NO_CANDIDATES', 'No %s to bisect (protected ones are kept on).' % level)
+                backup = None
                 if level == 'records':
+                    backup = self._backup_original()
+                    touched = True
                     if self.live.game.process():
                         self.quit_game()
-                    self._restore_plugin()
-                else:
-                    self._set(level, everything, [])        # the profile as it was
-            except Exception:  # noqa: BLE001 - reported by the caller's next fnv_profile_set
-                pass
+                result = self._bisect_rounds(level, steps, start, everything, max_rounds)
+                if backup:
+                    result['originalBackup'] = backup
+            finally:
+                if not touched:
+                    self._original = None               # read for the candidates only: nothing was changed
+                if level == 'records' and touched:
+                    try:
+                        if self.live.game.process():
+                            self.quit_game()
+                    except Exception as e:  # noqa: BLE001 - reported in the verdict; the file is still put back
+                        restore_failed.append('closing the game: %s' % str(e)[:200])
+                    try:
+                        self._restore_plugin()
+                    except Exception as e:  # noqa: BLE001 - reported in the verdict
+                        restore_failed.append('putting the plugin back: %s' % str(e)[:200])
+                elif everything and level != 'records':
+                    try:
+                        self._set(level, everything, [])        # the profile as it was
+                    except Exception as e:  # noqa: BLE001 - reported in the verdict
+                        restore_failed.append(str(e)[:300])
+            if restore_failed:
+                if result is None:
+                    raise ConvError('RESTORE_FAILED', 'The bisect ended and putting the %s back failed: %s' % (
+                        'plugin' if level == 'records' else 'profile', restore_failed[0]), restore_failed)
+                result['restoreFailed'] = restore_failed
+                result['verdict'] = 'RESTORE FAILED (%s). ' % restore_failed[0] + result['verdict']
+            return result
+        finally:
+            self._busy.release()
+
+    def _bisect_rounds(self, level, steps, start, everything, max_rounds):
+        scenario = {'name': 'bisect', 'start': start, 'steps': list(steps), 'relaunch_on_crash': True}
+        rounds = []
+        self._set(level, everything, [])
+        ok, why = self._passes(scenario)
+        rounds.append({'round': 0, 'off': [], 'passed': ok})
+        if ok:
+            return verdict('The scenario passes with every %s on: nothing to bisect' % level[:-1], str(why),
+                           rounds=rounds)
+        if self.inconclusive:
+            return verdict('Inconclusive: the game did not run the scenario with every %s on' % level[:-1], str(why),
+                           rounds=rounds, candidates=everything)
+        self._set(level, [], everything)
+        ok, why = self._passes(scenario)
+        rounds.append({'round': 0, 'off': list(everything), 'passed': ok})
+        if not ok:
+            return verdict('The scenario fails even with every candidate off: the cause is not one of them'
+                           if not self.inconclusive else 'Inconclusive: the game did not run the scenario with '
+                           'every candidate off', str(why), rounds=rounds, candidates=everything)
+        suspects = list(everything)
+        n = 1
+        while len(suspects) > 1 and n <= max_rounds:
+            half = suspects[:len(suspects) // 2]
+            rest = [x for x in everything if x not in half]
+            self._set(level, half, rest)         # only the first half of the suspects on
+            ok, why = self._passes(scenario)
+            rounds.append({'round': n, 'on': half, 'passed': ok})
+            if self.inconclusive:
+                return verdict('Inconclusive at round %d: the game did not run the scenario with this half on '
+                               '(a master switched off under its dependent?); %d suspects left' % (n, len(suspects)),
+                               str(why), suspects=suspects, rounds=rounds, candidates=everything, culprit=None)
+            suspects = half if not ok else suspects[len(suspects) // 2:]
+            n += 1
+        culprit = suspects[0] if len(suspects) == 1 else None
+        confirmed = None
+        if culprit and len(everything) > 1:
+            # The last step was never observed: run with only the culprit on, and it must fail.
+            self._set(level, [culprit], [x for x in everything if x != culprit])
+            ok, why = self._passes(scenario)
+            rounds.append({'round': 0, 'on': [culprit], 'confirm': True, 'passed': ok})
+            confirmed = (not ok) and not self.inconclusive
+            if not confirmed:
+                return verdict('Narrowed to %s, but it did not fail on its own: the failure needs another %s as well, '
+                               'or the run was inconclusive' % (culprit, level[:-1]), str(why), culprit=None,
+                               suspects=suspects, rounds=rounds, candidates=everything, confirmed=False)
+        return verdict('The culprit is %s (%d rounds)' % (culprit, n - 1) if culprit else
+                       'Narrowed to %d suspects in %d rounds' % (len(suspects), n - 1),
+                       'With only the culprit on, the scenario fails%s; with the other half on, it passes.' % (
+                           ' (confirmed)' if confirmed else ''),
+                       culprit=culprit, suspects=suspects, rounds=rounds, candidates=everything, confirmed=confirmed)
+
+
+def _atomic_write(path, data):
+    """Write through a temp file in the same folder and os.replace, so a crash never leaves a half file."""
+    path = Path(path)
+    tmp = path.with_name(path.name + '.bisect-tmp')
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
 
 
 class SelfTest:

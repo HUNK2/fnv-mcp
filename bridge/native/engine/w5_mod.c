@@ -148,7 +148,7 @@ static bool hook_remove(Hook *h) {
     h->native = NULL;
     if (!h->stolen) return true;
     if (!read_bytes(h->target, now, 5) || memcmp(now, expected, 5)) return false;
-    if (!code_write(h->target, h->original, h->stolen)) return false;
+    if (code_write_frozen(h->target, h->original, h->stolen)) return false;
     h->stolen = 0;
     return true;
 }

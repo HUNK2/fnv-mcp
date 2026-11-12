@@ -12,12 +12,17 @@ The byte format is section 2 of docs/FNV-COMPANION-V2.md. Text form:
   frame      the frame counter;  main  true on the game's main thread
   operators  == != < <= > >=   and or not   + - & << >>   ( )
   Precedence, lowest first: or, and, not, comparisons (one per term), &, shifts, + and -.
+  Comparisons are SIGNED 32-bit in the companion: a u32 pointer at or above 0x80000000 (common with the 4 GB patch)
+  is negative, so `x:u32 > 0x10000000` is false for it. compile_predicate reports such a comparison in `warnings`.
 
 Errors name the column (1-based) and say what to do next. Field paths such as player.parentCell are not
 supported yet: read the memory with [address]:type.
 """
+import json
 import re
 import struct
+import threading
+from pathlib import Path
 
 from .fnv_conv import ConvError
 
@@ -74,6 +79,9 @@ class _Code:
         self.ops = 0
         self.depth = 0
         self.max_depth = 0
+        self.reads = []         # (absolute address, size) of the first read of each absolute load: for a pre-check
+        self.u32_loads = 0      # u32 loads so far (a signed ordering compare of one is suspect)
+        self.warnings = []
 
     def _push(self, data):
         self.data += data
@@ -88,6 +96,11 @@ class _Code:
         self._push(b'\x02' + struct.pack('<f', value))
 
     def load(self, base, value, offsets, kind):
+        if base == 0:
+            size = 4 if len(offsets) > 1 else {'u8': 1, 'i8': 1, 'u16': 2, 'i16': 2}.get(kind, 4)   # a pointer first
+            self.reads.append(((value + offsets[0]) & 0xFFFFFFFF, size))
+        if kind == 'u32':
+            self.u32_loads += 1
         body = b''.join(struct.pack('<i', o) for o in offsets)
         self._push(b'\x10' + bytes([base]) + struct.pack('<I', value) + bytes([len(offsets)]) + body
                    + bytes([TYPES[kind]]))
@@ -171,12 +184,16 @@ class _Parser:
             self.comparison()
 
     def comparison(self):
+        loads_before = self.code.u32_loads
         self.bit_and()
         tok = self.peek()
         if tok[0] == 'op' and tok[1] in COMPARE:
             self.take()
             self.bit_and()
             self.code.binary(COMPARE[tok[1]])
+            if tok[1] not in ('==', '!=') and self.code.u32_loads > loads_before:
+                self.code.warnings.append('the comparison %s on a u32 value is signed: values at or above 0x80000000 '
+                                          'count as negative (use i32, or compare with == / != / &)' % tok[1])
             nxt = self.peek()
             if nxt[0] == 'op' and nxt[1] in COMPARE:
                 raise self.fail('comparisons cannot be chained: join them with and')
@@ -210,7 +227,10 @@ class _Parser:
             if num[0] == 'int':
                 self.push_int(-num[1], num[2])
             else:
-                self.code.float_(-num[1])
+                try:
+                    self.code.float_(-num[1])
+                except OverflowError:
+                    raise self.fail('the float -%s is too large for 32 bits' % num[1], num[2])
             return
         if tok[0] == 'int':
             self.take()
@@ -284,8 +304,10 @@ class _Parser:
 
     def address(self, root):
         """(base, value, offsets) for an address. Relative to root (a hook base) or absolute."""
+        absolute = False
         if self.is_('int'):
             tok = self.take()
+            absolute = root is None
             if root is None:
                 if not 0 <= tok[1] <= 0xFFFFFFFF:
                     raise _fail(self.text, tok[2], 'an address must be 0 to FFFFFFFF')
@@ -303,7 +325,10 @@ class _Parser:
                 raise self.fail("expected a number after '+' or '-' but found %s" % self.found())
             tok = self.take()
             base, value, offsets = chain
-            offsets[-1] = _check_i32(offsets[-1] + sign * tok[1], self.text, tok[2])
+            total = offsets[-1] + sign * tok[1]
+            if absolute and not I32_MIN <= total <= I32_MAX and 0 <= value + total <= 0xFFFFFFFF:
+                value, total = value + total, 0     # an absolute address: the sum is the address, not an offset
+            offsets[-1] = _check_i32(total, self.text, tok[2])
             chain = (base, value, offsets)
         return chain
 
@@ -329,4 +354,70 @@ def compile_predicate(text):
         raise ConvError('PREDICATE_TOO_DEEP', 'The predicate needs a stack of %d; the limit is %d. Next: use fewer '
                         'nested parentheses.' % (code.max_depth, MAX_DEPTH),
                         {'depth': code.max_depth, 'limit': MAX_DEPTH})
-    return {'hex': bytes(code.data).hex(), 'ops': code.ops, 'depth': code.max_depth, 'bytes': len(code.data)}
+    out = {'hex': bytes(code.data).hex(), 'ops': code.ops, 'depth': code.max_depth, 'bytes': len(code.data),
+           'reads': list(code.reads)}
+    if code.warnings:
+        out['warnings'] = code.warnings
+    return out
+
+
+# ===================================================================== state kept across server restarts
+_STATE_LOCK = threading.RLock()
+
+
+class ProcState:
+    """Small JSON file in the project's state dir for what only lives in server memory (clock pause, script freeze,
+    thread freeze, break bookkeeping): a supervisor restarts the server on every code change, and the game keeps
+    what the old server set. Each section is stored with the game's pid and start time; a record whose pid or start
+    does not match the running game belongs to a game that is gone and is ignored (and dropped). Best effort: a file
+    that cannot be read or written means no persistence, never an error."""
+
+    FILE = 'debug_state.json'
+
+    def __init__(self, live, name=None):
+        self.live = live
+        self.name = name or self.FILE
+
+    def _path(self):
+        folder = getattr(getattr(self.live, 'project', None), 'state_dir', None)
+        return Path(folder) / self.name if folder else None
+
+    def _read(self, path):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def load(self, section, pid, start):
+        """The stored value of a section for this game process, or None."""
+        path = self._path()
+        if path is None:
+            return None
+        with _STATE_LOCK:
+            rec = self._read(path).get(section)
+        if not isinstance(rec, dict) or rec.get('pid') != pid or rec.get('start') != start:
+            return None
+        return rec.get('value')
+
+    def save(self, section, pid, start, value):
+        """Store a section (None, an empty list or an empty dict removes it). Records of other processes are dropped on the way."""
+        path = self._path()
+        if path is None:
+            return
+        with _STATE_LOCK:
+            data = self._read(path)
+            data = {k: v for k, v in data.items() if isinstance(v, dict) and v.get('pid') == pid
+                    and v.get('start') == start}
+            if value is None or (isinstance(value, (list, dict)) and not value):
+                data.pop(section, None)
+            else:
+                data[section] = {'pid': pid, 'start': start, 'value': value}
+            try:
+                if data:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(data), encoding='utf-8')
+                elif path.exists():
+                    path.unlink()
+            except OSError:
+                pass

@@ -237,7 +237,17 @@ class Game:
         return self._session
 
     def save_session(self, **changes):
+        # Reread the file first: another bridge process on the same state dir may have written pid/ready since this
+        # process cached it, and a stale dict must not overwrite that.
+        path = self.state / 'session.json'
+        try:
+            fresh = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
+        except (OSError, ValueError):
+            fresh = None
         session = self.session()
+        if isinstance(fresh, dict):
+            session.clear()
+            session.update(fresh)
         session.update(changes)
         (self.state / 'session.json').write_text(json.dumps(session, indent=2) + '\n', encoding='utf-8')
         return session
@@ -292,7 +302,15 @@ class Game:
                'session': {k: session.get(k) for k in ('pid', 'launchedAt', 'start', 'ready')}}
         if not proc:
             crash = self.crash_since(session.get('launchedAt'))
-            out.update(phase='not_running', crashedSinceLaunch=crash)
+            last = self.last_exit(session.get('launchedAt'))
+            out.update(phase='not_running', crashedSinceLaunch=crash, lastExit=last)
+            if session.get('launchedAt') and not crash and not (last and last.get('forLastLaunch')):
+                # The companion writes its note from the game's own exit path, so a game that ended with neither a
+                # note nor a crash log was ended from outside: TerminateProcess (Task Manager, a script), MO2's job
+                # object closing with MO2, or a fault so early that the crash logger did not run.
+                out['exitNote'] = ('The last launched game ended without an exit note and without a crash log: it was '
+                                   'terminated from outside (killed, or closed with its MO2 job), not quit through '
+                                   'the console, the menu or the window.')
             return out
         ping = self.ping()
         out['companion'] = ping
@@ -596,6 +614,7 @@ class Game:
             return {'wasRunning': False}
         pid = proc[0]
         steps = []
+        self.log_quit(pid, 'quit (timeout %s, force %s)' % (timeout, force))
         if not self.ping().get('error'):
             try:
                 self.link.schedule(0, 'qqq')
@@ -614,6 +633,44 @@ class Game:
         if not self._exited(pid, 10):
             raise GameError('QUIT_FAILED', 'The game could not be terminated', {'steps': steps})
         return self._quit_result(pid, steps, 'terminated')
+
+    def last_exit(self, launched_at=None):
+        """How the last game with the companion exited (the companion's exit note: "console" = qqq or a script's
+        QuitGame, "window_or_menu" = the window closed or the menu's Quit), and whether the bridge asked for it (a
+        quit-log line within a minute before). None when no note exists (a crash or a kill writes none)."""
+        folder = Path(os.environ.get('LOCALAPPDATA', '')) / 'fnvmcp'
+        notes = sorted(folder.glob('exit-*.json'), key=lambda p: p.stat().st_mtime) if folder.is_dir() else []
+        if not notes:
+            return None
+        try:
+            note = json.loads(notes[-1].read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return None
+        at = notes[-1].stat().st_mtime
+        asked = None
+        log = Path(self.project.state_dir) / 'fnv' / 'quit-log.jsonl'
+        if log.exists():
+            try:
+                rows = [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines()[-50:] if line.strip()]
+            except ValueError:
+                rows = []
+            asked = any(r.get('pid') == note.get('pid') and at - 60 <= r.get('time', 0) <= at + 5 for r in rows)
+        return {'pid': note.get('pid'), 'how': note.get('how'), 'at': at, 'frame': note.get('frame'),
+                'servingRequest': note.get('servingRequest'), 'askedByBridge': asked,
+                'forLastLaunch': None if launched_at is None else at >= float(launched_at)}
+
+    def log_quit(self, pid, step):
+        """Every quit the bridge asks for, with the code path that asked (state/fnv/quit-log.jsonl), so a game that
+        closed with nobody knowing why can be traced: if the log has no line for that time, the bridge did not do it."""
+        import traceback
+        try:
+            path = Path(self.project.state_dir) / 'fnv' / 'quit-log.jsonl'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            stack = [line.strip() for line in traceback.format_stack(limit=10)[:-1]]
+            with path.open('a', encoding='utf-8') as f:
+                f.write(json.dumps({'time': time.time(), 'pid': pid, 'step': step, 'caller': stack[-6:]}) + '\n')
+        except OSError:
+            pass
 
     def _quit_result(self, pid, steps, how):
         self.link.close()
@@ -693,7 +750,13 @@ class Game:
     def backup_saves(self, reason):
         """Copy the dev profile's saves before a session writes to the game; keep the newest 10 backups."""
         session = self.session()
-        if session.get('savesBackedUpFor') == session.get('pid') and session.get('pid'):
+        # Key on the live process, not on session.json's pid (that is written only by fnv_launch).
+        try:
+            proc = self.process()
+        except GameError:
+            proc = None
+        pid = proc[0] if proc else session.get('pid')
+        if pid and session.get('savesBackedUpFor') == pid:
             return session.get('savesBackup')
         target = self.state / 'save-backups' / time.strftime('%Y%m%d-%H%M%S')
         target.mkdir(parents=True, exist_ok=True)
@@ -706,7 +769,7 @@ class Game:
         backups = sorted(p for p in (self.state / 'save-backups').iterdir() if p.is_dir())
         for old in backups[:-10]:
             shutil.rmtree(old, ignore_errors=True)
-        self.save_session(savesBackedUpFor=session.get('pid'), savesBackup={'path': str(target), 'files': copied, 'reason': reason})
+        self.save_session(savesBackedUpFor=pid, savesBackup={'path': str(target), 'files': copied, 'reason': reason})
         return self.session()['savesBackup']
 
 

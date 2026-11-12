@@ -11,7 +11,7 @@ import time
 
 from . import fnv_link
 from .fnv_conv import ConvError, dispatch, verdict
-from .fnv_pred import compile_predicate
+from .fnv_pred import ProcState, compile_predicate
 
 TIME_GLOBAL = 0x011F6394       # TimeGlobal: +0 disable counter, +4 fixed step (ms, 0 = off), +0x0C frame delta
 FRAME_COUNTER = 0x011A2FE0     # +1 per frame
@@ -26,6 +26,8 @@ GATE_LOCK = threading.RLock()
 FRAME_SLOT = 62                # predicate slot that reads the companion's own frame counter
 HOLD_DEFAULT_S = 120           # the gate's dead-man time (0x1D4C0 ms)
 STEP_MAX = 10000               # 0x2710 frames
+UNTIL_MAX = 0x2710             # most frames one `until` runs (the companion answers bad_arguments above it)
+FORCE_RESUME_MAX = 16          # most Enable calls one force_resume makes
 FPS_MAX = 1000
 SPEED_MIN, SPEED_MAX = 0.05, 10.0
 STATUS_WINDOW = 0.5            # seconds between the two frame readings of a real frame rate
@@ -101,8 +103,15 @@ class TimeControl:
         self.sleep = sleep
         self.clock = clock
         self.pid = None
+        self.start = None
         self.configured = False
         self.paused_by_us = False
+        self.restored = False           # paused_by_us came from the state file (a server restart), not from this run
+        self.state = ProcState(live)
+
+    def _remember(self):
+        """Keep the pause flag in the state file: the game keeps its clock counter when the server restarts."""
+        self.state.save('time_pause', self.pid, self.start, True if self.paused_by_us else None)
 
     # ------------------------------------------------------------ plumbing
     def batch(self, ops, timeout=None):
@@ -113,8 +122,11 @@ class TimeControl:
         proc = self.live.game.process()
         if not proc:
             raise ConvError('NOT_RUNNING', 'Time control needs the game running.')
-        if proc[0] != self.pid:
-            self.pid, self.configured, self.paused_by_us = proc[0], False, False
+        start = proc[1] if len(proc) > 1 else None
+        if proc[0] != self.pid or start != self.start:
+            self.pid, self.start, self.configured = proc[0], start, False
+            self.paused_by_us = bool(self.state.load('time_pause', self.pid, self.start))
+            self.restored = self.paused_by_us
         return proc[0]
 
     def functions(self):
@@ -171,7 +183,8 @@ class TimeControl:
                                           ('rd', w(TIME_GLOBAL), '4')])
         if not call.get('ok'):
             raise _refused('The clock pause', call)
-        self.paused_by_us = True
+        self.paused_by_us, self.restored = True, False
+        self._remember()
         counter_before, counter_after = _u32(before, 'the clock counter'), _u32(after, 'the clock counter')
         return verdict('The game clock is paused',
                        'The world stops and keeps rendering, so the camera and photo tools see a still scene. '
@@ -186,15 +199,48 @@ class TimeControl:
             return verdict('The clock is not paused by this tool', 'Nothing changed. A focus loss or another user may '
                            'hold the counter; this tool leaves it alone.', changed=False, pausedByUs=False)
         fns = self.functions()
+        if self.restored:
+            # The flag came from the state file: the counter may have been released since (by hand or by a game
+            # restart's replacement), and Enable below zero would be wrong.
+            if _u32(self.batch([('rd', w(TIME_GLOBAL), '4')])[0], 'the clock counter') == 0:
+                self.paused_by_us, self.restored = False, False
+                self._remember()
+                return verdict('The clock is not paused', 'The clock counter is already 0; nothing changed.',
+                               changed=False, pausedByUs=False, clockCounter=0)
         call, after = self.batch([('call', w(fns['enable']), 'v', w(TIME_GLOBAL), '0'),
                                   ('rd', w(TIME_GLOBAL), '4')])
         if not call.get('ok'):
             raise _refused('The clock resume', call)
-        self.paused_by_us = False
+        self.paused_by_us, self.restored = False, False
+        self._remember()
         counter = _u32(after, 'the clock counter')
         reason = 'Clock counter now %d.' % counter + (' Something else still holds the clock (focus loss or another '
                                                     'user), so it stays stopped.' if counter else '')
         return verdict('The game clock runs again', reason, changed=True, pausedByUs=False, clockCounter=counter)
+
+    def force_resume(self):
+        """Release the clock counter whoever incremented it (a pause lost to a server restart, or one this tool never
+        made): Enable once per counter step, at most FORCE_RESUME_MAX. Focus loss also holds the counter, so use it
+        only when the clock is stuck."""
+        self.require_game()
+        fns = self.functions()
+        counter = _u32(self.batch([('rd', w(TIME_GLOBAL), '4')])[0], 'the clock counter')
+        times = min(counter, FORCE_RESUME_MAX)
+        if times:
+            results = self.batch([('call', w(fns['enable']), 'v', w(TIME_GLOBAL), '0')] * times
+                                 + [('rd', w(TIME_GLOBAL), '4')])
+            if not all(r.get('ok') for r in results[:-1]):
+                raise _refused('The forced clock resume', next(r for r in results[:-1] if not r.get('ok')))
+            counter_after = _u32(results[-1], 'the clock counter')
+        else:
+            counter_after = counter
+        self.paused_by_us, self.restored = False, False
+        self._remember()
+        return verdict('The clock counter is %d' % counter_after,
+                       'Enable ran %d time(s) (counter was %d).' % (times, counter) + (
+                           ' It is still above 0: something else holds the clock (focus loss, another user).'
+                           if counter_after else ''),
+                       changed=bool(times), pausedByUs=False, clockCounterBefore=counter, clockCounter=counter_after)
 
     def hold(self, timeout_seconds=None):
         self.require_game()
@@ -224,15 +270,23 @@ class TimeControl:
         self.require_game()
         self.ensure_gate()
         fns = self.functions()
+        previous_fps = 0
+        if fps:
+            # the fixed step the game had: it is put back after the step (the verdict used to leave it on)
+            was_ms = _f32(self.batch([('rd', w(TIME_GLOBAL + 4), '4')])[0], 'the fixed step')
+            previous_fps = int(round(1000.0 / was_ms)) if was_ms and was_ms > 0 else 0
         ops = frame_ops()
         if fps:
             ops.append(('call', w(fns['clamp']), 'v', w(TIME_GLOBAL), '0', w(fps)))
-        ops += [('step', w(frames)), ('gate',)]
+        ops.append(('step', w(frames)))
+        if fps:
+            ops.append(('call', w(fns['clamp']), 'v', w(TIME_GLOBAL), '0', w(previous_fps)))   # at the stop frame
+        ops.append(('gate',))
         results = self.batch(ops)
         before = _frame(results[1])
         if fps and not results[2].get('ok'):
             raise _refused('Setting the fixed frame step', results[2])
-        step, gate = results[-2], results[-1]
+        step, gate = results[-3 if fps else -2], results[-1]
         if step.get('error') == 'stopped':
             raise ConvError('STOPPED', 'A debugger stop parked the main thread after %s of %d frames (frame %s). '
                             'Next: fnv_debug status, then continue.' % (step.get('stepped', 0), frames,
@@ -244,7 +298,8 @@ class TimeControl:
         return verdict('Stepped %d frames to frame %d' % (frames, after),
                        'The game is held at that frame: nothing runs between frames until release.',
                        changed=True, frames=frames, frameBefore=before, frameAfter=after, advanced=after - before,
-                       fixedFps=fps or None, held=bool(gate.get('held')),
+                       fixedFps=fps or None, fixedStepRestoredTo=previous_fps if fps else None,
+                       held=bool(gate.get('held')),
                        next='Call fnv_time_control release to let it run, or step again.')
 
     def fixed(self, fps):
@@ -310,7 +365,7 @@ class TimeControl:
                 raise ValueError(message)
             return value
         return dispatch(action, {
-            'pause': self.pause, 'resume': self.resume,
+            'pause': self.pause, 'resume': self.resume, 'force_resume': self.force_resume,
             'hold': lambda: self.hold(timeout_seconds),
             'release': self.release,
             'step': lambda: self.step(need(frames, 'step needs frames=N (1 to %d)' % STEP_MAX), fps),
@@ -369,11 +424,14 @@ class WaitFor:
             snap = self.control.snapshot()
             text, limit = predicate, max_frames
             extra = {}
-        res = self.until(text, limit, snap['held'], timeout)
+        res = self.until_long(text, limit, snap, timeout)
         if not res['met']:
-            raise ConvError('WAIT_TIMEOUT', 'The condition was still false after %d frames (%g s). Next: call '
-                            'fnv_time_control status, then raise max_frames or timeout_seconds.'
-                            % (res['frames'], timeout), {'predicate': text, 'frame': res['frame']})
+            ran_out = 'time' if res['frames'] < limit else 'frames'
+            raise ConvError('WAIT_TIMEOUT', 'The condition was still false after %d frames (%g s): the wait ran out of '
+                            '%s. Next: call fnv_time_control status, then raise %s.'
+                            % (res['frames'], timeout, ran_out,
+                               'timeout' if ran_out == 'time' else 'max_frames (or timeout)'),
+                            {'predicate': text, 'frame': res['frame'], 'ranOutOf': ran_out})
         return verdict('Condition met at frame %d after %d frames' % (res['frame'], res['frames']),
                        'The predicate was true at the start of that frame. The gate is %s again.'
                        % ('held' if snap['held'] else 'open'),
@@ -397,10 +455,60 @@ class WaitFor:
             return snap['realFps'], 'measured'
         return ASSUMED_FPS, 'assumed %d (the gate is held, so frames could not be measured)' % ASSUMED_FPS
 
-    def until(self, text, limit, held_before, timeout, eval_cell=False):
+    def check_readable(self, compiled):
+        """The absolute addresses a predicate reads, once before waiting: an unreadable one would only make the wait
+        run out its frames and report WAIT_TIMEOUT."""
+        reads = compiled.get('reads') or []
+        if not reads:
+            return
+        results = self.control.batch([('rd', w(address), '%x' % size) for address, size in reads])
+        for (address, size), result in zip(reads, results):
+            if not result.get('ok'):
+                raise ConvError('MEMORY_UNREADABLE', 'The predicate reads %d byte(s) at 0x%08X, which cannot be read (%s), '
+                                'so it could never be true. Next: fix the address (fnv_status shows the game state).'
+                                % (size, address, result.get('error')), {'address': '0x%08X' % address, 'size': size})
+
+    def until_long(self, text, limit, snap, timeout):
+        """`until` for any number of frames: the companion runs at most UNTIL_MAX frames per request, and a request
+        longer than the link timeout fails with the pipe closed. So a long wait runs in rounds, each sized from the
+        frame rate and the time left; the gate stays closed between rounds, and is reopened at the end when it was
+        open before. A wait that runs out of time reports met=False (WAIT_TIMEOUT) instead of a link timeout."""
+        held = snap['held']
+        fps = snap.get('fixedFps') or snap.get('realFps') or ASSUMED_FPS
+        clock = self.control.clock
+        deadline = clock() + timeout
+        if limit <= UNTIL_MAX and limit <= max(1, int(timeout * fps)):
+            return self.until(text, limit, held, timeout)
+        self.check_readable(compile_predicate(text))
+        total, res = 0, None
+        try:
+            while True:
+                left = max(deadline - clock(), 1.0)
+                n = max(1, min(UNTIL_MAX, limit - total, int(left * fps)))
+                started = clock()
+                res = self.until(text, n, True, left, check=False)
+                elapsed = clock() - started
+                total += res['frames'] or 0
+                if res['met'] or total >= limit or clock() >= deadline:
+                    break
+                if elapsed > 0 and res['frames']:
+                    fps = max(1.0, res['frames'] / elapsed)
+        finally:
+            if not held:
+                try:
+                    self.control.batch([('hold', 'off')])
+                except Exception:  # noqa: BLE001 - the dead-man switch opens the gate anyway
+                    pass
+        return dict(res, frames=total)
+
+    def until(self, text, limit, held_before, timeout, eval_cell=False, check=True):
         """One request: the predicate into slot PRED_ID, until it holds or limit frames pass, then (optionally) the
-        player's parent cell, then the gate reopened when it was open before; the slot is cleared."""
+        player's parent cell, then the gate reopened when it was open before; the slot is cleared. limit is at most
+        UNTIL_MAX (the companion refuses more)."""
         compiled = compile_predicate(text)
+        limit = min(int(limit), UNTIL_MAX)
+        if check:
+            self.check_readable(compiled)
         ops = [('pred', 'set', w(PRED_ID), compiled['hex']), ('until', w(PRED_ID), w(limit))]
         if eval_cell:
             ops.append(('eval', fnv_link.hexs('player.GetParentCell'), w(0)))
@@ -427,14 +535,17 @@ class WaitFor:
         """The game is loaded and simulating: the loading flag and menu mode are clear, the frame delta is above 0,
         the frame counter advanced by 2 and the player has a parent cell. The 3D check is not made yet."""
         snap = self.control.snapshot()
+        self.check_readable(compile_predicate(LOADED_TEXT))
         base = self.base_frame(timeout)
         deadline = self.control.clock() + timeout
+        fps = snap.get('fixedFps') or snap.get('realFps') or ASSUMED_FPS
         rounds = 0
         while True:
             rounds += 1
             remaining = max(1.0, deadline - self.control.clock())
-            res = self.until(LOADED_TEXT + ' and frame >= %d' % (base + 2), LOADED_ROUND_FRAMES, snap['held'],
-                             remaining, eval_cell=True)
+            round_frames = max(2, min(LOADED_ROUND_FRAMES, int(remaining * fps)))   # a round must fit the time left
+            res = self.until(LOADED_TEXT + ' and frame >= %d' % (base + 2), round_frames, snap['held'],
+                             remaining, eval_cell=True, check=False)
             cell = res['cell']
             if res['met'] and cell not in (None, '', '00000000', 0):
                 return verdict('The game is loaded and simulating at frame %d' % res['frame'],

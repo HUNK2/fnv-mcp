@@ -229,6 +229,8 @@ class CodeTools:
                             {'output': (result.stdout + result.stderr)[-5000:]})
         link = self._link(obj, unit, spec)
         (folder / 'link.json').write_text(json.dumps(link, indent=1), encoding='utf-8')
+        # A blob placed for compare came from the previous build: compare and swap must place this one.
+        self.placed.pop(address, None)
         ok = not link['unresolved'] and not link['refused']
         return verdict('Built %s: %d bytes (original %d), %d relocations%s' % (
             function, link['size'], spec['size'], len(link['relocs']),
@@ -427,6 +429,19 @@ class CodeTools:
             except Exception:  # noqa: BLE001
                 sizes[a] = 0
         sites = []
+        try:
+            self._patch_sites(address, base, callers, sizes, sites)
+        except Exception:
+            # Put back what was patched before the failure, so nothing stays redirected without a record.
+            for site in reversed(sites):
+                try:
+                    self.live.link.one('code', 'patch', word(site['at']), site['old'])
+                except Exception:  # noqa: BLE001 - best effort; the original error is what the caller needs
+                    pass
+            raise
+        return sites
+
+    def _patch_sites(self, address, base, callers, sizes, sites):
         for a in callers:
             size = sizes.get(a) or 0x400
             code = self.live.reads([(a, size)])[0] or b''
@@ -449,7 +464,6 @@ class CodeTools:
                     if out.get('ok'):
                         sites.append({'at': start + at, 'kind': 'vtable', 'old': out['old']})
                 at = data.find(needle, at + 1)
-        return sites
 
     @staticmethod
     def _notes(spec):
@@ -464,17 +478,40 @@ class CodeTools:
         targets = [a for a in self.swaps if function is None or a == self._target(function)[0]]
         if not targets:
             raise ConvError('NOT_SWAPPED', 'Nothing is swapped%s.' % ('' if function is None else ' for ' + function))
-        done = []
+        done, failed = [], []
         for address in targets:
-            s = self.swaps.pop(address)
-            self._save_swaps()
+            s = self.swaps[address]
+            left = []
             for site in s.get('sites') or []:
-                self.live.link.one('code', 'patch', word(site['at']), site['old'])
-            if s.get('old'):
-                out = self.live.link.one('code', 'patch', word(address), s['old'])
+                try:
+                    out = self.live.link.one('code', 'patch', word(site['at']), site['old'])
+                except Exception as e:  # noqa: BLE001 - keep the site in the record, report it
+                    out = {'ok': False, 'error': str(e)}
                 if not out.get('ok'):
-                    raise ConvError('WRITE_FAILED', 'Could not restore 0x%08X (%s).' % (address, out.get('error')))
-            done.append(s['function'])
+                    left.append(dict(site, error=out.get('error')))
+            entry_error = None
+            if s.get('old'):
+                try:
+                    out = self.live.link.one('code', 'patch', word(address), s['old'])
+                except Exception as e:  # noqa: BLE001
+                    out = {'ok': False, 'error': str(e)}
+                if not out.get('ok'):
+                    entry_error = out.get('error') or 'write failed'
+            if left or entry_error:
+                # Only what is back is forgotten: the record keeps every site (and the entry) still redirected, so
+                # unswap can be called again and list still shows it.
+                s['sites'] = left or None
+                if not entry_error:
+                    s['old'] = None
+                failed.append({'function': s['function'], 'entry': entry_error, 'sites': len(left)})
+            else:
+                self.swaps.pop(address)
+                done.append(s['function'])
+            self._save_swaps()
+        if failed:
+            raise ConvError('WRITE_FAILED', 'Could not restore everything: %s. What was restored is forgotten; the '
+                            'rest stays in the swap list. Next: call unswap again (a thread may have been inside '
+                            'the bytes: "busy").' % failed, {'restored': done, 'failed': failed})
         return verdict('Restored %s' % ', '.join(done), 'The original entries run again (the new code stays '
                        'allocated, in case a thread is still inside it).', restored=done)
 
@@ -531,8 +568,14 @@ class CodeTools:
         uses_this = conv in ('thiscall', 'fastcall')
         rows, same, seen = [], 0, set()
         for r in calls:
-            args = list(r[12:12 + n])
-            this = ('0x%08X' % r[3] if r[3] else None) if uses_this else None
+            if conv == 'fastcall':
+                # ecx and edx are the first two arguments; the stack words are the rest (engine_call maps a
+                # fastcall without `this` as regs = args, so this order lands them in ecx, edx, stack).
+                args = [r[3], r[4]] + list(r[12:12 + max(0, n - 2)])
+                this = None
+            else:
+                args = list(r[12:12 + n])
+                this = ('0x%08X' % r[3] if r[3] else None) if uses_this else None
             key = (r[3] if uses_this else None, tuple(args))
             if key in seen:
                 continue
@@ -574,6 +617,11 @@ class CodeTools:
     def export(self, function):
         self.live.ready()
         address, unit, spec = self._target(function)
+        if int(spec['size']) < 5:
+            raise ConvError('TOO_SHORT', '%s is %d bytes, shorter than the 5-byte jump the exported loader writes (it '
+                            'would overwrite the next function). Use fnv_code swap in the running game (it redirects '
+                            'the call sites instead), or write the change as a hook in a native module.'
+                            % (function, int(spec['size'])))
         link = self._linked(address)
         original = self.live.reads([(address, int(spec['size']))])[0]
         if address in self.swaps and original is not None:

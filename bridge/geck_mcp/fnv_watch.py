@@ -9,6 +9,7 @@ one field of one live object, with the values, from the CPU's debug registers.
          writer is the function containing that address - 1, and the instruction itself is decoded
 """
 import struct
+import threading
 import time
 from collections import Counter, defaultdict
 
@@ -16,6 +17,52 @@ from .fnv_link import LinkError, word
 from .fnv_naming import ancestors, hx, register_source
 
 ACCESS = {'write': 1, 'readwrite': 3}
+DEBUG_REGISTERS = 4
+_DR_LOCK = threading.Lock()
+_DR_CLAIMED = set()       # debug registers a watch of this process is using right now
+
+
+def claim_debug_register(link):
+    """A free debug register (0-3) for a watch, or None when all four are busy. Busy = in `dbg info`'s active mask (a
+    watch or a hardware breakpoint of the debugger) or claimed by another watch of this process. Without `dbg info`
+    (an older companion) only the claims count. Release with release_debug_register."""
+    with _DR_LOCK:
+        busy = set(_DR_CLAIMED)
+        try:
+            info = link.one('dbg', 'info')
+        except LinkError:
+            info = None
+        if isinstance(info, dict):
+            try:
+                mask = int(info.get('active') or 0) | int(info.get('bpSlots') or 0)
+            except (TypeError, ValueError):
+                mask = 0
+            busy |= {k for k in range(DEBUG_REGISTERS) if mask & (1 << k)}
+        slot = next((k for k in range(DEBUG_REGISTERS) if k not in busy), None)
+        if slot is not None:
+            _DR_CLAIMED.add(slot)
+        return slot
+
+
+def release_debug_register(link, slot):
+    """Clear only this watch's register (never `dbg clear f`, which would drop another watch's) and give it back."""
+    try:
+        link.one('dbg', 'clear', str(slot))
+    finally:
+        with _DR_LOCK:
+            _DR_CLAIMED.discard(slot)
+
+
+def hits_of_slot(rows, slot):
+    """The hits of one debug register: `dbg read` returns the hits of every register, and word 1 is the slot."""
+    out = []
+    for h in rows or []:
+        try:
+            if len(h) < 2 or int(h[1]) == slot:
+                out.append(h)
+        except (TypeError, ValueError):
+            out.append(h)
+    return out
 
 
 class FieldWatchTools:
@@ -107,10 +154,18 @@ class FieldWatchTools:
         address = int(address, 16) if isinstance(address, str) else int(address)
         if access not in ACCESS:
             raise ValueError('access is write or readwrite')
-        r = self.link.one('dbg', 'set', '0', word(address), word(int(length)), word(ACCESS[access]),
-                          '1' if scope == 'all' else '0')
-        if not r.get('ok'):
-            raise ValueError('The companion could not set the watchpoint: %s' % (r.get('error') or r))
+        slot = claim_debug_register(self.link)
+        if slot is None:
+            raise ValueError('All four debug registers are in use (watches or hardware breakpoints). Next: clear a '
+                             'hardware break (fnv_debug break clear) or wait for the other watch.')
+        try:
+            r = self.link.one('dbg', 'set', str(slot), word(address), word(int(length)), word(ACCESS[access]),
+                              '1' if scope == 'all' else '0')
+            if not r.get('ok'):
+                raise ValueError('The companion could not set the watchpoint: %s' % (r.get('error') or r))
+        except BaseException:
+            release_debug_register(self.link, slot)
+            raise
         seq = r['seq']
         entry = self.live.journal.add({'kind': 'watchpoint', 'address': hx(address), 'undo': {'op': 'dbg_clear'}})
         try:
@@ -118,9 +173,9 @@ class FieldWatchTools:
             if seconds:
                 time.sleep(float(seconds))
             time.sleep(0.2)
-            hits = self.link.one('dbg', 'read', word(seq)).get('hits') or []
+            hits = hits_of_slot(self.link.one('dbg', 'read', word(seq)).get('hits') or [], slot)
         finally:
-            self.link.one('dbg', 'clear', 'f')
+            release_debug_register(self.link, slot)
         out = dict(self._summarise(address, hits[:max_hits]), trigger=ran, journalId=entry['id'], access=access,
                    scope=scope, length=length)
         self._store(out, ref, offset)
