@@ -1369,7 +1369,7 @@ A second hunt the same day, after the fix pass was committed (133ed0e). Nothing 
 
 The parser sweep ran 16 plugins (about 630,000 records), the record index (866,000 references), 3,719 scripts, 58 saves (1.4 million change forms), 21 BSAs and the engine map; everything not listed here checked clean. Findings that did not hold up when checked were dropped (fnv_window persist writes the dev profile's Fallout.ini, as designed, with a backup; fnv_hook_set is gated). R entries that name an earlier ID are fixes from the first pass that are incomplete or wrong.
 
-Totals: 73 bugs, 6 high, 21 medium, 46 low (N13 found by the S4.3 race tests, N14 and N15 by the S4.5 smoke tests, N16 by the live suite, N17-N19 by the live s1-play runs while fixing N16). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
+Totals: 74 bugs, 6 high, 22 medium, 46 low (N13 found by the S4.3 race tests, N14 and N15 by the S4.5 smoke tests, N16 by the live suite, N17-N19 by the live s1-play runs while fixing N16, N20 by the S3 live check). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
 
 Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m unittest discover -s tests` from `bridge`, ran 1,011 tests: all passed, 4 skipped, 0 failures. That includes the 54 engine companion tests, which now find Zig from the project files instead of being skipped without `GECK_MCP_ZIG`. Before S0 the same run with `GECK_MCP_ZIG` set was 1,002 tests, 4 skipped. No C test failed, so no N13.
 
@@ -1448,6 +1448,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | N17 | medium | fixed | fnv_play goto returns while its queued forward holds still run: the player walks on past the goal, into small items (kicking them away), and activate aims from a moving spot | `geck_mcp/fnv_hands.py` (goto walk loop) |
 | N18 | low | fixed | A photo right after a dialogue is refused with MENU_OPEN: DialogMenu stays on the menu stack for a moment after the dialogue reports it closed | `geck_mcp/fnv_eyes.py` (`_no_menu`) |
 | N19 | low | fixed | fnv_play activate reports "nothing visible changed" when it took an item (a taken reference is marked deleted, not disabled) | `geck_mcp/fnv_hands.py` (`activate`) |
+| N20 | medium | fixed | The menus flag 0x0118C6F0 was read the wrong way round: photo hide_hud never hid the HUD, fnv_render toggle menus reported the opposite state | `geck_mcp/fnv_eyes.py` (MENUS_SHOWN_FLAG), `fnv_render.py` |
 
 ## Round 2: High
 
@@ -1765,6 +1766,15 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Severity: low
 - Confidence: confirmed live 2026-11-12: all three tokens taken, each reported as "nothing visible changed".
 - Fix: activate compares the form flags before and after the press (pickup_note).
+- Status: fixed
+
+### N20. The menus flag 0x0118C6F0 was read the wrong way round
+
+- Where: geck_mcp/fnv_eyes.py (`_hud_off`, `hud_hidden`; the constant was MENUS_HIDDEN_FLAG) and geck_mcp/fnv_render.py (toggle menus inverted the flag for its verdict).
+- Severity: medium
+- Confidence: confirmed live 2026-11-12 (S3 live check): ToggleMenus with the flag 1 -> 0 printed "Menus -> Off", 0 -> 1 printed "Menus -> On"; the screenshot after the first had no HUD.
+- What happens: the byte is non-zero while the HUD and menus are shown. Reading it as "hidden", photo hide_hud saw a visible HUD as already hidden and never sent tm (photos kept the HUD), fnv_render said "now on" when the menus went off, and the new hud_set undo restored the opposite state.
+- Fix: MENUS_SHOWN_FLAG; hud_hidden, _hud_off and the render verdict and undo read it as shown.
 - Status: fixed
 
 ## Round 2: Low

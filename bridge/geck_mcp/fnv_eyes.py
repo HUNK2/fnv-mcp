@@ -59,7 +59,9 @@ TYPE_GROUPS = {'actors': {42, 43}, 'doors': {28}, 'containers': {27}, 'activator
                'items': {24, 25, 26, 29, 31, 40, 41, 46, 47, 49}, 'furniture': {39},
                'statics': {32, 33, 34, 35, 36, 37, 38}, 'lights': {30}}
 DEFAULT_SKIP = TYPE_GROUPS['statics'] | TYPE_GROUPS['lights']
-MENUS_HIDDEN_FLAG = 0x0118C6F0      # byte: non-zero while the HUD and menus are hidden (tm), see fnv_render.TOGGLES
+# byte: non-zero while the HUD and menus are SHOWN; tm turns it to 0. Seen live 2026-11-12: flag 1 -> 0 printed
+# "Menus -> Off", 0 -> 1 printed "Menus -> On" (N20: it was read the other way round). See fnv_render.TOGGLES.
+MENUS_SHOWN_FLAG = 0x0118C6F0
 # There is one fly camera, one saved state and one HUD toggle: every camera use (set, orbit, pov, restore and whole
 # photo runs) holds this lock, so two calls cannot interleave their moves, captures and restores.
 _CAMERA_LOCK = threading.RLock()
@@ -209,8 +211,8 @@ def fly_on(live):
 
 def hud_hidden(live):
     """HUD and menus hidden by tm, read now."""
-    flag = live.reads([(MENUS_HIDDEN_FLAG, 1)])[0]
-    return bool(flag[0]) if flag else None      # None: unreadable
+    flag = live.reads([(MENUS_SHOWN_FLAG, 1)])[0]
+    return (not flag[0]) if flag else None      # None: unreadable
 
 
 class EyesTools:
@@ -780,9 +782,8 @@ class EyesTools:
         """Toggle menus (tm) off for a capture; returns a restore function."""
         if not hide:
             return lambda: None
-        flag = (self.live.reads([(MENUS_HIDDEN_FLAG, 1)])[0] or b'\x00')[0]
-        if flag:
-            return lambda: None            # already hidden (by the user): leave it hidden, toggle nothing
+        if hud_hidden(self.live) is not False:
+            return lambda: None            # already hidden (by the user), or unreadable: toggle nothing
         self.live.console('tm')
         self._frames(2)
 

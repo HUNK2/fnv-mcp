@@ -53,11 +53,9 @@ class RenderTools:
         self.live.changing('render toggle')
         out = self.live.console('%s%s' % (command, ' %s' % arg if arg else ''))
         after = (self.live.reads([(flag, 1)])[0] or b'\0')[0] if flag else None
-        state = None if after is None else bool(after)
-        if name == 'menus' and state is not None:
-            state = not state                  # the flag is "menus hidden"
+        state = None if after is None else bool(after)     # menus: non-zero while shown (seen live, N20)
         # menus: the HUD back to how it was (hud_set reads the flag; S3 review I3); other toggles stay "run again"
-        undo = {'op': 'hud_set', 'on': not before} if name == 'menus' and before is not None else None
+        undo = {'op': 'hud_set', 'on': bool(before)} if name == 'menus' and before is not None else None
         self.live.journal.add({'kind': 'render_toggle', 'toggle': name, 'undo': undo})
         return verdict('%s: %s%s' % (command, 'accepted' if out.get('accepted') else 'refused',
                                      '' if state is None else ' (now %s)' % ('on' if state else 'off')),

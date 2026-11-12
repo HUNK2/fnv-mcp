@@ -75,7 +75,7 @@ class D2D3D4(unittest.TestCase):
 
     def test_hidden_hud_is_left_alone(self):
         live = eyes_world()
-        live.mem[fnv_eyes.MENUS_HIDDEN_FLAG] = 1
+        live.mem[fnv_eyes.MENUS_SHOWN_FLAG] = 0          # seen live (N20): 0 while tm has the menus off
         eyes = EyesTools(live, sleep=lambda s: None)
         back = eyes._hud_off(True)
         back()
@@ -85,11 +85,12 @@ class D2D3D4(unittest.TestCase):
         live = eyes_world()
         original = live.console
 
-        def console(line, ref=0):            # tm flips the hidden flag, as in the game
+        def console(line, ref=0):            # tm flips the shown flag, as in the game
             if line == 'tm':
-                live.mem[fnv_eyes.MENUS_HIDDEN_FLAG] = 0 if live.mem.get(fnv_eyes.MENUS_HIDDEN_FLAG) else 1
+                live.mem[fnv_eyes.MENUS_SHOWN_FLAG] = 0 if live.mem.get(fnv_eyes.MENUS_SHOWN_FLAG) else 1
             return original(line, ref)
         live.console = console
+        live.mem[fnv_eyes.MENUS_SHOWN_FLAG] = 1          # menus on, as at game start (flag 1, seen live)
         eyes = EyesTools(live, sleep=lambda s: None)
         back = eyes._hud_off(True)
         back()
@@ -97,8 +98,9 @@ class D2D3D4(unittest.TestCase):
 
     def test_hud_shown_again_by_someone_else_is_not_toggled_back(self):
         live = eyes_world()
+        live.mem[fnv_eyes.MENUS_SHOWN_FLAG] = 1
         eyes = EyesTools(live, sleep=lambda s: None)
-        back = eyes._hud_off(True)       # tm sent; the flag stays 0 (shown again before the restore)
+        back = eyes._hud_off(True)       # tm sent; the flag stays 1 (shown again before the restore)
         back()
         self.assertEqual([l for l in live.lines if l == 'tm'], ['tm'])
 

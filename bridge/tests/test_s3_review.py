@@ -68,14 +68,14 @@ class CameraHudTests(unittest.TestCase):
         link = self.fake.link
         link.put(fnv_eyes.OS_GLOBALS, OSG.to_bytes(4, 'little'))
         link.put(OSG + fnv_eyes.FLY_FLAG, b'\x00')
-        link.put(fnv_eyes.MENUS_HIDDEN_FLAG, b'\x00')
+        link.put(fnv_eyes.MENUS_SHOWN_FLAG, b'\x01')
         self.lines = []
         real = self.live.console
 
         def console(line, ref=0):
             self.lines.append(line)
             if line == 'ToggleMenus':
-                link.put(fnv_eyes.MENUS_HIDDEN_FLAG, b'\x00' if link.get(fnv_eyes.MENUS_HIDDEN_FLAG, 1)[0] else b'\x01')
+                link.put(fnv_eyes.MENUS_SHOWN_FLAG, b'\x00' if link.get(fnv_eyes.MENUS_SHOWN_FLAG, 1)[0] else b'\x01')
             return real(line, ref)
         self.live.console = console
 
@@ -89,8 +89,9 @@ class CameraHudTests(unittest.TestCase):
     def test_i3_menus_toggle_undo_shows_the_hud_again(self):
         from geck_mcp.fnv_render import RenderTools
         self.live.in_game = lambda: None
-        RenderTools(self.live).toggle('menus')
-        self.assertEqual(self.fake.link.get(fnv_eyes.MENUS_HIDDEN_FLAG, 1), b'\x01')
+        out = RenderTools(self.live).toggle('menus')
+        self.assertEqual(self.fake.link.get(fnv_eyes.MENUS_SHOWN_FLAG, 1), b'\x00')
+        self.assertFalse(out['on'], 'N20: the menus are off now ("Menus -> Off" in the game)')
         [e] = [e for e in self.live.journal.entries() if e['kind'] == 'render_toggle']
         self.assertEqual(e['undo'], {'op': 'hud_set', 'on': True})
 

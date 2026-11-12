@@ -25,7 +25,7 @@ class CameraUndoTests(unittest.TestCase):
         link = self.fake.link
         link.put(fnv_eyes.OS_GLOBALS, OSG.to_bytes(4, 'little'))
         link.put(OSG + fnv_eyes.FLY_FLAG, b'\x00')
-        link.put(fnv_eyes.MENUS_HIDDEN_FLAG, b'\x00')
+        link.put(fnv_eyes.MENUS_SHOWN_FLAG, b'\x01')
         self.lines = []
         real = self.live.console
 
@@ -34,7 +34,7 @@ class CameraUndoTests(unittest.TestCase):
             if line.startswith('tfc'):
                 link.put(OSG + fnv_eyes.FLY_FLAG, b'\x00' if self.fly() else b'\x01')
             if line == 'tm':
-                link.put(fnv_eyes.MENUS_HIDDEN_FLAG, b'\x00' if link.get(fnv_eyes.MENUS_HIDDEN_FLAG, 1)[0] else b'\x01')
+                link.put(fnv_eyes.MENUS_SHOWN_FLAG, b'\x00' if link.get(fnv_eyes.MENUS_SHOWN_FLAG, 1)[0] else b'\x01')
             return real(line, ref)
         self.live.console = console
 
@@ -85,7 +85,7 @@ class CameraUndoTests(unittest.TestCase):
         self.live.console('tm')
         UNDO_OPS['hud_set'](self.live, {}, {'op': 'hud_set', 'on': True})
         self.assertEqual(self.lines.count('tm'), 2)
-        self.assertEqual(self.fake.link.get(fnv_eyes.MENUS_HIDDEN_FLAG, 1), b'\x00')
+        self.assertEqual(self.fake.link.get(fnv_eyes.MENUS_SHOWN_FLAG, 1), b'\x01')
 
 
 class ActorUndoTests(unittest.TestCase):
