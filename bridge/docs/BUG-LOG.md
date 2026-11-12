@@ -1392,7 +1392,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R10 | medium | fixed | `save_session` rewrites `session.json` with no lock: parallel act tools lose changes or corrupt it, and a corrupt file then breaks every act tool in a new server (D8 incomplete) | `geck_mcp/fnv_game.py:239-253` |
 | R11 | medium | fixed | Step over, step out and `step line` leave their temporary `to` site armed and unrecorded when another stop of the same thread comes first (E15 / L5 incomplete) | `geck_mcp/fnv_debugger.py _run_to` |
 | T2 | medium | fixed | fnv_input: invalid key_name raises outside invoke() | `fnv_live_tools.py:618` |
-| P2 | medium | open | Vanilla compressed LAND with bad Adler-32 breaks full parse | `esp/codec.py decompress` |
+| P2 | medium | fixed | Vanilla compressed LAND with bad Adler-32 breaks full parse | `esp/codec.py decompress` |
 | P5 | medium | open | record_find reports the wrong version's name and editor ID | `fnv_data.py record_find` |
 | G2 | low | fixed | fnv_spawn with a reference spec (player, crosshair, a ref form id) fails with a script compile error | `geck_mcp/fnv_agent.py:808` |
 | G3 | low | fixed | A placed ref whose SetPos/SetAngle fails is never journaled | `geck_mcp/fnv_create.py:1005-1019` |
@@ -1681,7 +1681,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: FalloutNV.esm LAND 00150FC0 (declared 4385, payload 4088) has a valid deflate stream but a wrong checksum. parse(lazy=False), validate.validate, diff.diff on FalloutNV.esm and record_show('FalloutNV.esm:150FC0') raise `Error -3 ... incorrect data check`. RecordIndex and scan_plugin are fine (decompressobj, fnv_data.py:252).
 - Fix idea: inflate raw (`decompressobj(-15)` on payload[6:]) or tolerate checksum failure; wrap zlib.error in FormatError.
 - Checked: zlib.decompress on that record payload fails with "incorrect data check".
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: decompress inflates the raw deflate stream when the zlib checksum fails and keeps the bytes when their length is the declared size, with a warning on the record (Record.warnings); any other inflate failure is a FormatError. Full parse of FalloutNV.esm: 465017 records, one warning (LAND 00150FC0) (S6.8, test_stab_s6b).
 
 ### P5. record_find reports the wrong version's name and editor ID
 

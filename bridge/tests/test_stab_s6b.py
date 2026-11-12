@@ -116,5 +116,61 @@ class Cp1252Tests(unittest.TestCase):
         self.assertEqual(found, [])
 
 
+def find_record(data, form_id, tag):
+    pos = 24 + struct.unpack_from('<I', data, 4)[0]
+    while pos + 24 <= len(data):
+        rtag, size, flags, fid = struct.unpack_from('<4sIII', data, pos)
+        if rtag == b'GRUP':
+            pos += 24
+            continue
+        if fid == form_id and rtag == tag:
+            return pos, size, flags
+        pos += 24 + size
+    return None
+
+
+class BadChecksumTests(unittest.TestCase):
+    """P2: FalloutNV.esm LAND 00150FC0 has a valid deflate stream with a wrong Adler-32."""
+
+    def bad_payload(self):
+        import zlib
+        data = sub(b'DATA', b'land bytes ' * 40) * 10
+        stream = bytearray(zlib.compress(data))
+        stream[-1] ^= 0xFF                                  # break the Adler-32
+        return data, struct.pack('<I', len(data)) + bytes(stream)
+
+    def test_bad_checksum_keeps_the_bytes_with_a_warning(self):
+        from geck_mcp.esp import codec
+        data, payload = self.bad_payload()
+        warnings = []
+        self.assertEqual(codec.decompress(payload, warnings), data)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('checksum', warnings[0])
+
+    def test_broken_stream_is_format_error(self):
+        from geck_mcp.esp import codec
+        with self.assertRaises(codec.FormatError):
+            codec.decompress(struct.pack('<I', 10) + b'\x78\x9c not deflate')
+
+    def test_record_carries_the_warning(self):
+        from geck_mcp.esp import codec
+        data, payload = self.bad_payload()
+        rec = codec.Record('LAND', 0x150FC0, codec.COMPRESSED)
+        rec._compressed = payload
+        rec.subrecords
+        self.assertTrue(rec.warnings)
+
+    @unittest.skipUnless(DATA, 'needs the game Data folder')
+    def test_vanilla_land_150fc0_parses(self):
+        from geck_mcp.esp import codec
+        data = (DATA / 'FalloutNV.esm').read_bytes()
+        found = find_record(data, 0x00150FC0, b'LAND')
+        self.assertIsNotNone(found)
+        pos, size, flags = found
+        rec, _ = codec._parse_record(data, pos, len(data), lazy=False)
+        self.assertTrue(rec.subrecords)
+        self.assertTrue(rec.warnings, 'the bad checksum is reported')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -60,6 +60,7 @@ class Record:
     vc2: int = 0
     _subrecords: list = None          # decoded subrecords, or None while still compressed
     _compressed: bytes = None         # original compressed payload, kept for exact round-trip
+    warnings: list = None             # read problems the record survived (a wrong zlib checksum; P2)
 
     @property
     def compressed(self):
@@ -68,7 +69,10 @@ class Record:
     @property
     def subrecords(self):
         if self._subrecords is None:
-            self._subrecords = parse_subrecords(decompress(self._compressed), 0)
+            found = []
+            self._subrecords = parse_subrecords(decompress(self._compressed, found), 0)
+            if found:
+                self.warnings = (self.warnings or []) + found
         return self._subrecords
 
     @subrecords.setter
@@ -173,11 +177,26 @@ def zstring(text):
     return text.encode('cp1252', 'cp1252-bytes') + b'\0'
 
 
-def decompress(payload):
+def decompress(payload, warnings=None):
+    """The record bytes of a compressed payload. A stream that inflates to the declared size but fails its Adler-32
+    (FalloutNV.esm LAND 00150FC0) is kept, with a line in `warnings`; anything else that does not inflate is a
+    FormatError (P2)."""
     if len(payload) < 4:
         raise FormatError('compressed record shorter than its size prefix')
     size = struct.unpack_from('<I', payload)[0]
-    data = zlib.decompress(payload[4:])
+    try:
+        data = zlib.decompress(payload[4:])
+    except zlib.error as e:
+        try:
+            raw = zlib.decompressobj(-15)              # the deflate stream without the zlib header and checksum
+            data = raw.decompress(payload[6:]) + raw.flush()
+        except zlib.error:
+            raise FormatError('compressed record does not inflate (%s)' % e) from None
+        if not raw.eof or len(data) != size:
+            raise FormatError('compressed record does not inflate (%s)' % e) from None
+        if warnings is not None:
+            warnings.append('zlib checksum does not match (%s); the inflated bytes have the declared size and '
+                            'are kept' % e)
     if len(data) != size:
         raise FormatError('decompressed size %d != declared %d' % (len(data), size))
     return data
@@ -231,7 +250,9 @@ def _parse_record(data, pos, end, lazy):
     if flags & COMPRESSED:
         rec._compressed = body
         if not lazy:
-            rec._subrecords = parse_subrecords(decompress(body), body_start)
+            found = []
+            rec._subrecords = parse_subrecords(decompress(body, found), body_start)
+            rec.warnings = found or None
     else:
         rec._subrecords = parse_subrecords(body, body_start)
     return rec, body_end
