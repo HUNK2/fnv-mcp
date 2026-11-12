@@ -2263,7 +2263,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 |---|---|---|---|---|
 | N22 | medium | fixed | fnv_procmem / fnv_perf bind msvcrt and ctypes.WinDLL at import: the server cannot import on macOS/Linux (the upstream Wine path); posix CI red since fnv-mcp began | `geck_mcp/fnv_procmem.py:8, fnv_perf.py:27` |
 | N23 | low | open | test_supervisor BusyReloadTests fail under heavy CPU load (cancel reaches in_flight late); pass alone | `tests/test_supervisor.py:207` |
-| U1 | high | open | Out-of-order undo is guarded only for place_adjust, time fixed/speed and hot swaps: memory writes, patches, settings, AVs, positions on one target end with the wrong value | `audit3/state.md H1` |
+| U1 | high | fixed | Out-of-order undo is guarded only for place_adjust, time fixed/speed and hot swaps: memory writes, patches, settings, AVs, positions on one target end with the wrong value | `audit3/state.md H1` |
 | U2 | medium | open | Undoing a clock pause made by another server is marked undone while the clock stays paused | `audit3/state.md M1` |
 | U3 | medium | open | A hot-swap undo whose reply times out after the swap landed stays open; a retry swaps the code back | `audit3/state.md M2` |
 | U4 | low | open | An undo between a change and its confirm is reopened by the confirm | `audit3/state.md L1` |
@@ -2337,5 +2337,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: high
 - Found by: round-3 audit (docs/audit3/contract.md H1)
 - Fix: every call of the three tools is kind act (MUTATING_ACTIONS '*', kind table, act annotation): their items are free expressions and console lines, and fnv_watch's default keep_unpaused closes message boxes. Ruling: a typed-getter-only read mode was not built (that would be a new behaviour under the freeze); cost: projects with engine_control read lose these three tools (every project here uses full). Tests: tests/test_s7_round3.py ExpressionToolsAreActTests, tests/test_stab_gate.py cases.
+- Status: fixed
+
+### U1. Out-of-order undo was refused only for place_adjust, time fixed/speed and hot swaps
+
+- Where: geck_mcp/fnv_live.py (_order_key / _later_open, used by _apply_undo)
+- Severity: high
+- Found by: round-3 audit (docs/audit3/state.md H1): two memory writes 00->01->02, `fnv_undo journal_id=<first>` then fnv_revert_all left 01.
+- Fix: _order_targets names what each undo restores: memory byte ranges (write, writes; they meet when they overlap), a ref (console_ref, ref_enabled, actor_flag, item_count), a console command and its first word (settings, script variables, angles), the one weather override (ForceWeather / SetWeather / ReleaseWeatherOverride and their short names), time fixed/speed, the fly camera and the HUD. An undo is refused ("undo the later change first", with the later ids) while a newer open entry of this game process has a target that meets one of its own. fnv_undo with a count and fnv_revert_all go newest first, so they are not affected. Tests: tests/test_s7_round3.py UndoOrderTests.
 - Status: fixed
 

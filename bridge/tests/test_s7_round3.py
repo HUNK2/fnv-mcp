@@ -144,5 +144,53 @@ class ExpressionToolsAreActTests(unittest.TestCase):
             self.assertEqual([name for name, _ in fake.link.ops if name in ('con', 'eval')], [])
 
 
+class UndoOrderTests(unittest.TestCase):
+    """U1: out-of-order undo was refused only for place_adjust, time fixed/speed and hot swaps."""
+
+    def refused(self, older, newer):
+        from fakes import FakeLive
+        with FakeLive() as fake:
+            live = fake.live
+            fake.link.put(0x7000, bytes(16))
+            first = live.journal.add(dict(older))
+            live.journal.add(dict(newer))
+            r = live.undo(journal_id=first['id'])['results'][0]
+            return r.get('reason') == 'undo the later change first', fake
+
+    def write(self, address, size=1):
+        return {'kind': 'memory', 'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': '00' * size}}
+
+    def test_overlapping_memory_writes(self):
+        refused, fake = self.refused(self.write(0x7000, 4), self.write(0x7002, 4))
+        self.assertTrue(refused)
+        self.assertEqual(fake.link.get(0x7000, 4), bytes(4), 'nothing written by the refused undo')
+
+    def test_disjoint_memory_writes_are_free(self):
+        self.assertFalse(self.refused(self.write(0x7000, 4), self.write(0x7004, 4))[0])
+
+    def test_a_patch_list_overlapping_a_write(self):
+        older = {'kind': 'rng_seed', 'undo': {'op': 'writes', 'writes': [['0x00007008', '00' * 4]]}}
+        self.assertTrue(self.refused(older, self.write(0x7009))[0])
+
+    def test_the_same_setting(self):
+        older = {'kind': 'setting', 'undo': {'op': 'console', 'line': 'SetGS fJumpHeightMin 64.0'}}
+        newer = {'kind': 'setting', 'undo': {'op': 'console', 'line': 'SetGS fJumpHeightMin 100.0'}}
+        other = {'kind': 'setting', 'undo': {'op': 'console', 'line': 'SetGS fOther 1.0'}}
+        self.assertTrue(self.refused(older, newer)[0])
+        self.assertFalse(self.refused(older, other)[0])
+
+    def test_the_same_ref(self):
+        older = {'kind': 'actor', 'ref': 'FF000900', 'undo': {'op': 'console_ref', 'ref': 'FF000900',
+                                                              'lines': ['SetAV Health 100']}}
+        newer = {'kind': 'actor', 'ref': 'FF000900', 'undo': {'op': 'console_ref', 'ref': 'FF000900',
+                                                              'lines': ['SetAV Health 50']}}
+        self.assertTrue(self.refused(older, newer)[0])
+
+    def test_weather_lines_share_one_target(self):
+        older = {'kind': 'world_edit', 'undo': {'op': 'console', 'line': 'ForceWeather 0001A2B3 1'}}
+        newer = {'kind': 'world_edit', 'undo': {'op': 'console', 'line': 'ReleaseWeatherOverride'}}
+        self.assertTrue(self.refused(older, newer)[0])
+
+
 if __name__ == '__main__':
     unittest.main()

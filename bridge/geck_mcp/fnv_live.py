@@ -154,23 +154,54 @@ class LiveService:
             except Exception:  # noqa: BLE001 - a listener's failure must not fail the unhook
                 logging.getLogger(__name__).warning('unhook listener failed for %s', gone, exc_info=True)
 
-    @staticmethod
-    def _order_key(entry):
-        """Entries whose undos restore an absolute value of the same thing: only the newest open one may run first
-        (an older one would set a value the newer one then overwrites; S3 review B I4/I5)."""
+    # Console verbs that all set the one weather override: their undo lines restore the same thing.
+    WEATHER_VERBS = {'forceweather', 'fw', 'setweather', 'sw', 'releaseweatheroverride', 'rwo'}
+
+    @classmethod
+    def _order_targets(cls, entry):
+        """What an entry's undo restores, as targets: ('mem', start, end) byte ranges, or keys compared for equality.
+        An older undo of a target a newer open entry also changed would set a value that the newer entry's undo then
+        overwrites, so only the newest may run first (S3 review B I4/I5; U1: every absolute-value undo, not only
+        place_adjust and time)."""
         undo = entry.get('undo') or {}
-        if entry.get('kind') == 'place_adjust':
-            return ('place_adjust', entry.get('ref'))
-        if undo.get('op') == 'time_restore' and undo.get('what') in ('fixed', 'speed'):
-            return ('time', undo['what'])
-        return None
+        op = undo.get('op')
+        try:
+            if op == 'write':
+                start = int(undo['address'], 16)
+                return [('mem', start, start + len(undo['hex']) // 2)]
+            if op == 'writes':
+                return [('mem', int(a, 16), int(a, 16) + len(h) // 2) for a, h in undo['writes']]
+        except (KeyError, TypeError, ValueError):
+            return []
+        if op in ('console_ref', 'ref_enabled', 'actor_flag', 'item_count') and undo.get('ref'):
+            return [('ref', str(undo['ref']).upper())]
+        if op == 'console':
+            words = str(undo.get('line') or '').split()
+            if not words:
+                return []
+            verb = words[0].lower()
+            if verb.split('.')[-1] in cls.WEATHER_VERBS:
+                return [('weather',)]
+            return [('console', verb, words[1].lower() if len(words) > 1 else '')]
+        if op == 'time_restore' and undo.get('what') in ('fixed', 'speed'):
+            return [('time', undo['what'])]
+        if op in ('fly_set', 'hud_set'):
+            return [(op,)]
+        return []
+
+    @staticmethod
+    def _targets_meet(a, b):
+        if a[0] == 'mem' and b[0] == 'mem':
+            return a[1] < b[2] and b[1] < a[2]
+        return a == b
 
     def _later_open(self, entry):
-        key = self._order_key(entry)
-        if key is None:
+        mine = self._order_targets(entry)
+        if not mine:
             return []
         return [e['id'] for e in self.journal.entries(process=self.game_identity(), undoable=True)
-                if e['id'] != entry['id'] and (e.get('seq') or 0) > (entry.get('seq') or 0) and self._order_key(e) == key]
+                if e['id'] != entry['id'] and (e.get('seq') or 0) > (entry.get('seq') or 0)
+                and any(self._targets_meet(t, u) for t in mine for u in self._order_targets(e))]
 
     def engine(self):
         if self._engine is None:
