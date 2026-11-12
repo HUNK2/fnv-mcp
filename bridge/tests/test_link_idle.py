@@ -77,6 +77,16 @@ class LinkIdleTests(unittest.TestCase):
         self.idle()
         self.assertIsNone(self.link.handle)
 
+    def test_released_after_the_dead_man_opens_the_gate(self):
+        # A hold with a 300 ms dead-man time and then silence: the companion opens the gate by itself, so the link
+        # must not keep treating the pipe as held.
+        self.link.one('gatecfg', fnv_link.word(self.host.t['timerDisable']), fnv_link.word(self.host.t['timerEnable']),
+                      fnv_link.word(self.host.t['timerGlobal']))
+        self.assertTrue(self.link.one('hold', 'on', fnv_link.word(300)).get('held'))
+        self.idle()
+        self.idle()
+        self.assertIsNone(self.link.handle, 'the pipe stayed held after the dead-man switch opened the gate')
+
     def test_zero_disables(self):
         self.link.idle_release_seconds = 0
         self.link.ping()

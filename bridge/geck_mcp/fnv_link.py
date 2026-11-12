@@ -72,6 +72,7 @@ class EngineLink:
         self._last_use = time.monotonic()
         self._pins = 0
         self._holding = False       # the companion's last word: gate held or a stop parked
+        self._hold_timeout = 120.0  # its dead-man time: with no request for this long it lets go by itself
         self._idle_thread = None
 
     # ------------------------------------------------------------------ connection
@@ -95,7 +96,7 @@ class EngineLink:
                     time.sleep(0.25)
         self.hello = None
         self._last_use = time.monotonic()
-        if self._idle_thread is None or not self._idle_thread.is_alive():
+        if self._idle_thread is None:          # cleared by the idle thread under the lock when it ends
             self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True, name='fnvmcp-link-idle')
             self._idle_thread.start()
         return self
@@ -112,17 +113,26 @@ class EngineLink:
                 self._pins -= 1
                 self._last_use = time.monotonic()
 
+    def _held(self):
+        """The gate is held or a stop parked, as far as the last reply said, and the companion's dead-man switch has
+        not let go since (it counts from the last request)."""
+        return self._holding and time.monotonic() - self._last_use < self._hold_timeout
+
     def _idle_loop(self):
-        while self.handle is not None:
+        while True:
             limit = self.idle_release_seconds
             time.sleep(min(1.0, limit / 4) if limit and limit > 0 else 1.0)
-            if not limit or limit <= 0 or self._pins or self._holding:
+            with self.lock:                             # ends only under the lock, so connect() never misses it
+                if self.handle is None:
+                    self._idle_thread = None
+                    return
+            if not limit or limit <= 0 or self._pins or self._held():
                 continue
             if time.monotonic() - self._last_use < limit:
                 continue
             if self.lock.acquire(blocking=False):      # never while a request runs
                 try:
-                    if (self.handle is not None and not self._pins and not self._holding
+                    if (self.handle is not None and not self._pins and not self._held()
                             and time.monotonic() - self._last_use >= limit):
                         self.close()
                 finally:
@@ -133,6 +143,8 @@ class EngineLink:
         for r in results:
             if isinstance(r, dict) and 'held' in r:
                 self._holding = bool(r.get('held')) or bool(r.get('parked'))
+                if r.get('held') and isinstance(r.get('timeout'), (int, float)) and r['timeout'] > 0:
+                    self._hold_timeout = r['timeout'] / 1000.0
 
     def close(self):
         import _winapi
@@ -144,6 +156,7 @@ class EngineLink:
         self.handle = None
         self.hello = None  # a closed link no longer knows which game it talks to; the next ping says again
         self.last_frame = None
+        self._holding = False
 
     def _io(self, data, timeout):
         """Write one line and read one line back with a deadline (overlapped I/O, cancelled on timeout)."""
