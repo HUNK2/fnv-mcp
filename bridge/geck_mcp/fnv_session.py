@@ -106,7 +106,7 @@ class SessionTools:
         except Exception:
             # No session will be open, so nothing could undo these later: take back what this start turned on (and
             # only that: a capture that was already running stays; R12).
-            if prepared.get('crashContext'):
+            if prepared.get('crashContext') is True:     # 'off (...)' means enable failed (S6 review C)
                 try:
                     _deep(self.live).crash_context('disable')
                 except Exception:  # noqa: BLE001 - best effort; the original error is what the caller needs

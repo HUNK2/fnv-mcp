@@ -507,8 +507,12 @@ class CrawlTools:
                                 row['photo'] = 'not taken: %s' % str(e)[:80]
                         if rtype in EQUIPPABLE:
                             self.live.console('player.UnequipItem %s 0 1' % ref)
-                            self._rewear(worn_now)
                 finally:
+                    if rtype in EQUIPPABLE:     # the player's own clothes go back on whatever failed (S6 review C)
+                        try:
+                            self._rewear(worn_now)
+                        except Exception as e:  # noqa: BLE001
+                            row['cleanupError'] = 'rewear: %s' % str(e)[:150]
                     # the copies this test added go back even when a step above failed (R17)
                     try:
                         count, = self.live.values(['player.GetItemCount %s' % ref])
@@ -523,7 +527,8 @@ class CrawlTools:
             except Exception as e:  # noqa: BLE001 - one bad item does not stop the crawl
                 row['error'] = str(e)[:300]
             row['problems'] = (10 * len(row.get('scriptErrors') or []) + (5 if row.get('modelFound') is False else 0)
-                               + (5 if row.get('added') is False else 0) + (50 if row.get('error') else 0))
+                               + (5 if row.get('added') is False else 0) + (50 if row.get('error') else 0)
+                       + (20 if row.get('cleanupError') else 0))
             rows.append(row)
 
     def run(self, action, **a):

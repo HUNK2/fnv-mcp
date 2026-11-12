@@ -669,11 +669,12 @@ class AudioTools:
                                    word(2), '0', '0', '0', word(5), '0', '0', '0', '0', hexs('subtitle'))
             if not h.get('ok'):
                 raise ConvError('HOOK_REFUSED', 'The subtitle hook was refused (%s).' % h.get('error'), h)
-            hook, seen = h['hook'], 0
+            hook, seen, lost = h['hook'], 0, 0
             try:
                 end = time.monotonic() + float(seconds)
                 while True:
-                    _, got, _ = self.deep.records(hook, since=seen)
+                    _, got, missed = self.deep.records(hook, since=seen)
+                    lost += missed or 0
                     for rec in got:
                         seen = max(seen, rec[0])          # records() takes since as exclusive (R6)
                         text = _text(self.live.reads([(rec[12], 260)])[0]) if rec[12] else None
@@ -686,7 +687,7 @@ class AudioTools:
         finally:
             if turned_on:
                 self.live.link.write(GENERAL_SUBTITLES + 4, b'\x00')
-        out = dict(generalSubtitles=general or turned_on, subtitles=rows[:int(limit)])
+        out = dict(generalSubtitles=general or turned_on, subtitles=rows[:int(limit)], lost=lost)
         if not (general or turned_on):
             out['note'] = ('General Subtitles is off (bGeneralSubtitles): lines spoken outside the dialogue menu show '
                            'no subtitle and are not caught here. Pass enable=true to turn it on while recording; '

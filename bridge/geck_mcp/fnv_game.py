@@ -60,6 +60,10 @@ def process_started(pid):
 AUDIO_CACHE_FLAG = 0x011F6EC0
 
 
+# The companion build that writes exit notes (fnvmcp_engine.c COMPANION_VERSION 3; build 2 may predate them).
+EXIT_NOTE_COMPANION = 3
+
+
 def process_alive(pid):
     """Is process `pid` still running? Through its handle (microseconds), for the launch loops that used tasklist
     on every poll. A process that refuses the query is counted as alive."""
@@ -367,9 +371,10 @@ class Game:
             last = self.last_exit(session.get('launchedAt'))
             out.update(phase='not_running', crashedSinceLaunch=crash, lastExit=last)
             if session.get('launchedAt') and not crash and not (last and last.get('forLastLaunch')) \
-                    and (session.get('companion') or 0) >= 2 and not self._bridge_quit(session.get('pid')):
-                # Only a companion that writes exit notes (wire 2) can tell, and a quit the bridge asked for (its
-                # force path ends in TerminateProcess) is not "from outside" (R18).
+                    and (session.get('companion') or 0) >= EXIT_NOTE_COMPANION \
+                    and not self._bridge_quit(session.get('launchedAt')):
+                # Only a companion build that writes exit notes can tell, and a quit the bridge asked for since the
+                # launch (its force path ends in TerminateProcess) is not "from outside" (R18, S6 review C I1/I2).
                 # The companion writes its note from the game's own exit path, so a game that ended with neither a
                 # note nor a crash log was ended from outside: TerminateProcess (Task Manager, a script), MO2's job
                 # object closing with MO2, or a fault so early that the crash logger did not run.
@@ -749,16 +754,17 @@ class Game:
                 'servingRequest': note.get('servingRequest'), 'askedByBridge': asked,
                 'forLastLaunch': None if launched_at is None else at >= float(launched_at)}
 
-    def _bridge_quit(self, pid):
-        """Did the bridge ask this game process to quit (a quit-log line for its pid)?"""
+    def _bridge_quit(self, launched_at):
+        """Did the bridge ask the game to quit since the last launch (a quit-log line after it)? By time, not pid:
+        a bridge quit clears the session pid (S6 review C I1)."""
         log = Path(self.project.state_dir) / 'fnv' / 'quit-log.jsonl'
-        if not pid or not log.exists():
+        if not launched_at or not log.exists():
             return False
         try:
             rows = [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines()[-200:] if line.strip()]
         except (OSError, ValueError):
             return False
-        return any(r.get('pid') == pid for r in rows)
+        return any((r.get('time') or 0) >= float(launched_at) for r in rows)
 
     def log_quit(self, pid, step):
         """Every quit the bridge asks for, with the code path that asked (state/fnv/quit-log.jsonl), so a game that

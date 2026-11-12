@@ -42,7 +42,7 @@ __declspec(dllexport) volatile LONG fnvmcp_seam = 0;
 #define SEAM(n) ((void)0)
 #endif /* FNVMCP_TEST_SEAM */
 
-#define COMPANION_VERSION 2
+#define COMPANION_VERSION 3 /* 3: writes exit notes (exit-*.json); fnv_status trusts their absence only from 3 on */
 #define WIRE_VERSION 2
 #define EVENT_DEADMAN 0x3E9 /* event record type: the gate's dead-man switch opened a held gate */
 #define EVENT_INJECT 0x3EA  /* event record type: the input injector faulted and released its jobs */

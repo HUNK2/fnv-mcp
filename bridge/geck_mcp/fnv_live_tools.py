@@ -1351,6 +1351,8 @@ def register(server, project, annotations, result_type, maintain=True):
         harvest: copy every count, sample and caller table into state/atlas.sqlite (fnv_name_dossier reads them);
         harvests: list them."""
         def action_fn():
+            if dry_run and action != 'install':     # it would act for real (clear, remove, config; S6 review C I4)
+                raise ValueError('dry_run: only action=install has a dry run; %s would change the probes' % action)
             selection = {k: v for k, v in (('statuses', statuses), ('addresses', functions if action in ('plan', 'install') else None),
                                            ('start', hex_int('start', start) if start else None),
                                            ('end', hex_int('end', end) if end else None),
@@ -1446,7 +1448,8 @@ def register(server, project, annotations, result_type, maintain=True):
     async def fnv_name_export(path: Annotated[str, Field(max_length=500)] | None = None) -> result_type:
         """Write everything the naming tools recorded (harvested probe sets, atlas fits, resolved callers, this classes,
         result shapes, oracle matches, experiment verdicts, field watches) as fnvsym-trace/2 into fnvsym/traces, with the
-        measured accuracy of each method (PROOF 4.1). fnvsym's `python -m namer.runtime2` turns it into evidence."""
+        measured accuracy of each method (PROOF 4.1). fnvsym's `python -m namer.runtime2` turns it into evidence.
+        With nothing recorded yet it writes no file (changed: false, exported: 0)."""
         return await invoke('fnv_name_export', lambda: naming.export(path))
 
     @server.tool(annotations=act)

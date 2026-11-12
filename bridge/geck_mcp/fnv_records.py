@@ -394,11 +394,15 @@ class RecordsTools:
                 raise DataError('PLUGIN_NOT_FOUND', '%s is neither in the load order nor a file' % plugin)
             # a file outside the load order: only under the game Data folder or the dev profile's mods (T7)
             allowed = [Path(project.game_root) / 'Data']
+            if getattr(project, 'state_dir', None):     # geck_plugin_build's output, before install (S6 review C I3)
+                from .authoring import default_build_dir
+                allowed.append(default_build_dir(project.state_dir))
             fnv = getattr(project, 'fnv', None)
             if fnv is not None and getattr(fnv, 'mo2_root', None):
                 allowed.append(Path(fnv.mo2_root) / 'mods')
-            real = path.resolve()
-            if not any(real.is_relative_to(root.resolve()) for root in allowed):
+            spots = {path.absolute(), path.resolve()}    # a symlinked mod folder counts by where it is linked
+            if not any(spot.is_relative_to(root.absolute()) or spot.is_relative_to(root.resolve())
+                       for spot in spots for root in allowed):
                 raise DataError('BAD_PATH', '%s is outside the game Data folder and the dev profile\'s mods. Next: '
                                 'install the plugin (fnv_install) or name a plugin of the load order.' % plugin,
                                 {'allowed': [str(r) for r in allowed]})

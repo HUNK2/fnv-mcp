@@ -1991,7 +1991,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - `quit(force=True)` (TerminateProcess) is blamed on "outside" too, although `quit-log.jsonl` records that the bridge did it.
 - **Fix idea:** Show the note only when the companion is new enough to write exit notes, and check `quit-log.jsonl` for a bridge quit first.
 - Status: fixed (PLAN-3 S6)
-- Resolution: the launch records the companion build (ping companion) in the session; the 'terminated from outside' note shows only when that build writes exit notes (companion >= 2) and the quit-log has no bridge quit for that pid (S6.20, test_stab_s6c).
+- Resolution: the launch records the companion build in the session; the 'terminated from outside' note shows only from build 3 on (COMPANION_VERSION 3 = writes exit notes; build 2 may predate them) and when the quit-log has no bridge quit since the launch (by time: a bridge quit clears the session pid) (S6.20, review C I1/I2).
 
 ### R19. Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix)
 
@@ -2069,7 +2069,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: the path is not restricted to the game Data directory, and a malformed file returns a parser exception string rather than a structured BAD_ASSET code.
 - Fix idea: confine to Data/, catch parse errors into a named code.
 - Status: fixed (PLAN-3 S6)
-- Resolution: a plugin path outside the load order must be under the game Data folder or the dev profile's mods (else BAD_PATH with the allowed roots); a file that does not read as a plugin is BAD_ASSET (S6.22, test_stab_s6c).
+- Resolution: a plugin path outside the load order must be under the game Data folder, the dev profile's mods or the project's build folder (geck_plugin_build's output), checked by its absolute and its resolved path; else BAD_PATH. A file that does not read as a plugin is BAD_ASSET (S6.22, review C I3).
 
 ### T8. Parameters documented/required but ignored
 
@@ -2079,7 +2079,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: some parameters are accepted and ignored, or required by the schema but unused by the implementation, so an agent cannot tell its argument had no effect.
 - Fix idea: drop them or reject when set.
 - Status: partly fixed (PLAN-3 S6)
-- Resolution: no tool takes a parameter its body never reads (an AST test keeps it so; geck_plugin_save's save_entire_active_plugin is a deliberate Literal[True] confirmation). Open: parameters that only some actions of an action-style tool use are still accepted and ignored by the others; the research recorded no list of them, and rejecting them needs a per-action parameter table (S6.23, test_stab_s6c).
+- Resolution: no tool takes a parameter its body never reads (an AST test keeps it so; geck_plugin_save's save_entire_active_plugin is a deliberate Literal[True] confirmation); fnv_probe refuses dry_run for any action but install (clear/remove/config acted for real). Open: other parameters that only some actions of an action-style tool use are accepted and ignored by the others (fnv_probe config resends the default samples/exit_samples/every); rejecting them needs a per-action parameter table (S6.23, review C I4).
 
 ### T9. geck_compile_status vs geck_compile_resume return different codes for unknown operation
 

@@ -184,10 +184,10 @@ class OutsideNoteTests(unittest.TestCase):
         return game
 
     def test_outside_note_rules(self):
-        self.assertIn('exitNote', self.game(companion=2).status())
-        self.assertNotIn('exitNote', self.game(companion=1).status(), 'an old companion writes no exit notes')
+        self.assertIn('exitNote', self.game(companion=3).status())
+        self.assertNotIn('exitNote', self.game(companion=2).status(), 'build 2 may predate exit notes')
         self.assertNotIn('exitNote', self.game(companion=None).status())
-        forced = self.game(companion=2, quit_rows=[{'time': time.time() - 5, 'pid': 100, 'step': 'quit'}])
+        forced = self.game(companion=3, quit_rows=[{'time': time.time() - 5, 'pid': 100, 'step': 'quit'}])
         self.assertNotIn('exitNote', forced.status(), 'the bridge quit it')
 
 
