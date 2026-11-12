@@ -112,6 +112,12 @@ class ControlTools:
         before = state['since']
         layout = layout_args(sig)[0] if sig else []
         out = self.agent._read_trace(h, address, record, signature, sig, layout, limit, True)
+        if h.get('action'):
+            # The record's top byte is the action the call got: 0 once the limit was passed (G11).
+            _, recs, _ = self.deep.records(h, before, limit=4096)
+            applied = {r[0]: bool(r[23] >> 24) for r in recs}
+            for call in out.get('calls') or []:
+                call['applied'] = applied.get(call['seq'])
         if with_stack:
             seq, recs, _ = self.deep.records(h, before, limit=4096)
             stacks = {r[0]: self._call_stack(r[24:48]) for r in recs}
@@ -164,11 +170,17 @@ class ControlTools:
                 raise LiveError('NOT_HOOKED', 'No behaviour hook on %s' % (record.get('name') or function))
             out = self._decode_calls(h, address, record, signature, sig, label, read_limit)
             out['hook'] = self._hook_view(h)
+            calls = out.get('calls') or []
+            changed = sum(1 for c in calls if c.get('applied'))
+            which = ('%d of the %d calls listed (applied: true; actionApplied %s of actionHits %s%s)'
+                     % (changed, len(calls), h.get('actionApplied'), h.get('actionHits'),
+                        ', limit %s' % h['actionLimit'] if h.get('actionLimit') else ''))
             if out['hook']['action'] == 'result':
-                out['resultNote'] = ('returned = what the function computed; callers got %s instead'
-                                     % out['hook']['actionValue'])
+                out['resultNote'] = ('returned = what the function computed; callers got %s instead on %s'
+                                     % (out['hook']['actionValue'], which))
             elif out['hook']['action'] in ('skip', 'skip_float'):
-                out['resultNote'] = 'skipped calls did not run: callers got %s' % out['hook']['actionValue']
+                out['resultNote'] = ('skipped calls did not run and callers got %s: %s'
+                                     % (out['hook']['actionValue'], which))
             if action == 'remove':
                 self.deep.remove(h['id'])
                 self.live.journal.add({'kind': 'hook_removed', 'label': label, 'function': record.get('name'),
@@ -255,7 +267,8 @@ class ControlTools:
     def _hook_view(h):
         return {'id': h['id'], 'label': h['label'], 'function': h['target'], 'calls': h['calls'],
                 'action': ACT_NAMES.get(h.get('action', 0)), 'actionValue': h.get('actionValue'),
-                'actionHits': h.get('actionHits'), 'actionLimit': h.get('actionLimit') or None,
+                'actionHits': h.get('actionHits'), 'actionApplied': h.get('actionApplied'),
+                'actionLimit': h.get('actionLimit') or None,
                 'filter': h.get('filter'), 'filterValue': h.get('filterValue')}
 
     # ================================================================== fnv_patch

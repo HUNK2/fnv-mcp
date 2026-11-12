@@ -431,6 +431,7 @@ typedef struct {
     void *native_user;
     volatile LONG *native_busy;
     unsigned char *native_skip;
+    volatile LONG act_applied; /* calls the action changed (act_hits also counts the calls past act_limit; G11) */
 } Hook;
 /* A frame is a watch hook's (hook set) or a mass probe's (probe = index + 1, sample = its sample record). */
 typedef struct { uint32_t ret_slot, ret; Hook *hook; uint64_t t0; LONG seq; uint32_t ecx, a0, a1, override, probe; uint32_t *sample; } ShadowFrame;
@@ -589,7 +590,10 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
     if (act) {
         LONG hit = InterlockedIncrement(&h->act_hits);
         if (h->act_limit && (uint32_t)hit > h->act_limit) act = ACT_NONE;
-        else if (h->script[0]) InterlockedIncrement(&h->script_pending);
+        else {
+            InterlockedIncrement(&h->act_applied);
+            if (h->script[0]) InterlockedIncrement(&h->script_pending);
+        }
     }
     if (act == ACT_ARG) {
         uint32_t *slot = h->act_aux == 100 ? &fr[7] : h->act_aux == 101 ? &fr[6] : &fr[11 + (h->act_aux & 31)];
@@ -735,12 +739,12 @@ static void emit_hook(const Hook *h) {
          "\"callsAddress\":\"0x%08x\",\"records\":\"0x%08x\",\"ring\":%u,\"recordWords\":%u,\"table\":\"0x%08x\","
          "\"tableSize\":%u,\"tableUsed\":%ld,\"tableFull\":%ld,\"trampoline\":\"0x%08x\",\"stolen\":%u,"
          "\"qpcFrequency\":%lld,\"filter\":%d,\"filterValue\":\"0x%08x\",\"action\":%u,\"actionValue\":\"0x%08x\","
-         "\"actionAux\":%u,\"actionLimit\":%u,\"actionHits\":%ld}",
+         "\"actionAux\":%u,\"actionLimit\":%u,\"actionHits\":%ld,\"actionApplied\":%ld}",
          h->active ? "true" : "false", h->flags, h->calls, h->seq, (uint32_t)(uintptr_t)h,
          (uint32_t)(uintptr_t)&h->seq, (uint32_t)(uintptr_t)&h->calls, (uint32_t)(uintptr_t)h->records, HOOK_RING,
          HOOK_WORDS, (uint32_t)(uintptr_t)h->table, HOOK_TABLE, h->table_used, h->table_full,
          (uint32_t)(uintptr_t)h->trampoline, h->stolen, (long long)qpc_frequency.QuadPart, h->filter_sel, h->filter_value,
-         h->act_mode, h->act_value, h->act_aux, h->act_limit, h->act_hits);
+         h->act_mode, h->act_value, h->act_aux, h->act_limit, h->act_hits, h->act_applied);
 }
 /* hook <target> <stolen> <relocs: comma list of rel32 offsets or -> <flags> <filter_sel> <filter_value>
  *      <key_sel> <nargs> <deref0_sel> <deref1_sel> <snap_sel> <snap_len> <label hex> */
@@ -921,6 +925,7 @@ static void op_hookact(int argc, char **argv) {
     h->act_aux = aux;
     h->act_limit = limit;
     InterlockedExchange(&h->act_hits, 0);
+    InterlockedExchange(&h->act_applied, 0);
     InterlockedExchange(&h->script_pending, 0);
     MemoryBarrier();
     h->act_mode = mode;

@@ -202,5 +202,37 @@ class BreakpointTests(StopTestCase):
         self.assertEqual(self.host.link.one('resume', 'ff', 'step').get('error'), 'bad_mode')
 
 
+@needs_zig
+class HookLimitTests(StopTestCase):
+    """G11: with a limit, actionHits counted every call; actionApplied counts only the calls the action changed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        receipt = build(cls.tmp.name)
+        cls.host = StopHost(receipt, Path(receipt['dll']).parent, cls.tmp.name, 300)
+        from geck_mcp import fnv_link
+        result = cls.host.link.one('hook', hexint(cls.host.t['hookme']), hexint(6), '-', hexint(2), hexint(0),
+                                   hexint(0), hexint(0), hexint(1), '0', '0', hexint(0), hexint(0),
+                                   fnv_link.hexs('act:limit'))
+        cls.hook_id = result['hook']['id']
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.host.close()
+        cls.tmp.cleanup()
+
+    def test_hook_limit_counts_applied_only(self):
+        # skip with value 77, at most 2 calls
+        result = self.host.link.one('hookact', hexint(self.hook_id), hexint(1), hexint(77), hexint(0), hexint(2), '-')
+        self.assertTrue(result.get('ok'), result)
+        for n in range(1, 6):
+            self.host.link.schedule(0, 'hookme %d' % n)
+            self.assertTrue(self.wait_line('hookme 77') if n <= 2 else self.wait_line('hookme %d' % (1000 + n)), n)
+        hook = next(h for h in self.host.link.one('hooks')['hooks'] if h['id'] == self.hook_id)
+        self.assertEqual(hook['actionHits'], 5)
+        self.assertEqual(hook['actionApplied'], 2)
+
+
 if __name__ == '__main__':
     unittest.main()

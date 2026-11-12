@@ -276,6 +276,7 @@ static void op_hookhold(int argc, char **argv) {
     h->act_aux = pop;
     h->act_limit = 0;
     InterlockedExchange(&h->act_hits, 0);
+    InterlockedExchange(&h->act_applied, 0);
     memset(h->script, 0, sizeof(h->script));
     MemoryBarrier();
     h->act_mode = ACT_HOLD;

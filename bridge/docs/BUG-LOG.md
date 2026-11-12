@@ -1400,7 +1400,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | G7 | low | fixed | fnv_time_control status says "The game is running" while the clock is paused | `geck_mcp/fnv_time.py status verdict` |
 | G8 | low | fixed | The envelope's game.frame is the frame of the last ping, minutes old | `geck_mcp/fnv_live.py:190-192` |
 | G10 | low | fixed | fnv_globals set returns the whole unfiltered list, with the values from before the write | `geck_mcp fnv_globals` |
-| G11 | low | open | fnv_hook_set: with a limit, actionHits counts every call and read says every call was changed | `native/engine/fnvmcp_engine.c:580-581` |
+| G11 | low | fixed | fnv_hook_set: with a limit, actionHits counts every call and read says every call was changed | `native/engine/fnvmcp_engine.c:580-581` |
 | G12 | low | fixed | fnv_mem_write: an out-of-range value is FNV_ERROR, and setting types show as mangled names | `geck_mcp fnv_mem_write` |
 | G13 | low | open | After break clear, a stop that is still parked is described as "break 0" | `geck_mcp/fnv_debugger.py` |
 | G14 | low | fixed | fnv_console runs qqq (and other quit/load lines) unguarded; the quit is then traced as not asked by the bridge | `geck_mcp/fnv_live.py:235` |
@@ -1859,7 +1859,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed live
 - What happens: hook_set result value=7 limit=5 on Actor::GetLevel. The limit itself works (console player.GetLevel after it -> 1.00), but the hook then reports actionHits 3272 with actionLimit 5, and read's resultNote says "callers got 0x00000007 instead" over a list of 30 calls that were all past the limit. An agent reading it concludes the change is still active on every call.
 - Fix idea: count only applied actions (or report applied = min(hits, limit)), flag each record whether the action applied, and word the note from that.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: the companion counts act_applied (calls the action changed) beside act_hits and reports actionApplied; fnv_hook_set read marks each call applied (the record's action byte) and words the note from them (S6.4, test_engine_bp HookLimitTests, test_stab_s6a).
 
 ### G12. fnv_mem_write: an out-of-range value is FNV_ERROR, and setting types show as mangled names
 

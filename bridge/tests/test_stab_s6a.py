@@ -223,5 +223,30 @@ class ThawTests(unittest.TestCase):
         self.assertEqual(sorted(self.resumed), [10, 20])
 
 
+class HookReadNoteTests(unittest.TestCase):
+    """G11: read said every call was changed although only the first `limit` were."""
+
+    def test_read_note_marks_applied_calls(self):
+        from types import SimpleNamespace
+        from geck_mcp.fnv_control import ControlTools
+
+        def rec(seq, act):
+            r = [0] * 48
+            r[0], r[23] = seq, act << 24
+            return r
+        hook = {'id': 4, 'label': 'act:00500000', 'target': '0x00500000', 'calls': 3, 'action': 3,
+                'actionValue': '0x00000007', 'actionHits': 3, 'actionApplied': 2, 'actionLimit': 2}
+        deep = SimpleNamespace(hook=lambda label: hook,
+                               records=lambda h, since, limit=4096: (3, [rec(1, 3), rec(2, 3), rec(3, 0)], 0))
+        agent = SimpleNamespace(live=SimpleNamespace(in_game=lambda: None), deep=deep, _traces={},
+                                _read_trace=lambda *a: {'calls': [{'seq': 1}, {'seq': 2}, {'seq': 3}]})
+        control = ControlTools(agent)
+        control._function = lambda f, allow=False: (0x00500000, {'name': 'F'}, '', None)
+        out = control.hook_set('F', action='read')
+        self.assertEqual([c['applied'] for c in out['calls']], [True, True, False])
+        self.assertEqual(out['hook']['actionApplied'], 2)
+        self.assertIn('2 of the 3', out['resultNote'])
+
+
 if __name__ == '__main__':
     unittest.main()
