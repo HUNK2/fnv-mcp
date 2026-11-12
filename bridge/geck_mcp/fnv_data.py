@@ -441,7 +441,8 @@ class DataTools:
         out = []
         for sub in record.subrecords:
             item = {'tag': sub.tag, 'size': len(sub.data)}
-            decoded = decode_subrecord(record.type, sub.tag, sub.data)
+            decoded = decode_subrecord(record.type, sub.tag, sub.data,
+                                       is_form=lambda raw: self._form(entries, plugin_entry, raw) is not None)
             if decoded is not None:
                 item['value'] = decoded
             elif len(sub.data) == 4 and sub.tag not in NOT_FORMS:
@@ -755,9 +756,12 @@ STRING_TAGS = {'EDID', 'FULL', 'DESC', 'MODL', 'ICON', 'MICO', 'SCTX', 'NNAM', '
                'NAM1', 'RNAM', 'ONAM', 'BMCT', 'MOD2', 'MOD3', 'MOD4', 'SCVR'}
 
 
-def decode_subrecord(rtype, tag, data):
-    """A readable value for common subrecords, or None (shown as hex or as a form reference)."""
+def decode_subrecord(rtype, tag, data, is_form=None):
+    """A readable value for common subrecords, or None (shown as hex or as a form reference). is_form(raw id): a 4-byte
+    field that names a record is a form id even when its bytes read as text (R9)."""
     if tag in STRING_TAGS or (tag == 'NAM1' and rtype == 'INFO'):
+        if len(data) == 4 and tag != 'SCTX' and is_form is not None and is_form(struct.unpack('<I', data)[0]):
+            return None
         if not data or (data.endswith(b'\0') and all(c >= 0x20 or c in (9, 10, 13) for c in data[:-1])) or tag == 'SCTX':
             return data.rstrip(b'\0').decode('cp1252', 'replace')
     if tag == 'SCHR' and len(data) >= 20:

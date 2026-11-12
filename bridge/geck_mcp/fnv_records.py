@@ -23,7 +23,7 @@ from .fnv_data import DataError, NOT_FORMS, STRING_TAGS, load_order, read_record
 from .fnv_link import profile_locked
 from .fnv_state import atomic_write, write_txn
 
-REFS_VERSION = 3  # 3: text-or-form tags (RNAM...) are scanned when they are not text
+REFS_VERSION = 4  # 3: text-or-form tags (RNAM...) are scanned when they are not text; 4: or when the 4 bytes name a record (R9)
 SKIP_REFS = {b'LAND', b'NAVM', b'NAVI', b'TES4'}  # terrain and navmesh hold no useful form references
 # subrecord -> byte offsets of form ids the game reads there (beyond the generic small-field rule)
 FORM_FIELDS = {
@@ -95,9 +95,11 @@ def scan_references(path, exists, condition_params=None):
                 continue
             sub = stag.decode('latin-1')
             start = p + 6
-            if sub == 'EDID' or (sub in STRING_TAGS and _is_text(body[start:start + ssize])):
+            if sub == 'EDID' or (sub in STRING_TAGS and _is_text(body[start:start + ssize])
+                                 and not (ssize == 4 and exists(u32(body, start)[0]))):
                 # Tags like RNAM, TNAM, ONAM, NNAM are text in some record types and form ids in others (NPC_ RNAM
-                # is the race): skip them only when the field reads as text.
+                # is the race): skip them only when the field reads as text and, at 4 bytes, names no record (a race
+                # id such as 000987DC has printable low bytes and a 0 top byte; R9).
                 p = start + ssize
                 continue
             offsets = TYPED_FORM_FIELDS.get((rtype, sub)) or FORM_FIELDS.get(sub)

@@ -1388,7 +1388,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R6 | medium | open | `fnv_audio subtitles` drops every second subtitle (new code from the subtitles rewrite) | `geck_mcp/fnv_inspect.py:671-681` |
 | R7 | medium | fixed | After a server restart the camera journal entry still undoes with a blind `tfc`, so fnv_revert_all turns the fly camera ON (D2 incomplete) | `geck_mcp/fnv_eyes.py:271-292` |
 | R8 | medium | fixed | Journal: `mark_undone`'s `os.replace` fails while any other handle has `journal.jsonl` open, so an undo that already ran is not recorded and undo/revert_all stops (A1 fix, A7 again) | `geck_mcp/fnv_live.py:104-115` |
-| R9 | medium | open | C5 is only partly fixed: some form-id references are still skipped as text (C5) | `geck_mcp/fnv_records.py:96` |
+| R9 | medium | fixed | C5 is only partly fixed: some form-id references are still skipped as text (C5) | `geck_mcp/fnv_records.py:96` |
 | R10 | medium | fixed | `save_session` rewrites `session.json` with no lock: parallel act tools lose changes or corrupt it, and a corrupt file then breaks every act tool in a new server (D8 incomplete) | `geck_mcp/fnv_game.py:239-253` |
 | R11 | medium | fixed | Step over, step out and `step line` leave their temporary `to` site armed and unrecorded when another stop of the same thread comes first (E15 / L5 incomplete) | `geck_mcp/fnv_debugger.py _run_to` |
 | T2 | medium | fixed | fnv_input: invalid key_name raises outside invoke() | `fnv_live_tools.py:618` |
@@ -1634,7 +1634,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - `fnv_record_users` misses them, and `fnv_record_show` shows them as garbage text.
 - **Fix idea:** Treat a 4-byte field as a form id when that id exists as a record, and check that before the text test. Or key the skip by record type and field. Apply the same change in `decode_subrecord`, then bump `REFS_VERSION`.
 - Also found by the parser sweep: NPC_ RNAM on NVDLC01Elijah (01001300) decodes as text, so fnv_record_users misses that race reference.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: a 4-byte text-or-form field (RNAM, TNAM, ONAM...) is a form id when the id names a record in the plugin's masters or itself, checked before the text test, in scan_references and decode_subrecord (is_form); REFS_VERSION 4 rescans. FalloutNV.esm NPC_ RNAM 000987DC-DF now found (S6.6, test_stab_s6b).
 
 ### R10. `save_session` rewrites `session.json` with no lock: parallel act tools lose changes or corrupt it, and a corrupt file then breaks every act tool in a new server (D8 incomplete)
 
