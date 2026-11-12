@@ -27,6 +27,8 @@ from .fnv_live import LiveError
 _SCRATCH_LOCK = threading.Lock()   # vats_odds' write/call/read of its scratch float
 PLAYER = 0x011DEA3C
 DATA_HANDLER = 0x011C3F2C
+# Short globals the engine reads with their fraction: never rounded on write (G9).
+KEEP_FRACTION = ('gamehour', 'gamedayspassed')
 FORM_MAP = 0x011C54C0
 PROCESS_LISTS = 0x011E0E80
 MEMORY_MANAGER = 0x011F6238
@@ -180,9 +182,11 @@ class WorldTools:
                 continue
             kind = chr(raw[0x20]) if 32 <= raw[0x20] < 127 else '?'
             value = struct.unpack_from('<f', raw, 0x24)[0]
+            # The engine keeps every global as a float, and a short can hold a fraction (GameHour 9.12): show the
+            # raw value, an integer only when it is one (G9).
             entry = {'editorId': name, 'formId': '%08X' % struct.unpack_from('<I', raw, 0x0C)[0],
                      'type': {'s': 'short', 'l': 'long', 'f': 'float', 'r': 'ref'}.get(kind, kind),
-                     'value': int(value) if kind in 'sl' else _r(value, 6), 'ptr': g}
+                     'value': int(value) if kind in 'sl' and float(value).is_integer() else _r(value, 6), 'ptr': g}
             by_name[(name or '').lower()] = entry
             by_name[entry['formId'].lower()] = entry
             if query and query.lower() not in (name or '').lower() and query.upper() != entry['formId']:
@@ -194,12 +198,18 @@ class WorldTools:
             if not g:
                 raise LiveError('NO_GLOBAL', 'No global variable %r' % key)
             number = float(value)
-            if g['type'] in ('short', 'long'):
-                number = float(int(number))
+            rounded = False
+            if g['type'] in ('short', 'long') and not number.is_integer() \
+                    and (g['editorId'] or '').lower() not in KEEP_FRACTION:
+                number, rounded = float(round(number)), True
             result = self.live.mem_write('0x%08X' % (g['ptr'] + 0x24), number, as_type='f32',
                                          note='global %s' % g['editorId'])
-            changed.append({'editorId': g['editorId'], 'old': g['value'], 'new': int(number) if g['type'] in
-                            ('short', 'long') else number, 'journalId': result['journalId']})
+            row = {'editorId': g['editorId'], 'old': g['value'],
+                   'new': int(number) if number.is_integer() and g['type'] in ('short', 'long') else number,
+                   'journalId': result['journalId']}
+            if rounded:
+                row.update(rounded=True, given=value)
+            changed.append(row)
         for e in out:
             e.pop('ptr', None)
         return {'count': len(out), 'globals': out[:limit], 'more': len(out) > limit, 'changed': changed or None,

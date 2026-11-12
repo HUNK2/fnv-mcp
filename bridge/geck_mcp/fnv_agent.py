@@ -808,7 +808,7 @@ class AgentTools:
         self.live.in_game()
         if not 1 <= int(count) <= 20:
             raise ValueError('count is 1..20')
-        base = self.live.resolve(form) if not hasattr(self.live, 'base_form') else self.live.base_form(form)
+        base = self._spawn_base(form)
         anchor = self.live.resolve(near)
         distance, direction = int(distance), int(direction)
         want = self._spawn_spot(anchor['ptr'], distance, direction) if distance else None
@@ -850,6 +850,24 @@ class AgentTools:
             self.live.journal.confirm(m['journalId'], {'position': row['position']})
         return {'base': base.get('formId'), 'near': anchor['formId'], 'refs': refs, 'count': len(refs),
                 'note': 'fnv_undo or fnv_revert_all disables and deletes the spawned refs.'}
+
+    def _spawn_base(self, form):
+        """The base form to spawn. A placed reference (form types 58-65) maps to its base through the ref's base
+        pointer (+0x20), so `form` can be a ref id or crosshair (G2); the player has no base to copy."""
+        base = self.live.resolve(form)
+        info = (self.live.form_ids([base['ptr']]) or [None])[0] or {}
+        if info.get('formType') not in self.live.REFERENCE_TYPES:
+            return base
+        if base.get('expr') == 'player' or (base.get('formId') or '').upper() == '00000014':
+            raise LiveError('BAD_FORM', 'The player reference cannot be spawned. Next: spawn a base form; the '
+                            "player's base NPC_ is 00000007 (it copies the player character, not the player).",
+                            {'formId': base.get('formId')})
+        pointer = self.live.u32s([base['ptr'] + 0x20])[0]
+        found = (self.live.form_ids([pointer]) or [None])[0] if pointer else None
+        if not found:
+            raise LiveError('BAD_FORM', '%s is a reference whose base form cannot be read. Next: pass the base form.'
+                            % base.get('formId'), {'formId': base.get('formId')})
+        return {'ptr': pointer, 'formId': found['formId'], 'expr': found['formId'], 'fromRef': base.get('formId')}
 
     def _spawn_spot(self, ptr, distance, direction):
         """Where PlaceAtMe's distance/direction point from the anchor: direction 0 front, 1 back, 2 left, 3 right

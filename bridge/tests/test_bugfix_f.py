@@ -309,11 +309,17 @@ class FakeSpawnLive:
         self.journal.entries.append(entry)
         return entry
 
+    REFERENCE_TYPES = range(58, 66)
+
     def in_game(self):
         pass
 
     def changing(self, reason):
         pass
+
+    def form_ids(self, pointers):          # the spawned form (ptr 99) is a base form, not a reference
+        return [{'formId': '00ABCDEF', 'formType': 31} if p == 99 else {'formId': '00000014', 'formType': 59}
+                for p in pointers]
 
     def resolve(self, ref):
         return {'ptr': 1, 'formId': '00000014'} if ref in ('player',) else {'ptr': 99, 'formId': '00ABCDEF'}
