@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from .fnv_conv import ConvError, verdict
+from .fnv_state import atomic_write
 
 PROTECTED_MODS = ('fnvmcp engine companion', 'xnvse data', 'jip ln nvse plugin')
 # A prepare failure with one of these codes is the game crashing or hanging while it loads, which is exactly what a
@@ -462,9 +463,9 @@ class BisectTools:
         ok, why = self._passes(scenario)
         rounds.append({'round': 0, 'off': list(everything), 'passed': ok})
         if not ok and self._runs and all(crash for _, crash in self._runs):
-            return verdict('Every tested set crashed the game, even with every candidate off: the crash does not '
-                           'come from one of the %ss' % level[:-1], str(why), rounds=rounds, candidates=everything,
-                           culprit=None)
+            return verdict('Every tested set crashed the game or never reached gameplay, even with every candidate '
+                           'off: the cause is not one of the %ss' % level[:-1], str(why), rounds=rounds,
+                           candidates=everything, culprit=None)
         if not ok:
             return verdict('The scenario fails even with every candidate off: the cause is not one of them'
                            if not self.inconclusive else 'Inconclusive: the game did not run the scenario with '
@@ -506,11 +507,8 @@ class BisectTools:
 
 
 def _atomic_write(path, data):
-    """Write through a temp file in the same folder and os.replace, so a crash never leaves a half file."""
-    path = Path(path)
-    tmp = path.with_name(path.name + '.bisect-tmp')
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    """Write through a unique temp file in the same folder and os.replace, so a crash never leaves a half file."""
+    atomic_write(path, data)
 
 
 class SelfTest:

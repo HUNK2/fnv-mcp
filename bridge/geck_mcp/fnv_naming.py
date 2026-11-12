@@ -207,6 +207,8 @@ def slot_introducer(engine, owners, slot, this_vtables=()):
 
 
 # ===================================================================================== static facts
+_SCHEMA_DONE = set()
+
 class StaticIndex:
     """Indexes built once per engine map: vtable slots per function, fnvsym claims per address."""
 
@@ -313,7 +315,10 @@ class NamingTools:
 
     def db(self):
         db = self.atlas.db()
-        db.executescript(RUNTIME_SCHEMA)
+        key = db.execute('PRAGMA database_list').fetchone()[2]
+        if key not in _SCHEMA_DONE:   # once per file and process: the script takes the write lock (S2.5)
+            db.executescript(RUNTIME_SCHEMA)
+            _SCHEMA_DONE.add(key)
         return db
 
     def index(self):

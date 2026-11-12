@@ -98,7 +98,7 @@ class W1Live:
             FORCE_FN: {'name': 'OSInputGlobals::SetControlHeld', 'status': 'decomp',
                        'signature': 'public: void __thiscall OSInputGlobals::SetControlHeld(int)'},
         }
-        self.journal = SimpleNamespace(entries=lambda: [])
+        self.journal = SimpleNamespace(entries=lambda *a, **k: [], last_seq=lambda: 0)
         self.reverted = []
         self.project = SimpleNamespace(state_dir=Path('.'), fnv=SimpleNamespace(tests_dir=None))
         self.time_control = TimeControl(self, sleep=self.link.sleep, clock=self.link.clock)

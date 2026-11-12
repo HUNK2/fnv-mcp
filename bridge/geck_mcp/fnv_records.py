@@ -20,6 +20,8 @@ from pathlib import Path
 
 from .esp import assets
 from .fnv_data import DataError, NOT_FORMS, STRING_TAGS, load_order, read_record
+from .fnv_link import profile_locked
+from .fnv_state import atomic_write, write_txn
 
 REFS_VERSION = 3  # 3: text-or-form tags (RNAM...) are scanned when they are not text
 SKIP_REFS = {b'LAND', b'NAVM', b'NAVI', b'TES4'}  # terrain and navmesh hold no useful form references
@@ -199,13 +201,20 @@ class RecordsTools:
 
             started = time.monotonic()
             rows = scan_references(e['path'], exists, self._condition_params())
-            db.execute('delete from refs where file = ?', (e['fileId'],))
-            db.executemany('insert into refs values (?, ?, ?, ?, ?, ?, ?, ?)',
-                           ((e['fileId'], own[min(f >> 24, len(own) - 1)], f & 0xFFFFFF, t, off, tag,
-                             own[min(v >> 24, len(own) - 1)], v & 0xFFFFFF) for f, t, off, tag, v in rows))
-            db.execute('insert or replace into ref_files values (?, ?, ?, ?)',
-                       (e['fileId'], REFS_VERSION, time.time(), len(rows)))
-            db.commit()
+            if db.in_transaction:
+                db.rollback()
+            # One write transaction: a failure rolls back and frees the write lock (R14); a build another server
+            # finished meanwhile is kept.
+            with write_txn(db):
+                row = db.execute('select version from ref_files where file = ?', (e['fileId'],)).fetchone()
+                if row and row[0] == REFS_VERSION:
+                    continue
+                db.execute('delete from refs where file = ?', (e['fileId'],))
+                db.executemany('insert into refs values (?, ?, ?, ?, ?, ?, ?, ?)',
+                               ((e['fileId'], own[min(f >> 24, len(own) - 1)], f & 0xFFFFFF, t, off, tag,
+                                 own[min(v >> 24, len(own) - 1)], v & 0xFFFFFF) for f, t, off, tag, v in rows))
+                db.execute('insert or replace into ref_files values (?, ?, ?, ?)',
+                           (e['fileId'], REFS_VERSION, time.time(), len(rows)))
             built.append({'plugin': e['name'], 'references': len(rows), 'seconds': round(time.monotonic() - started, 1)})
         return built
 
@@ -435,7 +444,15 @@ class RecordsTools:
 
     # ------------------------------------------------------------------ fnv_profile_set
     def profile_set(self, mods=None, plugins=None, game=None, dry_run=False):
-        """mods / plugins: {name: true|false}. Refuses while the game runs."""
+        """mods / plugins: {name: true|false}. Refuses while the game runs. The profile's lists are read and written
+        under the profile lock, so another server's edit is never lost (S2.4)."""
+        fnv = self.data.project.fnv
+        if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
+            raise DataError('NO_MO2_PROFILE', 'Set fnv.mo2_root and fnv.mo2_profile in the project file')
+        with profile_locked(fnv.mo2_root, fnv.mo2_profile):
+            return self._profile_set(mods, plugins, game, dry_run)
+
+    def _profile_set(self, mods, plugins, game, dry_run):
         project = self.data.project
         fnv = project.fnv
         if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
@@ -487,7 +504,7 @@ class RecordsTools:
                     shutil.copy2(p, backup / n)
             for n, p in files.items():
                 if text[n] or p.exists():
-                    p.write_text('\n'.join(text[n]) + '\n', encoding='utf-8')
+                    atomic_write(p, '\n'.join(text[n]) + '\n')
         after = load_order(project) if changes and not dry_run else None
         problems = [e for e in (after or []) if e.get('missingMasters')]
         return {'changed': changes, 'errors': errors, 'dryRun': bool(dry_run), 'backup': str(backup) if backup else None,

@@ -30,6 +30,7 @@ from pathlib import Path
 
 from .fnv_deep import HookError, decode_prologue
 from .fnv_link import word
+from .fnv_state import GameIdentity, locked, read_json, update_json, write_json
 
 TARGET_STATUSES = ('unnamed', 'decomp', 'class_proven', 'probable', 'rejected')
 ANALYSIS_VERSION = 1
@@ -307,17 +308,11 @@ class ProbeTools:
         return self.state_dir / name
 
     def _load(self, name, default):
-        try:
-            return json.loads(self._path(name).read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            return default
+        return read_json(self._path(name), default)
 
     def _save(self, name, value):
-        p = self._path(name)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix('.tmp')
-        tmp.write_text(json.dumps(value), encoding='utf-8')
-        os.replace(tmp, p)
+        with locked(self._path(name)):
+            write_json(self._path(name), value)
 
     def quarantine(self):
         return {int(k, 16): v for k, v in self._load('probe_quarantine.json', {}).items()}
@@ -471,8 +466,9 @@ class ProbeTools:
         session = self._load('probe_session.json', None)
         if not session or not session.get('armed'):
             return None
-        pid = (self.link.hello or self.link.ping()).get('pid')
-        if session.get('pid') == pid:
+        here = GameIdentity.parse(self.link.hello or self.link.ping())
+        then = GameIdentity.parse(session)
+        if here and then and here.same_game(then):
             return None
         session['armed'] = False
         self._save('probe_session.json', session)
@@ -488,10 +484,11 @@ class ProbeTools:
             if culprit:
                 found.append(culprit)
         if found:
-            q = self._load('probe_quarantine.json', {})
-            for c in found:
-                q['%08X' % c['address']] = {'reason': c['why'], 'pid': session.get('pid'), 'at': time.time()}
-            self._save('probe_quarantine.json', q)
+            def add(q):
+                for c in found:
+                    q['%08X' % c['address']] = {'reason': c['why'], 'pid': session.get('pid'),
+                                                'started': session.get('started'), 'at': time.time()}
+            update_json(self._path('probe_quarantine.json'), add, {})
         return [{'address': '0x%08X' % c['address'], 'why': c['why']} for c in found] or \
             {'note': 'the last probe set was armed when its game process ended; no crash context points at a probe'}
 

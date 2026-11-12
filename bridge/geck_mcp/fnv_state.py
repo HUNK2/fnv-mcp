@@ -264,3 +264,74 @@ def write_txn(conn):
             conn.execute('ROLLBACK')
         raise
     conn.execute('COMMIT')
+
+
+# ===================================================================== retention
+RETENTION = {'quit_log_lines': 500, 'module_days': 14, 'crash_contexts': 50, 'backups_per_target': 20, 'screens': 300}
+
+
+def _unlink(path):
+    try:
+        path.unlink()
+        return 1
+    except OSError:       # in use (a module the game has loaded, a file another process holds): kept
+        return 0
+
+
+def _newest_first(paths):
+    def mtime(p):
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0
+    return sorted(paths, key=mtime, reverse=True)
+
+
+def prune(state_dir, now, crash_dir=None):
+    """Bound what the bridge keeps under state/fnv (N12). Returns the number of files removed per kind. Kept:
+    quit-log.jsonl's last 500 lines; modules/ builds younger than 14 days (a loaded one cannot be deleted and
+    stays); the newest 50 crash-context files in %LOCALAPPDATA%\fnvmcp; the newest 20 install and MO2 backups per
+    target; the newest 300 screens and screenshots."""
+    fnv = Path(state_dir) / 'fnv'
+    out = {'quitLog': 0, 'modules': 0, 'crashContexts': 0, 'backups': 0, 'screens': 0}
+    log = fnv / 'quit-log.jsonl'
+    if log.is_file():
+        with locked(log):
+            lines = log.read_text(encoding='utf-8', errors='replace').splitlines(True)
+            if len(lines) > RETENTION['quit_log_lines']:
+                out['quitLog'] = len(lines) - RETENTION['quit_log_lines']
+                atomic_write(log, ''.join(lines[-RETENTION['quit_log_lines']:]))
+    modules = fnv / 'modules'
+    if modules.is_dir():
+        cutoff = now - RETENTION['module_days'] * 86400
+        for p in modules.iterdir():
+            try:
+                old = p.is_file() and p.suffix.lower() in ('.dll', '.pdb') and p.stat().st_mtime < cutoff
+            except OSError:
+                old = False
+            if old:
+                out['modules'] += _unlink(p)
+    if crash_dir is None:
+        crash_dir = Path(os.environ.get('LOCALAPPDATA', '')) / 'fnvmcp' if os.environ.get('LOCALAPPDATA') else None
+    if crash_dir and Path(crash_dir).is_dir():
+        for p in _newest_first(Path(crash_dir).glob('crash-context-*.json'))[RETENTION['crash_contexts']:]:
+            out['crashContexts'] += _unlink(p)
+    for folder in ('install-backups', 'mo2-backups'):
+        d = fnv / folder
+        if not d.is_dir():
+            continue
+        groups = {}
+        for p in d.iterdir():
+            if p.is_file():
+                head, sep, tail = p.name.partition('-')
+                target = tail if folder == 'install-backups' and sep and head.isdigit() else head
+                groups.setdefault(target.lower(), []).append(p)
+        for files in groups.values():
+            for p in _newest_first(files)[RETENTION['backups_per_target']:]:
+                out['backups'] += _unlink(p)
+    for folder in ('screens', 'screenshots'):
+        d = fnv / folder
+        if d.is_dir():
+            for p in _newest_first([p for p in d.iterdir() if p.is_file()])[RETENTION['screens']:]:
+                out['screens'] += _unlink(p)
+    return out

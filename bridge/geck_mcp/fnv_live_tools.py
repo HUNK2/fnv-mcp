@@ -245,6 +245,9 @@ def register(server, project, annotations, result_type):
     from mcp.types import CallToolResult, TextContent
 
     live = LiveService(project)
+    # journal compaction and state pruning, off the start path (tasklist and file walks take a moment)
+    import threading
+    threading.Thread(target=live.maintain, name='fnv-state-maintenance', daemon=True).start()
     deep = DeepTools(live)
     live.deep = deep
     data = DataTools(project, live)

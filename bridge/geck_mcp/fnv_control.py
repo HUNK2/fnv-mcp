@@ -235,8 +235,7 @@ class ControlTools:
         entry = self.live.journal.add({'kind': 'hook_set', 'function': record.get('name') or function,
                                        'address': '0x%08X' % address, 'action': action, 'value': value,
                                        'arg': arg, 'filter': fdesc, 'limit': limit, 'script': script,
-                                       'undo': {'op': 'unhook', 'label': label},
-                                       'pid': (self.link.hello or {}).get('pid')})
+                                       'undo': {'op': 'unhook', 'label': label}})
         return {'installed': True, 'function': record, 'signature': signature, 'action': ACT_NAMES[mode],
                 'value': value, 'valueWord': '0x%08X' % word_value, 'popBytes': aux if mode in (1, 2) else None,
                 'argument': {'index': arg, 'in': layout[int(arg)]['where'] if action == 'arg' else None} if action == 'arg' else None,
@@ -291,8 +290,7 @@ class ControlTools:
         old = self.link.write(at, data)
         entry = self.live.journal.add({'kind': 'patch', 'address': '0x%08X' % at, 'old': old.hex(), 'new': data.hex(),
                                        'function': sym.get('name'),
-                                       'undo': {'op': 'write', 'address': '0x%08X' % at, 'hex': old.hex()},
-                                       'pid': (self.link.hello or {}).get('pid')})
+                                       'undo': {'op': 'write', 'address': '0x%08X' % at, 'hex': old.hex()}})
         return {'address': '0x%08X' % at, 'in': {'function': sym.get('name'), 'offset': sym.get('offset'),
                                                   'status': sym.get('status')} if sym else None,
                 'old': old.hex(' '), 'new': data.hex(' '), 'overwroteForeignPatch': foreign,

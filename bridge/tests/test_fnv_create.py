@@ -106,7 +106,7 @@ class FakeLink:
 class FakeLive:
     def __init__(self, state):
         self.project = SimpleNamespace(state_dir=state, game_root=str(Path(state) / 'game'))
-        self.journal = Journal(Path(state) / 'journal.jsonl')
+        self.journal = Journal(Path(state) / 'journal.jsonl', game=self.identity)
         self.hooks = []
         self.link = FakeLink(self)
         self.lines = []

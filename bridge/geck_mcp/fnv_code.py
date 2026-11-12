@@ -82,9 +82,26 @@ class CodeTools:
                     self._swaps = {}
         return self._swaps
 
-    def _save_swaps(self):
-        update_json(self.work / 'swaps.json', lambda old: {
-            'game': self._swaps_game, 'swaps': {'0x%08X' % k: v for k, v in self._swaps.items()}}, {}, indent=1)
+    def _save_swaps(self, address=None):
+        """Store this server's record for one address (or its removal; None: every address it holds) in swaps.json,
+        under the file's lock and on top of what another server process stored for the same game (S2.4); the merged
+        list becomes ours."""
+        mine = GameIdentity.parse(self._swaps_game)
+
+        def merge(stored):
+            theirs = GameIdentity.parse(stored.get('game'))
+            swaps = dict(stored.get('swaps') or {}) if theirs and mine and theirs.same_game(mine) else {}
+            for a in ([address] if address is not None else list(self._swaps)):
+                if a in self._swaps:
+                    swaps['0x%08X' % a] = self._swaps[a]
+                else:
+                    swaps.pop('0x%08X' % a, None)
+            return {'game': self._swaps_game, 'swaps': swaps}
+        merged = update_json(self.work / 'swaps.json', merge, {}, indent=1)
+        try:
+            self._swaps = {int(k, 16): v for k, v in merged['swaps'].items()}
+        except (TypeError, ValueError):
+            pass
 
     def _game_id(self):
         try:
@@ -396,7 +413,7 @@ class CodeTools:
                                 'slot of it was found to redirect.')
             self.swaps[address] = {'function': function, 'blob': base, 'old': None, 'size': link['size'],
                                    'sites': sites}
-            self._save_swaps()
+            self._save_swaps(address)
             self.live.journal.add({'kind': 'code_swap', 'function': function, 'address': '0x%08X' % address,
                                    'undo': None})
             return verdict('Swapped %s at %d call sites and vtable slots (the function is %d bytes, too short for a '
@@ -410,7 +427,7 @@ class CodeTools:
         if not out.get('ok'):
             raise ConvError('WRITE_FAILED', 'Could not redirect the entry (%s).' % out.get('error'))
         self.swaps[address] = {'function': function, 'blob': base, 'old': out['old'], 'size': link['size']}
-        self._save_swaps()
+        self._save_swaps(address)
         self.live.journal.add({'kind': 'code_swap', 'function': function, 'address': '0x%08X' % address,
                                'undo': None})
         return verdict('Swapped %s: 0x%08X now runs the new code at 0x%08X' % (function, address, base),
@@ -507,7 +524,7 @@ class CodeTools:
             else:
                 self.swaps.pop(address)
                 done.append(s['function'])
-            self._save_swaps()
+            self._save_swaps(address)
         if failed:
             raise ConvError('WRITE_FAILED', 'Could not restore everything: %s. What was restored is forgotten; the '
                             'rest stays in the swap list. Next: call unswap again (a thread may have been inside '

@@ -85,7 +85,15 @@ class BisectCrashTests(unittest.TestCase):                   # R2
         fx = Fixture(self, lambda on: CRASH)
         out = fx.tools.bisect('mods', [{'wait': 1}])
         self.assertIsNone(out.get('culprit'))
-        self.assertIn('every tested set crashed', out['verdict'].lower())
+        self.assertIn('every tested set crashed the game', out['verdict'].lower())
+
+    def test_never_in_game_is_named_in_the_all_crash_verdict(self):
+        # NOT_IN_GAME counts with the crashes (a hang at load), so the verdict says both (S1 review M3)
+        hang = {'passed': False, 'crash': None, 'summary': 'FAILED',
+                'failures': [{'phase': 'prepare', 'reason': 'gameplay not reached', 'code': 'NOT_IN_GAME'}]}
+        fx = Fixture(self, lambda on: hang)
+        out = fx.tools.bisect('mods', [{'wait': 1}])
+        self.assertIn('crashed the game or never reached gameplay', out['verdict'])
 
     def test_half_keeps_its_masters(self):
         names = ('A.esp', 'B.esp', 'C.esp', 'D.esp')

@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from geck_mcp import fnv_live, fnv_save, supervisor, service  # noqa: E402
 from geck_mcp.esp import codec, formids  # noqa: E402
 from geck_mcp.fnv_data import RecordIndex  # noqa: E402
+from geck_mcp.fnv_state import GameIdentity  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,7 +72,7 @@ class JournalTests(unittest.TestCase):
     def test_entries_are_stamped_with_the_game_process(self):
         journal = fnv_live.Journal(self.path, game=lambda: {'pid': 42, 'started': 7})
         entry = journal.add({'kind': 'test', 'undo': {'op': 'console', 'line': 'x'}})
-        self.assertEqual((entry['pid'], entry['started']), (42, 7))
+        self.assertEqual((entry['pid'], entry['started']), (42, '7'))   # stored as the companion sends it: text
         self.assertEqual(fnv_live.Journal(self.path, game=lambda: None).add({'kind': 't'}).get('pid'), None)
 
     def _live(self, hello):
@@ -82,8 +83,9 @@ class JournalTests(unittest.TestCase):
     def test_undo_skips_entries_of_other_or_unknown_processes(self):
         live = self._live({'pid': 5, 'started': 100})
         same = live.journal.add({'kind': 'a', 'undo': {'op': 'console', 'line': 'one'}})
-        live.journal.add({'kind': 'a', 'pid': 5, 'started': 99, 'undo': {'op': 'console', 'line': 'old'}})
-        live.journal.add({'kind': 'a', 'pid': None, 'undo': {'op': 'console', 'line': 'nopid'}})
+        # the identity is the journal's to stamp (R19): an earlier process, and no known game (an orphan)
+        live.journal.add({'kind': 'a', 'undo': {'op': 'console', 'line': 'old'}}, GameIdentity(5, 99))
+        live.journal.add({'kind': 'a', 'undo': {'op': 'console', 'line': 'nopid'}}, None)
         ran = []
         live.console = lambda line, ref=0: ran.append(line)
         live.ready = lambda: None

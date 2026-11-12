@@ -555,7 +555,7 @@ class ScenarioRunner:
 
     def mark(self):
         self.live.script_errors('last')   # move the console cursor to now
-        return {'journal': len(self.live.journal.entries()), 'events': (self.live.link.events(0) or {}).get('seq', 0),
+        return {'journal': self.live.journal.last_seq(), 'events': (self.live.link.events(0) or {}).get('seq', 0),
                 'time': time.time()}
 
     # ------------------------------------------------------------ steps

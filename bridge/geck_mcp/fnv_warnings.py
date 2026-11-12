@@ -21,6 +21,7 @@ from collections import Counter
 from pathlib import Path
 
 from .fnv_conv import dispatch, page, verdict
+from .fnv_state import read_json, update_json
 
 SOURCES = {'engine': 'falloutnv_error.log', 'havok': 'falloutnv_havok.log'}
 CATEGORIES = ('MASTERFILE', 'SCRIPTS', 'MODELS', 'TEXTURES', 'ANIMATION', 'AI', 'Audio')
@@ -329,11 +330,7 @@ class Warnings:
         return self.game_root / SOURCES[source]
 
     def marks(self):
-        path = self.state / 'warnings-marks.json'
-        try:
-            return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-        except ValueError:
-            return {}
+        return read_json(self.state / 'warnings-marks.json', {})
 
     def load(self, source):
         """The file's complete lines only (the game may be in the middle of a write)."""
@@ -520,8 +517,8 @@ class Warnings:
             marks[source] = {'path': loaded['path'], 'offset': loaded['end'], 'lines': len(loaded['lines']),
                              'tail': self.tail_hash(loaded['data'], loaded['end'])}
             skipped[source] = len(loaded['lines'])
-        self.state.mkdir(parents=True, exist_ok=True)
-        (self.state / 'warnings-marks.json').write_text(json.dumps(marks, indent=2) + '\n', encoding='utf-8')
+        mine = {k: v for k, v in marks.items() if k in SOURCES}
+        update_json(self.state / 'warnings-marks.json', lambda stored: stored.update(mine), {}, indent=2)
         return verdict('Mark set after %d engine lines and %d Havok lines' % (skipped['engine'], skipped['havok']),
                        'The files stay as they are (the game holds them open); read now starts at the mark.',
                        skipped=skipped, next='Do the action, then call fnv_warnings read.')

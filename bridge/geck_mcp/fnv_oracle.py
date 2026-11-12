@@ -294,7 +294,7 @@ class OracleTools:
                             'fnv_record_find once (any query) to build it, then call again.')
         if not path.is_file():
             raise missing
-        db = sqlite3.connect(str(path))
+        db = sqlite3.connect(str(path), timeout=30)
         try:
             try:
                 rows = db.execute("SELECT r.type, r.local, r.edid FROM records r JOIN files f ON f.id = r.file WHERE "

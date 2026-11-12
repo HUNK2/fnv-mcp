@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import fnv_link
 from .fnv_link import EngineLink, LinkError
+from .fnv_state import atomic_write, read_json, update_json
 
 GAME_EXE = 'FalloutNV.exe'
 MENU_START = 1013     # StartMenu: main menu, and the pause menu in game
@@ -232,26 +233,24 @@ class Game:
 
     # ------------------------------------------------------------ session record
     def session(self):
+        """session.json (pid, ready, launchedAt, saves backup...). A corrupt or missing file reads as {} (R10)."""
         if self._session is None:
-            path = self.state / 'session.json'
-            self._session = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+            self._session = read_json(self.state / 'session.json', {})
         return self._session
 
     def save_session(self, **changes):
-        # Reread the file first: another bridge process on the same state dir may have written pid/ready since this
-        # process cached it, and a stale dict must not overwrite that.
-        path = self.state / 'session.json'
-        try:
-            fresh = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
-        except (OSError, ValueError):
-            fresh = None
-        session = self.session()
-        if isinstance(fresh, dict):
-            session.clear()
-            session.update(fresh)
-        session.update(changes)
-        (self.state / 'session.json').write_text(json.dumps(session, indent=2) + '\n', encoding='utf-8')
-        return session
+        """Merge `changes` into session.json under its lock: another bridge process may have written other keys
+        since this one read it (R10). The old `journal` key has no reader and is dropped."""
+        changes.pop('journal', None)
+
+        def merge(stored):
+            stored.pop('journal', None)
+            stored.update(changes)
+        session = update_json(self.state / 'session.json', merge, {}, indent=2)
+        cached = self.session()
+        cached.clear()
+        cached.update(session)
+        return cached
 
     # ------------------------------------------------------------ status
     PROCESS_CACHE_SECONDS = 1.0
@@ -399,7 +398,7 @@ class Game:
         launched = time.time()
         self.forget_process()
         method = self.shell_launch(mo2)
-        self.save_session(pid=None, launchedAt=launched, start=start, ready=False, journal=None)
+        self.save_session(pid=None, launchedAt=launched, start=start, ready=False)
         timeline = [{'t': 0, 'event': 'mo2_run', 'method': method,
                      'command': 'ModOrganizer.exe -p "%s" run -e "%s"' % (self.profile, self.executable)}]
         if stale:
@@ -732,19 +731,20 @@ class Game:
         shutil.copy2(source, target)
         fnv_link.enable_mod(self.mo2_root, self.profile, mod)
         added = []
-        for name in ('plugins.txt', 'loadorder.txt'):
-            path = self.profile_dir / name
-            lines = path.read_text(encoding='utf-8').splitlines() if path.exists() else []
-            if source.name.lower() not in (line.strip().lower() for line in lines):
-                lines.append(source.name)
-                path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-                added.append(name)
+        with fnv_link.profile_locked(self.mo2_root, self.profile):
+            for name in ('plugins.txt', 'loadorder.txt'):
+                path = self.profile_dir / name
+                lines = path.read_text(encoding='utf-8').splitlines() if path.exists() else []
+                if source.name.lower() not in (line.strip().lower() for line in lines):
+                    lines.append(source.name)
+                    atomic_write(path, '\n'.join(lines) + '\n')
+                    added.append(name)
         return {'installed': True, 'unchanged': False, 'target': str(target), 'mod': mod, 'backup': str(backup) if backup else None,
                 'addedTo': added}
 
     def logs(self, sources=None, since='last', max_lines=200):
         cursor_path = self.state / 'log-cursors.json'
-        cursors = json.loads(cursor_path.read_text(encoding='utf-8')) if cursor_path.exists() else {}
+        cursors = read_json(cursor_path, {})
         out = {}
         for name, path in self.log_paths().items():
             if sources and name not in sources:
@@ -764,7 +764,8 @@ class Game:
             out[name] = {'path': str(path), 'from': start, 'size': len(data), 'lines': lines[-max_lines:],
                          'truncated': len(lines) > max_lines, 'reset': since == 'last' and start == 0 and bool(previous)}
             cursors[key] = {'size': len(data), 'mtime': path.stat().st_mtime}
-        cursor_path.write_text(json.dumps(cursors, indent=2) + '\n', encoding='utf-8')
+        mine = {k: v for k, v in cursors.items() if k in {str(p) for p in self.log_paths().values()}}
+        update_json(cursor_path, lambda stored: stored.update(mine), {}, indent=2)
         return out
 
     def backup_saves(self, reason):

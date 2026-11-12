@@ -731,8 +731,7 @@ class FormTools:
             self.live.console('SetName "%s" %s' % (name.replace('"', ''), form_id))
         entry = {'formId': form_id, 'ptr': '0x%08X' % ptr, 'clone': clone, 'type': type_, 'name': name}
         self.created.append(entry)
-        self.live.journal.add({'kind': 'form_create', **entry, 'pid': (self.live.identity() or {}).get('pid'),
-                               'undo': None})
+        self.live.journal.add({'kind': 'form_create', **entry, 'undo': None})
         return {'created': entry, 'how': how,
                 'next': 'fnv_form_edit changes fields; fnv_spawn or fnv_place at puts it in the world; fnv_author '
                         'export writes it to the plugin spec.'}
@@ -981,9 +980,8 @@ class PlaceTools:
         return self.live.link
 
     def _placed(self):
-        entries = [e for e in self.live.journal.entries() if e['kind'] == 'place' and not e['undone']]
-        pid = (self.live.identity() or {}).get('pid')
-        return [e for e in entries if e.get('pid') == pid]
+        return [e for e in self.live.journal.entries(process=self.live.identity())
+                if e['kind'] == 'place' and not e['undone']]
 
     def _pose(self, ptr):
         v = self.live.values(['GetPos X', 'GetPos Y', 'GetPos Z', 'GetAngle X', 'GetAngle Y', 'GetAngle Z', 'GetScale'],
@@ -1013,7 +1011,7 @@ class PlaceTools:
         pose = self._pose(ptr)
         cell = value_of(self.link.eval('GetParentCell', ptr))
         entry = self.live.journal.add({'kind': 'place', 'ref': element.get('formId'), 'base': base['formId'],
-                                       'cell': cell, 'pid': (self.live.identity() or {}).get('pid'), **pose,
+                                       'cell': cell, **pose,
                                        'undo': {'op': 'console_ref', 'ref': element.get('formId'),
                                                 'lines': ['Disable', 'MarkForDelete']}})
         return {'ref': element.get('formId'), 'base': base['formId'], **pose, 'journalId': entry['id']}
@@ -1236,14 +1234,13 @@ class PlaceTools:
 
     def list(self):
         latest = {}
-        for e in self.live.journal.entries():
+        for e in self.live.journal.entries(process=self.live.identity()):
             if e['kind'] == 'place' and not e['undone']:
                 latest[e['ref']] = dict(e)
             elif e['kind'] == 'place_pose' and e['ref'] in latest:
                 latest[e['ref']].update({k: e[k] for k in ('position', 'rotation', 'scale') if k in e})
-        pid = (self.live.identity() or {}).get('pid')
         return {'placed': [{k: e.get(k) for k in ('ref', 'base', 'cell', 'position', 'rotation', 'scale', 'id')}
-                           for e in latest.values() if e.get('pid') == pid], 'changed': False}
+                           for e in latest.values()], 'changed': False}
 
     def remove(self, ref=None):
         self.live.in_game()
@@ -1320,9 +1317,8 @@ class AuthorTools:
 
     def export(self, cell=None, name=None):
         placed = self.place.list()['placed'] if self.place else []
-        pid = (self.live.identity() or {}).get('pid')
-        created = [e for e in self.live.journal.entries() if e['kind'] == 'form_create' and not e['undone']
-                   and e.get('pid') == pid]
+        created = [e for e in self.live.journal.entries(process=self.live.identity())
+                   if e['kind'] == 'form_create' and not e['undone']]
         records, objects, problems = {}, [], []
         new_ids = {}
         for k, c in enumerate(created):

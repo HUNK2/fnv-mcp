@@ -70,8 +70,14 @@ ACTIONS = {
 }
 
 
+ATLAS_SCHEMA_VERSION = 1
+
+
 def _connect(path):
     db = sqlite3.connect(str(path), timeout=30)
+    db.execute('PRAGMA busy_timeout=30000')
+    if db.execute('PRAGMA user_version').fetchone()[0] >= ATLAS_SCHEMA_VERSION:
+        return db                 # the schema is there: running the script again would take the write lock (S2.5)
     db.executescript('''
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY, started REAL, ended REAL, source TEXT, game TEXT,
@@ -89,6 +95,8 @@ def _connect(path):
         CREATE INDEX IF NOT EXISTS callers_address ON callers(address);
     ''')
     db.execute("INSERT OR IGNORE INTO meta VALUES ('schema', ?)", (str(SCHEMA),))
+    db.execute('PRAGMA user_version = %d' % ATLAS_SCHEMA_VERSION)
+    db.commit()
     return db
 
 

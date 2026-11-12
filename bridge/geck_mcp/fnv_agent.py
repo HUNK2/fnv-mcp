@@ -25,6 +25,7 @@ from . import fnv_crash, fnv_link
 from .fnv_deep import HF_EXIT, HF_RECORD, RECORD_WORDS, RING, HookError, decode_prologue  # noqa: F401 (RECORD_WORDS for tests)
 from .fnv_link import hexs, word
 from .fnv_live import LiveError
+from .fnv_state import read_json, update_json
 
 TRACE_PREFIX = 'trace:'
 TEST_SAVE_PREFIX = 'fnvmcp_test_'
@@ -675,7 +676,7 @@ class AgentTools:
             engine = None
         groups = {}
         seen_path = Path(self.live.project.state_dir) / 'fnv/crash-signatures.json'
-        seen = json.loads(seen_path.read_text(encoding='utf-8')) if seen_path.exists() else {}
+        seen = read_json(seen_path, {})
         errors = []
         seen_moments = set()
         for p in logs:
@@ -710,10 +711,12 @@ class AgentTools:
         for g in out:
             g['new'] = g['signature'] not in seen
             g['files'] = g['files'][:5]
-        for g in out:
-            seen.setdefault(g['signature'], g['first'])
-        seen_path.parent.mkdir(parents=True, exist_ok=True)
-        seen_path.write_text(json.dumps(seen, indent=1) + '\n', encoding='utf-8')
+        firsts = {g['signature']: g['first'] for g in out}
+
+        def note(stored):
+            for sig, first in firsts.items():
+                stored.setdefault(sig, first)
+        update_json(seen_path, note, {}, indent=1)
         return {'logs': len(seen_moments), 'groups': out, 'distinct': len(out),
                 'shutdownOnly': sum(1 for g in out if g['duringShutdown']), 'unreadable': errors[:10],
                 'note': 'signature = exception code + crash site function (or module+offset) + the next game frames. '

@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .esp import codec
 from .fnv_facts import ACTOR_VALUES, SCRIPT_BLOCKS
+from .fnv_state import sqlite_connect, write_txn
 
 KNOWN_NAMES = {v.lower() for v in ACTOR_VALUES} | {'x', 'y', 'z', 'player', 'playerref'}  # AVs, axes, the player
 BLOCK_ALIASES = {'onpackageend'}  # short names in g_scriptBlocks (OnPackageDone = OnPackageEnd)
@@ -156,7 +157,8 @@ class RecordIndex:
         only be used by the thread that opened it, so each thread opens its own on the same file."""
         db = getattr(self._local, 'db', None)
         if db is None:
-            db = self._local.db = sqlite3.connect(str(self._path), timeout=30)
+            # WAL, a busy timeout and explicit write transactions: several server processes share this file (S2.5)
+            db = self._local.db = sqlite_connect(self._path, timeout=30)
         return db
 
     def _fresh(self, path, st):
@@ -186,27 +188,26 @@ class RecordIndex:
             db = self.db
             if db.in_transaction:  # never build on top of a transaction an earlier failure left open
                 db.rollback()
-            try:
-                with db:
-                    if row:
-                        db.execute('delete from records where file = ?', (row[0],))
-                        db.execute('delete from files where id = ?', (row[0],))
-                        self._drop_refs(db, row[0])
-                    next_id = max(db.execute('select coalesce(max(id), 0) from files').fetchone()[0],
-                                  self._last_id(db)) + 1
-                    db.execute('insert into files(id, path, name, size, mtime, version, masters, records, built) '
-                               'values (?, ?, ?, ?, ?, ?, ?, ?, ?)', (next_id, str(path), path.name, st.st_size,
-                                                                      st.st_mtime, INDEX_VERSION, json.dumps(masters),
-                                                                      len(rows), time.time()))
-                    self._set_last_id(db, next_id)
-                    own = masters + [path.name]
-                    db.executemany('insert into records values (?, ?, ?, ?, ?, ?, ?, ?)',
-                                   ((next_id, own[min(fid >> 24, len(own) - 1)].lower(), fid & 0xFFFFFF, rtype, edid,
-                                     full, off, flags) for fid, rtype, edid, full, off, flags in rows))
-            except Exception:
-                if db.in_transaction:
-                    db.rollback()
-                raise
+            with write_txn(db):
+                # Another server process may have rebuilt it while this one scanned (R15): use that build.
+                done, row = self._fresh(path, path.stat())   # the insert keeps the stat taken before the scan
+                if done is not None:
+                    return done
+                if row:
+                    db.execute('delete from records where file = ?', (row[0],))
+                    db.execute('delete from files where id = ?', (row[0],))
+                    self._drop_refs(db, row[0])
+                next_id = max(db.execute('select coalesce(max(id), 0) from files').fetchone()[0],
+                              self._last_id(db)) + 1
+                db.execute('insert into files(id, path, name, size, mtime, version, masters, records, built) '
+                           'values (?, ?, ?, ?, ?, ?, ?, ?, ?)', (next_id, str(path), path.name, st.st_size,
+                                                                  st.st_mtime, INDEX_VERSION, json.dumps(masters),
+                                                                  len(rows), time.time()))
+                self._set_last_id(db, next_id)
+                own = masters + [path.name]
+                db.executemany('insert into records values (?, ?, ?, ?, ?, ?, ?, ?)',
+                               ((next_id, own[min(fid >> 24, len(own) - 1)].lower(), fid & 0xFFFFFF, rtype, edid,
+                                 full, off, flags) for fid, rtype, edid, full, off, flags in rows))
             return next_id
 
     @staticmethod
@@ -705,7 +706,7 @@ class DataTools:
         live.changing('script hot swap')
         swapped = swap_script_code(live, target, fresh)
         entry = live.journal.add({'kind': 'script_hot_swap', 'script': target_info.get('formId'), 'target': '0x%08X' % target,
-                                  'holder': '0x%08X' % fresh, 'pid': (live.link.hello or {}).get('pid'),
+                                  'holder': '0x%08X' % fresh,
                                   'undo': {'op': 'swap_script', 'target': '0x%08X' % target, 'holder': '0x%08X' % fresh}})
         return {'script': target_info, 'owner': owner, 'swapped': swapped, 'variablesAdded': added,
                 'variablesMoved': moved or None, 'variablesDropped': dropped or None,

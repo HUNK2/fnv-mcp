@@ -16,6 +16,8 @@ import time
 import uuid
 from pathlib import Path
 
+from .fnv_state import atomic_write, locked
+
 NATIVE = Path(__file__).resolve().parents[1] / 'native'
 SOURCES = ('engine/fnvmcp_engine.c', 'engine/w1_pred.c', 'engine/w1_gate.c', 'engine/w1_samp.c', 'engine/w1_sink.c',
            'engine/w1_guard.c', 'engine/w1_input.c', 'engine/w2_stop.c', 'engine/w2_bp.c', 'engine/w5_mod.c',
@@ -345,6 +347,18 @@ def compile_target(zig, native, source, output, extra, defines=()):
         raise LinkError('BUILD_FAILED', 'zig cc failed for %s' % source, {'stderr': result.stderr[-4000:]})
 
 
+def check_defines(defines):
+    """Build defines as a sorted list of C identifiers (ASCII letters, digits, _; not starting with a digit). A single
+    string is one define, not a list of letters."""
+    if isinstance(defines, str):
+        defines = [defines]
+    out = sorted(set(defines))
+    for name in out:
+        if not (isinstance(name, str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name)):
+            raise LinkError('BAD_DEFINE', 'A build define must be a C identifier (got %r)' % (name,))
+    return out
+
+
 def build(state_dir, zig, with_fake_host=False, defines=()):
     """Compile the companion (and optionally its fake xNVSE host for tests) into state/engine/builds/<id>.
 
@@ -355,10 +369,7 @@ def build(state_dir, zig, with_fake_host=False, defines=()):
     version = subprocess.run([str(zig), 'version'], capture_output=True, text=True, check=True, timeout=30).stdout.strip()
     if version != '0.14.1':
         raise LinkError('ZIG_VERSION', 'The engine companion is validated with Zig 0.14.1 only (found %s)' % version)
-    defines = sorted(set(defines))
-    for name in defines:
-        if not name.replace('_', 'A').isalnum() or name[0].isdigit():
-            raise LinkError('BAD_DEFINE', 'A build define must be a C identifier (got %r)' % name)
+    defines = check_defines(defines)
     identity = {'source': source_hashes(), 'wire': WIRE, 'compiler': version}
     if defines:
         identity['defines'] = defines
@@ -407,32 +418,40 @@ def install(mo2_root, profile, receipt, state_dir):
     return {'installed': True, 'unchanged': False, 'target': str(target), 'backup': record['backup']}
 
 
+def profile_locked(mo2_root, profile, timeout=30.0):
+    """The lock every edit of an MO2 profile's lists (modlist.txt, plugins.txt, loadorder.txt) holds: two server
+    processes editing one profile keep both changes (S2.4)."""
+    return locked(Path(mo2_root) / 'profiles' / profile / 'modlist.txt', timeout)
+
+
 def enable_mod(mo2_root, profile, mod):
     """Put '+mod' in the profile's modlist.txt (top = highest priority, after the header comment)."""
     path = Path(mo2_root) / 'profiles' / profile / 'modlist.txt'
-    lines = path.read_text(encoding='utf-8').splitlines() if path.exists() else []
-    names = {line[1:] for line in lines if line[:1] in '+-'}
-    if '+' + mod in lines:
-        return False
-    header = [line for line in lines if line.startswith('#')]
-    rest = [line for line in lines if not line.startswith('#')]
-    if mod in names:
-        rest = ['+' + mod if line == '-' + mod else line for line in rest]
-    else:
-        rest = ['+' + mod] + rest
-    path.write_text('\n'.join(header + rest) + '\n', encoding='utf-8')
-    return True
+    with profile_locked(mo2_root, profile):
+        lines = path.read_text(encoding='utf-8').splitlines() if path.exists() else []
+        names = {line[1:] for line in lines if line[:1] in '+-'}
+        if '+' + mod in lines:
+            return False
+        header = [line for line in lines if line.startswith('#')]
+        rest = [line for line in lines if not line.startswith('#')]
+        if mod in names:
+            rest = ['+' + mod if line == '-' + mod else line for line in rest]
+        else:
+            rest = ['+' + mod] + rest
+        atomic_write(path, '\n'.join(header + rest) + '\n')
+        return True
 
 
 def disable_mod(mo2_root, profile, mod):
     path = Path(mo2_root) / 'profiles' / profile / 'modlist.txt'
-    if not path.exists():
-        return False
-    lines = path.read_text(encoding='utf-8').splitlines()
-    if '+' + mod not in lines:
-        return False
-    path.write_text('\n'.join('-' + mod if line == '+' + mod else line for line in lines) + '\n', encoding='utf-8')
-    return True
+    with profile_locked(mo2_root, profile):
+        if not path.exists():
+            return False
+        lines = path.read_text(encoding='utf-8').splitlines()
+        if '+' + mod not in lines:
+            return False
+        atomic_write(path, '\n'.join('-' + mod if line == '+' + mod else line for line in lines) + '\n')
+        return True
 
 
 SAFE_NAME = re.compile(r'^[A-Za-z0-9_. \'-]{1,80}$')

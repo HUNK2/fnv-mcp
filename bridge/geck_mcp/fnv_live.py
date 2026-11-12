@@ -19,6 +19,7 @@ from . import fnv_engine, fnv_facts, fnv_link
 from .fnv_facts import FACTS
 from .fnv_game import Game, GameError
 from .fnv_link import LinkError, element_value, hexs, word
+from .fnv_journal import Journal
 from .fnv_state import GameIdentity
 
 FORM_ID = re.compile(r'^(?:0x)?([0-9A-Fa-f]{1,8})$')
@@ -48,72 +49,6 @@ def _num(value):
 
 def _fid(value):
     return '%08X' % value
-
-
-class Journal:
-    """Append-only record of every change, with what undoes it. One file per bridge state folder.
-
-    Tools run on worker threads and may run in parallel, so every read and write holds one lock per file, and
-    rewrites go through a temporary file and os.replace (a crash mid-write never leaves half a journal). Each
-    entry is stamped with the game process it was made in (pid and start time, from `game`), so undo never
-    replays a change from an earlier game process onto a new one."""
-
-    _locks = {}
-    _locks_guard = threading.Lock()
-
-    def __init__(self, path, game=None):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.game = game  # callable -> {'pid', 'started'} of the running game, or None
-        with Journal._locks_guard:
-            self.lock = Journal._locks.setdefault(os.path.normcase(str(self.path.resolve())), threading.RLock())
-
-    def _read(self):
-        if not self.path.exists():
-            return []
-        out = []
-        for line in self.path.read_text(encoding='utf-8').splitlines():
-            if not line.strip():
-                continue
-            try:
-                out.append(json.loads(line))
-            except ValueError:  # a line torn by an older, unlocked writer: skip it, keep the rest
-                continue
-        return out
-
-    def entries(self):
-        with self.lock:
-            return self._read()
-
-    def add(self, entry):
-        stamp = {}
-        if 'pid' not in entry and self.game is not None:
-            try:
-                ident = self.game() or {}
-            except Exception:
-                ident = {}
-            if ident.get('pid'):
-                stamp = {'pid': ident['pid'], 'started': ident.get('started')}
-        entry = {'id': uuid.uuid4().hex[:12], 'time': time.time(), 'undone': False, **stamp, **entry}
-        line = json.dumps(entry) + '\n'
-        with self.lock:
-            with self.path.open('a', encoding='utf-8') as f:
-                f.write(line)
-        return entry
-
-    def mark_undone(self, ids):
-        ids = set(ids)
-        if not ids:
-            return
-        with self.lock:
-            entries = self._read()
-            for e in entries:
-                if e['id'] in ids:
-                    e['undone'] = True
-                    e['undoneAt'] = time.time()
-            tmp = self.path.with_name(self.path.name + '.tmp')
-            tmp.write_text(''.join(json.dumps(e) + '\n' for e in entries), encoding='utf-8')
-            os.replace(tmp, self.path)
 
 
 class LiveService:
@@ -1007,7 +942,7 @@ class LiveService:
         entry = self.journal.add({'kind': 'memory', 'address': '0x%08X' % address, 'type': kind, 'old': old.hex(),
                                   'new': data.hex(), 'target': target, 'path': path, 'note': note,
                                   'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': old.hex()},
-                                  'pid': (self.link.hello or {}).get('pid')})
+                                  })
         return {'address': '0x%08X' % address, 'type': kind, 'old': old.hex(), 'new': data.hex(), 'path': steps,
                 'journalId': entry['id'], 'changed': old != data}
 
@@ -1345,6 +1280,28 @@ class LiveService:
         return {'action': action, 'injected': True, 'frames': int(frames), **out}
 
     # ================================================================= journal and undo
+    def maintain(self):
+        """Server start (S2.6): fold the journal down to the running game's entries (the rest is archived next to it)
+        and prune the state folder. Best effort: a failure is logged, never raised."""
+        import logging
+        from .fnv_game import game_processes
+        from .fnv_state import prune
+        log = logging.getLogger(__name__)
+        out = {}
+        try:
+            running = game_processes()
+            live = GameIdentity(*running[0]) if len(running) == 1 else None
+            if len(running) <= 1:     # several games: nothing is sure to be stale, keep everything
+                out['journal'] = self.journal.compact(live)
+        except Exception as e:  # noqa: BLE001
+            out['journalError'] = str(e)
+        try:
+            out['pruned'] = prune(self.project.state_dir, time.time())
+        except Exception as e:  # noqa: BLE001
+            out['pruneError'] = str(e)
+        log.info('state maintenance at server start: %s', out)
+        return out
+
     def journal_list(self, limit=100, include_undone=True):
         entries = self.journal.entries()
         if not include_undone:
@@ -1390,14 +1347,12 @@ class LiveService:
 
     def undo(self, count=1, journal_id=None):
         self.ready()
-        entries = [e for e in self.journal.entries() if not e['undone']]
         if journal_id:
-            entries = [e for e in entries if e['id'] == journal_id]
+            entries = [e for e in self.journal.entries() if not e['undone'] and e['id'] == journal_id]
             if not entries:
                 raise LiveError('NOT_FOUND', 'No undoable journal entry %s' % journal_id)
         else:
-            ident = self.game_identity()
-            entries = [e for e in entries if e.get('undo') and self.same_process(e, ident)][-int(count):]
+            entries = self.journal.entries(process=self.game_identity(), undoable=True)[-int(count):]
         results = self._apply_undos(reversed(entries))
         return {'results': results, 'changed': any(r['undone'] for r in results)}
 
@@ -1407,22 +1362,31 @@ class LiveService:
         results = []
         for e in entries:
             try:
-                r = self._apply_undo(e)
+                # Under the journal's lock: another server may have undone it since the list was read (S2.3).
+                with self.journal.locked(timeout=30):
+                    now = self.journal.get(e['id']) or e
+                    if now.get('undone'):
+                        r = {'id': e['id'], 'undone': False, 'kind': e.get('kind'), 'reason': 'already undone'}
+                    else:
+                        r = self._apply_undo(now)
+                        if r['undone']:
+                            self.journal.mark_undone([r['id']])
             except Exception as exc:
                 r = {'id': e['id'], 'undone': False, 'kind': e.get('kind'),
                      'error': {'code': getattr(exc, 'code', type(exc).__name__), 'message': str(exc)}}
-            if r['undone']:
-                self.journal.mark_undone([r['id']])
             results.append(r)
         return results
 
     def revert_all(self, since=None):
-        """Undo every undoable change of this game process (since: only entries after that journal position)."""
+        """Undo every undoable change of this game process (since: only entries after that journal seq number)."""
         self.ready()
         ident = self.game_identity()
-        entries = [e for k, e in enumerate(self.journal.entries()) if not e['undone'] and e.get('undo') and
-                   self.same_process(e, ident) and (since is None or k >= since)]
+        entries = self.journal.entries(since_seq=since, process=ident, undoable=True)
         results = self._apply_undos(reversed(entries))
-        skipped = [e['id'] for e in self.journal.entries() if not e['undone'] and not e.get('undo')]
+        # Only this game process and scope, newest first, at most 50 ids (G4: the list once held every entry of
+        # every earlier game and made the reply too big to read).
+        left = [e['id'] for e in self.journal.entries(since_seq=since, process=ident)
+                if not e['undone'] and not e.get('undo')]
+        skipped = {'count': len(left), 'ids': left[::-1][:50]}
         return {'reverted': sum(r['undone'] for r in results), 'results': results, 'notUndoable': skipped,
                 'changed': any(r['undone'] for r in results)}
