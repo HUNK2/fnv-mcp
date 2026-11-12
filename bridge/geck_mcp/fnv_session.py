@@ -110,7 +110,7 @@ class SessionTools:
                     pass
             if deterministic:
                 try:
-                    control.fixed(0)
+                    control.fixed(0, journal=False)
                     control.release()
                 except Exception:  # noqa: BLE001
                     pass
@@ -159,7 +159,7 @@ class SessionTools:
         control, _ = shared_time(self.live)
         try:
             if state['deterministic']:
-                control.fixed(0)
+                control.fixed(0, journal=False)
             control.release()
             released = {'released': True}
         except Exception as e:

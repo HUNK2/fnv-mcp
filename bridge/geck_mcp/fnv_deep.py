@@ -217,6 +217,17 @@ class DeepTools:
         self.live = live
         self._reverse = None
         self._baseline = {}
+        listeners = getattr(live, 'unhook_listeners', None)
+        if isinstance(listeners, list):
+            listeners.append(self._hook_gone)
+
+    def _hook_gone(self, label):
+        """A profile hook came out (fnv_revert_all, fnv_hooks remove): the profile window and the crash context that
+        rely on it are over (S3 review B I3)."""
+        if label in PROFILE:
+            self._baseline.pop('profile', None)
+            if self._baseline.get('crash_context'):
+                self._baseline['crash_context'] = False
 
     @property
     def link(self):

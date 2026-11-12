@@ -267,7 +267,8 @@ class EngineLink:
                 try:
                     notify(result.get('hook') or {} if op[0] == 'hook' else int(str(op[1]), 16))
                 except Exception:  # noqa: BLE001 - the journal is a record; the game change already happened
-                    pass
+                    import logging
+                    logging.getLogger(__name__).warning('journaling the %s op failed', op[0], exc_info=True)
         return result
 
     # ------------------------------------------------------------------ typed helpers

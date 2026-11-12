@@ -6,6 +6,7 @@ in state/fnv/journal.jsonl with what is needed to undo it, and saves are backed 
 of a game session. Act tools refuse unless the project sets fnv.engine_control = "full".
 """
 import json
+import logging
 import math
 import re
 import os
@@ -64,6 +65,7 @@ class LiveService:
         self.journal = Journal(Path(project.state_dir) / 'fnv/journal.jsonl', game=self.game_identity)
         self._hook_lock = threading.Lock()
         self._hook_map, self._hook_game = {}, None     # label -> {'entry': journal id, 'hooks': {hook ids}}
+        self.unhook_listeners = []     # fn(label): a hook of that label came out (its tool's in-memory state follows)
 
     # ================================================================= plumbing
     @property
@@ -96,14 +98,16 @@ class LiveService:
             link.on_hook, link.on_unhook = self._hooked, self._unhooked
         return link
 
-    # Hooks whose tool journals them itself: hook_set (act:) and native modules (mod:, fnv_native unload).
-    SELF_JOURNALED_HOOKS = ('act:', 'mod:')
+    # Hooks their own tool journals or manages: hook_set (act:), native modules (mod:, fnv_native unload), debugger
+    # holds (dbg N: unhooking one would leave a parked thread stopped; fnv_debug break clear resumes it) and the
+    # session's warnings capture (fnv_session start/end own it). S3 review B I2/I3.
+    OWNER_MANAGED_HOOKS = ('act:', 'mod:', 'dbg ', 'warnings_live')
 
     def _hooked(self, hook):
         """A hook went in (trace, tracepoint, profile, debugger hold, capture...): one `instrument` entry per label
         and game, undone by unhooking the label (N8, PLAN-3 S3.6)."""
         label = hook.get('label') or ''
-        if not label or label.startswith(self.SELF_JOURNALED_HOOKS):
+        if not label or label.startswith(self.OWNER_MANAGED_HOOKS):
             return
         ident = GameIdentity.parse(self.game_identity())
         key = ident.key() if ident else None
@@ -111,20 +115,29 @@ class LiveService:
             if self._hook_game != key:
                 self._hook_map, self._hook_game = {}, key
             known = self._hook_map.get(label)
-            if known and not (self.journal.get(known['entry']) or {}).get('undone', True):
-                known['hooks'].add(hook.get('id'))
-                return
-            entry = self.journal.add({'kind': 'instrument', 'label': label, 'target': hook.get('target'),
-                                      'undo': {'op': 'unhook', 'label': label}})
-            self._hook_map[label] = {'entry': entry['id'], 'hooks': {hook.get('id')}}
+            known_entry = known['entry'] if known else None
+        # The journal is never touched under _hook_lock: an undo holds the journal lock and its unhook needs
+        # _hook_lock (S3 review B I1).
+        if known_entry and not (self.journal.get(known_entry) or {}).get('undone', True):
+            with self._hook_lock:
+                if label in self._hook_map:
+                    self._hook_map[label]['hooks'].add(hook.get('id'))
+                    return
+        entry = self.journal.add({'kind': 'instrument', 'label': label, 'target': hook.get('target'),
+                                  'undo': {'op': 'unhook', 'label': label}})
+        with self._hook_lock:
+            before = self._hook_map.get(label)
+            self._hook_map[label] = {'entry': entry['id'],
+                                     'hooks': (before['hooks'] if before else set()) | {hook.get('id')}}
 
     def _unhooked(self, hook_id):
         """A hook came out: when it was the last one of its label, its entry is closed (a tool that takes its own
         hook out again leaves nothing for fnv_revert_all)."""
-        done = None
+        done = gone = None
         with self._hook_lock:
             for label, info in list(self._hook_map.items()):
                 if hook_id in info['hooks']:
+                    gone = label
                     info['hooks'].discard(hook_id)
                     if not info['hooks']:
                         del self._hook_map[label]
@@ -132,6 +145,29 @@ class LiveService:
                     break
         if done:
             self.journal.mark_undone([done])
+        for listener in list(self.unhook_listeners) if gone else []:
+            try:
+                listener(gone)
+            except Exception:  # noqa: BLE001 - a listener's failure must not fail the unhook
+                logging.getLogger(__name__).warning('unhook listener failed for %s', gone, exc_info=True)
+
+    @staticmethod
+    def _order_key(entry):
+        """Entries whose undos restore an absolute value of the same thing: only the newest open one may run first
+        (an older one would set a value the newer one then overwrites; S3 review B I4/I5)."""
+        undo = entry.get('undo') or {}
+        if entry.get('kind') == 'place_adjust':
+            return ('place_adjust', entry.get('ref'))
+        if undo.get('op') == 'time_restore' and undo.get('what') in ('fixed', 'speed'):
+            return ('time', undo['what'])
+        return None
+
+    def _later_open(self, entry):
+        key = self._order_key(entry)
+        if key is None:
+            return []
+        return [e['id'] for e in self.journal.entries(process=self.game_identity(), undoable=True)
+                if e['id'] != entry['id'] and (e.get('seq') or 0) > (entry.get('seq') or 0) and self._order_key(e) == key]
 
     def engine(self):
         if self._engine is None:
@@ -1383,6 +1419,10 @@ class LiveService:
         if op is None:   # never mark a change undone that nothing reverted (N1)
             return {'id': entry['id'], 'undone': False, 'kind': entry.get('kind'),
                     'error': {'code': 'UNKNOWN_UNDO_OP', 'message': 'No undo op %r in this bridge' % undo.get('op')}}
+        later = self._later_open(entry)
+        if later:
+            return {'id': entry['id'], 'undone': False, 'kind': entry.get('kind'),
+                    'reason': 'undo the later change first', 'later': later}
         if entry.get('state') == 'pending' and not op.repeatable:
             # The tool failed between its intent and its confirm: the change may or may not be in the game, and
             # this op is only right when it is (S3.2).

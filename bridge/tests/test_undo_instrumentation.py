@@ -52,17 +52,17 @@ class HookJournalTests(unittest.TestCase):
         install(self.live.link, 0x004E3000, 'before the session')
         mark = self.live.journal.last_seq()                     # fnv_session start keeps this mark
         install(self.live.link, 0x004E1090, 'tp:004E1090')
-        install(self.live.link, 0x004E2000, 'dbg 1')
+        install(self.live.link, 0x004E2000, 'blame.1')
         self.live.revert_all(mark)                              # what fnv_session end runs (fnv_session.py _end)
         self.assertEqual([h['label'] for h in self.fake.link.hooks.values()], ['before the session'])
 
     def test_hooks_remove_is_journaled(self):
         from geck_mcp.fnv_deep import DeepTools
-        install(self.live.link, 0x004E1090, 'warnings_live')
+        install(self.live.link, 0x004E1090, 'damage_log')
         DeepTools(self.live).hooks_tool('remove', 'all')
         removed = [e for e in self.live.journal.entries() if e['kind'] == 'hook_removed']
         self.assertEqual(len(removed), 1)
-        self.assertEqual(removed[0]['labels'], ['warnings_live'])
+        self.assertEqual(removed[0]['labels'], ['damage_log'])
         self.assertIsNone(removed[0]['undo'])
         self.assertTrue(self.instruments()[0]['undone'])
 

@@ -858,6 +858,10 @@ class AgentTools:
         info = (self.live.form_ids([base['ptr']]) or [None])[0] or {}
         if info.get('formType') not in self.live.REFERENCE_TYPES:
             return base
+        if info.get('formType') not in (58, 59, 60):     # a projectile, grenade or other placed effect (review B M8)
+            raise LiveError('BAD_FORM', '%s is a projectile or effect reference (form type %s), not an object to copy. '
+                            'Next: spawn a base form.' % (base.get('formId'), info.get('formType')),
+                            {'formId': base.get('formId'), 'formType': info.get('formType')})
         if base.get('expr') == 'player' or (base.get('formId') or '').upper() == '00000014':
             raise LiveError('BAD_FORM', 'The player reference cannot be spawned. Next: spawn a base form; the '
                             "player's base NPC_ is 00000007 (it copies the player character, not the player).",
