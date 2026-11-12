@@ -124,5 +124,25 @@ class BareIdentifierTests(unittest.TestCase):
         self.assertEqual(live.resolve('DocMitchellRef')['formId'], '00104C0C')
 
 
+class ExpressionToolsAreActTests(unittest.TestCase):
+    """W1: fnv_snapshot, fnv_diff and fnv_watch ran caller console lines and expressions as kind read."""
+
+    def test_every_call_is_act(self):
+        from geck_mcp.fnv_live_tools import gated_kind
+        for name, action in (('fnv_snapshot', None), ('fnv_diff', None), ('fnv_watch', 'sample'),
+                             ('fnv_watch', 'frames')):
+            self.assertEqual(gated_kind(name, action, 'read'), 'act', name)
+
+    def test_read_mode_refuses_a_snapshot_with_a_console_item(self):
+        from fakes import FakeLive
+        from geck_mcp.fnv_live_tools import gated_kind
+        from geck_mcp.fnv_scenario import snapshot
+        with FakeLive(engine_control='read') as fake:
+            out = fake.live.run('fnv_snapshot', lambda: snapshot(fake.live, [{'console': 'player.kill'}], 'x'),
+                                gated_kind('fnv_snapshot', None, 'read'))
+            self.assertFalse(out.get('ok', True))
+            self.assertEqual([name for name, _ in fake.link.ops if name in ('con', 'eval')], [])
+
+
 if __name__ == '__main__':
     unittest.main()

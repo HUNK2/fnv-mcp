@@ -50,7 +50,9 @@ MUTATING_CASES = {
     ('fnv_memory', 'refcount'): {'action': 'refcount', 'pointer': '0x01000000'},
     ('fnv_events', 'subscribe'): {'subscribe': ['onhit']},
     ('fnv_events', 'unsubscribe'): {'unsubscribe': ['all']},
-    ('fnv_watch', 'frames'): {'items': ['player.x'], 'frames': 10},
+    ('fnv_watch', '*'): {'items': ['player.x'], 'seconds': 0.1},   # expressions can change the game (W1)
+    ('fnv_snapshot', '*'): {'name': 'x', 'items': [{'console': 'player.kill'}]},
+    ('fnv_diff', '*'): {'before': 'x'},
     ('fnv_systems', 'formula'): {'action': 'formula', 'name': 'x'},
     ('fnv_systems', 'sweep'): {'action': 'sweep', 'name': 'x'},
     ('fnv_leveled_roll', 'seed'): {'form': '0x00000014', 'seed': 1},
@@ -76,7 +78,6 @@ READ_CASES = {
     'fnv_crash_context': {'action': 'status'},
     'fnv_memory': {'action': 'pools'},
     'fnv_events': {},
-    'fnv_watch': {'items': ['player.x'], 'seconds': 0.1},
     'fnv_systems': {'action': 'formulas'},
     'fnv_leveled_roll': {'form': '0x00000014'},
     'fnv_session': {'action': 'status'},

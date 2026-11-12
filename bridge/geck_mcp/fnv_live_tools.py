@@ -48,7 +48,10 @@ MUTATING_ACTIONS = {
     'fnv_crash_context': {'enable', 'disable'},
     'fnv_memory': {'alloc_trace', 'refcount'},       # refcount sets hardware write watches on every thread
     'fnv_events': {'subscribe', 'unsubscribe'},
-    'fnv_watch': {'frames'},
+    # caller expressions and console lines can change the game, and the sampler closes message boxes (W1)
+    'fnv_watch': '*',
+    'fnv_snapshot': '*',
+    'fnv_diff': '*',
     'fnv_systems': {'formula', 'sweep'},
     'fnv_leveled_roll': {'seed'},
     'fnv_test_run': '*',
@@ -82,8 +85,8 @@ FNV_LIVE_TOOLS = {
     'fnv_logs': ('read', 'new lines of nvse.log, the console log, CrashLogger.log, JIP and MO2 logs, and the engine warning logs'),
     'fnv_test_run': ('control', 'run one YAML scenario test in the game and report each step'),
     'fnv_test_run_all': ('control', 'run every scenario in a folder; summary plus failure details'),
-    'fnv_snapshot': ('read', 'capture chosen game state under a name'),
-    'fnv_diff': ('read', 'compare two snapshots (or a snapshot with now)'),
+    'fnv_snapshot': ('act', 'capture chosen game state under a name'),
+    'fnv_diff': ('act', 'compare two snapshots (or a snapshot with now)'),
     # milestone 5: live inspection
     'fnv_player': ('read', 'player position, cell, health, AP, level, SPECIAL, skills, active effects'),
     'fnv_ref': ('read', 'any reference: base, position, cell, owner, lock, flags, class, extra data'),
@@ -449,14 +452,14 @@ def register(server, project, annotations, result_type, maintain=True):
         """Run every *.yaml / *.yml / *.json scenario in a folder (default: the project's fnv.tests_dir)."""
         return await invoke('fnv_test_run_all', lambda: ScenarioRunner(live).run_all(folder), 'control')
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_snapshot(name: Annotated[str, Field(min_length=1, max_length=80)],
                            items: list[Any] | None = None) -> result_type:
         """Capture chosen state under a name: 'player', or items like {eval: expr}, {item_count: form, ref: player},
         {actor_value: Health, ref: ...}, {stage: quest}, {global: name}, {variable: name, of: quest}."""
         return await invoke('fnv_snapshot', lambda: snapshot(live, items, name))
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=act)
     async def fnv_diff(before: Annotated[str, Field(min_length=1, max_length=80)],
                        after: Annotated[str, Field(max_length=80)] | None = None) -> result_type:
         """Compare two snapshots by name; without `after`, capture the same items again now and compare."""

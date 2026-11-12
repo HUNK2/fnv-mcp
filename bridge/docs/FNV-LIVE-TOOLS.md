@@ -158,7 +158,7 @@ missing. In short:
 | `fnv_companion_install` | control | Build and install the engine companion |
 | `fnv_logs` | read | New lines of nvse.log, the console log, CrashLogger.log, JIP and MO2 logs |
 | `fnv_test_run` / `fnv_test_run_all` | control | Run YAML scenarios (below) |
-| `fnv_snapshot` / `fnv_diff` | read | Capture chosen state and compare |
+| `fnv_snapshot` / `fnv_diff` | act | Capture chosen state and compare |
 | `fnv_player` `fnv_ref` `fnv_refs_near` `fnv_crosshair` | read | Player and references: base, position, cell, flags, runtime class (RTTI), extra data |
 | `fnv_actor_ai` `fnv_actor_values` `fnv_effects` | read | AI package and procedure, process level, combat, detection; actor values with their modifiers and the effects behind them; active effects with source items |
 | `fnv_quest` `fnv_vars` | read | Stage list with done flags, objectives with text and state, script variables by name |
@@ -194,7 +194,7 @@ missing. In short:
 | `fnv_ai_packages` | read | An actor's packages in order: type, flags, schedule against the game clock, location, conditions with values; which one runs, which are eligible or shadowed, and why the others are not |
 | `fnv_form_live_diff` | read | A form in memory versus its winning plugin record (name, value, weight, health, damage, script, global value, quest data): what changed at runtime |
 | `fnv_trace` | read | Calls to any proven engine function while the game runs: `this` and arguments decoded with the decomp signature (forms named), result, time, caller by name; counts by caller and `this`; filter by `this`, caller or a parameter |
-| `fnv_watch` | read | Values sampled over time (expressions, globals, actor values, positions, memory fields by class layout): first, last, min, max and a timeline of changes with frames; stops early on `until` |
+| `fnv_watch` | act | Values sampled over time (expressions, globals, actor values, positions, memory fields by class layout): first, last, min, max and a timeline of changes with frames; stops early on `until` |
 | `fnv_screenshot` | read | The current frame as PNG, returned as an image: the engine's own back-buffer capture (`SaveScreenshot`, works with the window covered), else a window capture |
 | `fnv_test_save` | act | Named test saves (`fnvmcp_test_*`) in the dev profile: save, load (waits for the game's post-load message), list, delete |
 | `fnv_crash_history` | read | Every crash log explained and grouped by signature: count, first/last time, likely culprits, new signatures flagged, crashes during exit cleanup marked |

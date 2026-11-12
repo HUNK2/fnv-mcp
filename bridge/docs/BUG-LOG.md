@@ -2285,7 +2285,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | K11 | low | open | ACT_RESULT counted as applied when the shadow stack was full | `audit3/companion.md L7` |
 | K12 | low | open | _store_pred keeps a claimed slot when pred set fails | `audit3/companion.md L8` |
 | K13 | low | open | A main-thread stop that closed the gate reopens it on release, dropping a hold sent meanwhile | `audit3/companion.md L9` |
-| W1 | high | open | Read-classed fnv_snapshot, fnv_diff and fnv_watch run caller console lines and xNVSE expressions (T1 incomplete) | `audit3/contract.md H1` |
+| W1 | high | fixed | Read-classed fnv_snapshot, fnv_diff and fnv_watch run caller console lines and xNVSE expressions (T1 incomplete) | `audit3/contract.md H1` |
 | W2 | high | fixed | resolve() evaluates any bare identifier as an xNVSE expression: fnv_ref ref=QuitGame runs QuitGame under read | `audit3/contract.md H2` |
 | W3 | medium | open | fnv_warnings capture start and fnv_window mouse/unpause change the game as 'control' without the engine_control check | `audit3/contract.md M1` |
 | W4 | medium | open | fnv_formid_live (read) pastes free text into a quoted xNVSE expression | `audit3/contract.md M2` |
@@ -2329,5 +2329,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: high
 - Found by: round-3 audit (docs/audit3/contract.md H2)
 - Fix: a bare name is looked up in the EditorID index first (form_expr of the indexed form id); it is evaluated as an expression only when the script command list is readable and the name is not a command or short name. Otherwise REF_NOT_FOUND, with no eval sent. The command list is built in one place (_commands, also used by substitute_editor_ids). Tests: tests/test_s7_round3.py BareIdentifierTests.
+- Status: fixed
+
+### W1. fnv_snapshot, fnv_diff and fnv_watch ran caller console lines and expressions as kind read
+
+- Where: geck_mcp/fnv_live_tools.py (MUTATING_ACTIONS, registrations), fnv_scenario.py (snapshot items), fnv_agent.py (watch)
+- Severity: high
+- Found by: round-3 audit (docs/audit3/contract.md H1)
+- Fix: every call of the three tools is kind act (MUTATING_ACTIONS '*', kind table, act annotation): their items are free expressions and console lines, and fnv_watch's default keep_unpaused closes message boxes. Ruling: a typed-getter-only read mode was not built (that would be a new behaviour under the freeze); cost: projects with engine_control read lose these three tools (every project here uses full). Tests: tests/test_s7_round3.py ExpressionToolsAreActTests, tests/test_stab_gate.py cases.
 - Status: fixed
 
