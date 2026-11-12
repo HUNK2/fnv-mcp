@@ -86,7 +86,9 @@ class SessionTools:
             warnings_state.update(changed=bool(change.get('changed')), restartNeeded=bool(change.get('restartNeeded')))
         try:
             # The game keeps the log files locked while it runs: engine warnings come from the live hook instead.
-            warnings_state['capture'] = bool(warnings.capture.start().get('capturing'))
+            started = warnings.capture.start()
+            warnings_state['capture'] = bool(started.get('capturing'))
+            warnings_state['captureStarted'] = bool(started.get('started'))     # this start turned it on (R12)
         except Exception as e:  # noqa: BLE001 - the session works without it; the health check says so
             warnings_state['capture'] = False
             warnings_state['captureError'] = str(e)[:200]
@@ -102,8 +104,14 @@ class SessionTools:
             mark = runner.mark()
             baseline = {'realFps': snap.get('realFps'), 'refs': _refs(self.live)}
         except Exception:
-            # No session will be open, so nothing could undo these later: take back what this start turned on.
-            if warnings_state.get('capture'):
+            # No session will be open, so nothing could undo these later: take back what this start turned on (and
+            # only that: a capture that was already running stays; R12).
+            if prepared.get('crashContext'):
+                try:
+                    _deep(self.live).crash_context('disable')
+                except Exception:  # noqa: BLE001 - best effort; the original error is what the caller needs
+                    pass
+            if warnings_state.get('captureStarted'):
                 try:
                     warnings.capture.stop()
                 except Exception:  # noqa: BLE001 - best effort; the original error is what the caller needs

@@ -73,7 +73,8 @@ class SessionTests(SessionTestCase):
         self.warnings.from_game.return_value.status.return_value = {'enabled': False}
         self.warnings.from_game.return_value.enable.return_value = {'changed': True, 'restartNeeded': True}
         out = self.tools.run('start')
-        self.assertEqual(out['warnings'], {'enabled': False, 'changed': True, 'restartNeeded': True, 'capture': True})
+        self.assertEqual(out['warnings'], {'enabled': False, 'changed': True, 'restartNeeded': True, 'capture': True,
+                                           'captureStarted': True})
         self.warnings.from_game.return_value.enable.assert_called_once()
         self.warnings.from_game.return_value.clear.assert_called()
 

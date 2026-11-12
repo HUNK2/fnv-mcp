@@ -1406,7 +1406,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | G14 | low | fixed | fnv_console runs qqq (and other quit/load lines) unguarded; the quit is then traced as not asked by the bridge | `geck_mcp/fnv_live.py:235` |
 | G15 | low | fixed | fnv_status fails with SEVERAL_GAMES while a game is exiting | `geck_mcp/fnv_game.py` |
 | G16 | low | fixed | fnv_engine_get ignores extra arguments | `geck_mcp/fnv_control.py:396-404` |
-| R12 | low | open | `fnv_session start` rollback leaves prepare's crash-context hooks on, and stops a warning capture it did not start (A11 incomplete) | `geck_mcp/fnv_session.py:77-117` |
+| R12 | low | fixed | `fnv_session start` rollback leaves prepare's crash-context hooks on, and stops a warning capture it did not start (A11 incomplete) | `geck_mcp/fnv_session.py:77-117` |
 | R13 | low | fixed | `fnv_debug thaw` with nothing on record resumes every thread of the game once (E1/E6 fix) | `geck_mcp/fnv_debugger.py thaw()` |
 | R14 | low | fixed | C2 is only partly fixed: a failed refs index build keeps the SQLite write lock (C2) | `geck_mcp/fnv_records.py:175-208` |
 | R15 | low | fixed | C3 is fixed within one process only: two server processes still collide (C3) | `geck_mcp/fnv_data.py:168-210` |
@@ -1925,7 +1925,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - If `snapshot`, `mark` or `_refs` raise, the rollback stops only the capture and the fixed step. The script hooks that `prepare` turned on stay on, with no session to end them.
   - `warnings_state['capture']` is also True when the capture was already running ("Already capturing.", `started` False), so the rollback stops the user's own earlier capture.
 - **Fix idea:** Call `crash_context('disable')` in the rollback, and stop the capture only when `start()` reported `started: True`.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: a failed session start disables the crash-context hooks prepare turned on, and stops the warning capture only when this start started it (warnings.captureStarted) (S6.18, test_stab_s6c).
 
 ### R13. `fnv_debug thaw` with nothing on record resumes every thread of the game once (E1/E6 fix)
 
