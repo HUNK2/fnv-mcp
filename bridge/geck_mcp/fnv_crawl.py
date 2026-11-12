@@ -493,25 +493,31 @@ class CrawlTools:
                 self.live.changing('crawl items')
                 had, = self.live.values(['player.GetItemCount %s' % ref])
                 had = int(had or 0)
-                added = self.live.console('player.AddItem %s 1 1' % ref)
-                row['added'] = bool(added.get('accepted'))
-                if rtype in EQUIPPABLE + USABLE:
-                    used = self.live.console('player.EquipItem %s 0 1' % ref)
-                    row['equipped' if rtype in EQUIPPABLE else 'used'] = bool(used.get('accepted'))
-                    self._settle(15)
-                    if photos and self.eyes and rtype == 'ARMO':
-                        try:
-                            row['photo'] = self.eyes.photo('ref', ref='player', size=480).get('path')
-                        except Exception as e:  # noqa: BLE001
-                            row['photo'] = 'not taken: %s' % str(e)[:80]
-                    if rtype in EQUIPPABLE:
-                        self.live.console('player.UnequipItem %s 0 1' % ref)
-                        self._rewear(worn_now)
-                count, = self.live.values(['player.GetItemCount %s' % ref])
-                row['countAfter'] = count
-                extra = int(count or 0) - had          # only the copies this test added
-                if extra > 0:
-                    self.live.console('player.RemoveItem %s %d 1' % (ref, extra))
+                try:
+                    added = self.live.console('player.AddItem %s 1 1' % ref)
+                    row['added'] = bool(added.get('accepted'))
+                    if rtype in EQUIPPABLE + USABLE:
+                        used = self.live.console('player.EquipItem %s 0 1' % ref)
+                        row['equipped' if rtype in EQUIPPABLE else 'used'] = bool(used.get('accepted'))
+                        self._settle(15)
+                        if photos and self.eyes and rtype == 'ARMO':
+                            try:
+                                row['photo'] = self.eyes.photo('ref', ref='player', size=480).get('path')
+                            except Exception as e:  # noqa: BLE001
+                                row['photo'] = 'not taken: %s' % str(e)[:80]
+                        if rtype in EQUIPPABLE:
+                            self.live.console('player.UnequipItem %s 0 1' % ref)
+                            self._rewear(worn_now)
+                finally:
+                    # the copies this test added go back even when a step above failed (R17)
+                    try:
+                        count, = self.live.values(['player.GetItemCount %s' % ref])
+                        row['countAfter'] = count
+                        extra = int(count or 0) - had
+                        if extra > 0:
+                            self.live.console('player.RemoveItem %s %d 1' % (ref, extra))
+                    except Exception as e:  # noqa: BLE001 - reported on the row; the original error stays
+                        row['cleanupError'] = str(e)[:200]
                 evts = (self.live.events(since) or {}).get('events', [])
                 row['scriptErrors'] = [e.get('text') for e in evts if e.get('type') == 'script_error'][:10]
             except Exception as e:  # noqa: BLE001 - one bad item does not stop the crawl

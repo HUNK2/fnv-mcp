@@ -1411,7 +1411,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R14 | low | fixed | C2 is only partly fixed: a failed refs index build keeps the SQLite write lock (C2) | `geck_mcp/fnv_records.py:175-208` |
 | R15 | low | fixed | C3 is fixed within one process only: two server processes still collide (C3) | `geck_mcp/fnv_data.py:168-210` |
 | R16 | low | fixed | C13 is only partly fixed: strict cp1252 decodes remain in other readers (C13) | `geck_mcp/fnv_create.py:64, 71, 745, 751, 767, 818` |
-| R17 | low | open | The F16 fix leaves its own error path open: an item that fails mid-test stays in the player's inventory (F16) | `geck_mcp/fnv_crawl.py:483-517` |
+| R17 | low | fixed | The F16 fix leaves its own error path open: an item that fails mid-test stays in the player's inventory (F16) | `geck_mcp/fnv_crawl.py:483-517` |
 | R18 | low | open | The new "terminated from outside" note in `fnv_status` is wrong with an older companion and when the bridge itself force-quit (S4 diagnosis) | `geck_mcp/fnv_game.py:305-313` |
 | R19 | low | fixed | Journal entries made with no hello on the link carry `pid: None` and can never be undone (A3 fix) | `geck_mcp/fnv_live.py:89-96` |
 | R20 | low | fixed | E6 state file: one save with a different `start` drops every other section (ProcState) | `geck_mcp/fnv_pred.py:400-421` |
@@ -1977,7 +1977,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - **Confidence:** likely.
 - **What happens:** After `player.AddItem`, an exception from EquipItem, UnequipItem or GetItemCount goes to the per-item `except`. The count-based RemoveItem never runs, so the test copy stays.
 - **Fix idea:** Wrap the AddItem to RemoveItem(count - had) step in its own try/finally.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: the crawl's AddItem..UnequipItem steps run in try/finally; the finally counts the item and removes the copies this test added even when a step failed (cleanupError on the row if that fails too) (S6.19, test_stab_s6c).
 
 ### R18. The new "terminated from outside" note in `fnv_status` is wrong with an older companion and when the bridge itself force-quit (S4 diagnosis)
 
