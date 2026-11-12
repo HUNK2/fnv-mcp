@@ -1407,7 +1407,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | G15 | low | fixed | fnv_status fails with SEVERAL_GAMES while a game is exiting | `geck_mcp/fnv_game.py` |
 | G16 | low | fixed | fnv_engine_get ignores extra arguments | `geck_mcp/fnv_control.py:396-404` |
 | R12 | low | open | `fnv_session start` rollback leaves prepare's crash-context hooks on, and stops a warning capture it did not start (A11 incomplete) | `geck_mcp/fnv_session.py:77-117` |
-| R13 | low | open | `fnv_debug thaw` with nothing on record resumes every thread of the game once (E1/E6 fix) | `geck_mcp/fnv_debugger.py thaw()` |
+| R13 | low | fixed | `fnv_debug thaw` with nothing on record resumes every thread of the game once (E1/E6 fix) | `geck_mcp/fnv_debugger.py thaw()` |
 | R14 | low | fixed | C2 is only partly fixed: a failed refs index build keeps the SQLite write lock (C2) | `geck_mcp/fnv_records.py:175-208` |
 | R15 | low | fixed | C3 is fixed within one process only: two server processes still collide (C3) | `geck_mcp/fnv_data.py:168-210` |
 | R16 | low | open | C13 is only partly fixed: strict cp1252 decodes remain in other readers (C13) | `geck_mcp/fnv_create.py:64, 71, 745, 751, 767, 818` |
@@ -1932,7 +1932,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - The companion's own `probe_suspend` is one case. It now runs for every hook, unhook and code patch (`code_write_frozen`, B2 fix) and every coverage arm, so a thread could be released while code is half written.
   - The comment "a thread that was not suspended is unaffected" holds only for threads with suspend count 0.
 - **Fix idea:** Force-resume only when the game is actually stalled (for example every thread suspended, or no frame advance), and only threads whose suspend count is at least 1 and that `suspend_all` would have frozen (skip the companion's pipe thread). Or require an explicit `force=true`.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: thaw with nothing on record reads the engine frame counter twice from outside; frames advancing -> 'Nothing is frozen', no thread resumed; stalled -> only the threads suspend_all freezes (not the companion's pipe thread) are resumed (S6.3, test_stab_s6a).
 
 ### R14. C2 is only partly fixed: a failed refs index build keeps the SQLite write lock (C2)
 

@@ -1405,14 +1405,28 @@ class Debugger:
             if was:
                 done = proc.resume_all(was)
             else:
-                # Nothing on record (a freeze from before a restart with no state file, or another tool): resume every
-                # thread once. ResumeThread on a thread that is not suspended does nothing.
-                done = proc.resume_all(proc.threads())
+                # Nothing on record (a freeze from before a restart with no state file, or another tool). Resuming
+                # every thread would also release threads the game, a plugin or the companion holds suspended (its
+                # code writes suspend the game's threads): only a game whose frames stand still is thawed, and only
+                # the threads suspend_all freezes (not the companion's pipe thread) (R13).
+                if not self._frames_stalled(proc):
+                    return verdict('Nothing is frozen.', "Nothing was on record as frozen and the game's frames advance, "
+                                   'so no thread was resumed.', resumed=[], state='running', forced=False)
+                keep = {t for t in (self._pipe_thread(),) if t}
+                done = proc.resume_all([t for t in proc.threads() if t not in keep])
         self.frozen = []
         self._persist()
         return verdict('Thawed %d threads.' % len(done), 'The game runs again.' if was else
-                       'Nothing was on record as frozen: every thread of the game was resumed once (a thread that was not '
-                       'suspended is unaffected).', resumed=done, state='running', forced=not was)
+                       'Nothing was on record as frozen and the frames stood still: each thread suspend_all would '
+                       'freeze was resumed once.', resumed=done, state='running', forced=not was)
+
+    def _frames_stalled(self, proc, window=0.5):
+        """Does the engine's frame counter stand still over `window` seconds (read from outside the game)?"""
+        from .fnv_time import FRAME_COUNTER
+        first = proc.read(FRAME_COUNTER, 4)
+        self.sleep(window)
+        second = proc.read(FRAME_COUNTER, 4)
+        return first is not None and first == second
 
     def threads(self):
         stops = {}

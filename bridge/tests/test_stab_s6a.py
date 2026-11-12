@@ -165,5 +165,63 @@ class StepInterruptedTests(unittest.TestCase):
         self.assertIsNone(out.get('pendingTo'))
 
 
+class ThawTests(unittest.TestCase):
+    """R13: thaw with nothing on record resumed every thread of the game once."""
+
+    def setUp(self):
+        import struct as _struct
+        from unittest import mock
+        from test_fnv_debug import DebugTestBase
+        from geck_mcp import fnv_procmem
+        base = DebugTestBase('setUp')
+        base.setUp()
+        self.addCleanup(base.doCleanups)
+        self.dbg = base.dbg
+        self.dbg.link.hello = {'pipeThread': 30}
+        test = self
+        self.frames = [100, 160]            # two reads of the engine frame counter
+        self.resumed = []
+
+        class Proc:
+            def __init__(self, pid):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def threads(self):
+                return [10, 20, 30]
+
+            def read(self, address, length):
+                return _struct.pack('<I', test.frames.pop(0) if len(test.frames) > 1 else test.frames[0])
+
+            def resume_all(self, tids):
+                test.resumed.extend(tids)
+                return list(tids)
+        patcher = mock.patch.object(fnv_procmem, 'GameProcess', Proc)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_thaw_without_record_is_noop_when_running(self):
+        out = self.dbg.thaw()
+        self.assertEqual(self.resumed, [])
+        self.assertIn('nothing', out['verdict'].lower())
+        self.assertFalse(out['forced'])
+
+    def test_thaw_without_record_resumes_only_freezable_threads_when_stalled(self):
+        self.frames = [100, 100]
+        out = self.dbg.thaw()
+        self.assertEqual(sorted(self.resumed), [10, 20], 'the companion pipe thread is never resumed')
+        self.assertTrue(out['forced'])
+
+    def test_thaw_with_record_resumes_those(self):
+        self.dbg.frozen = [10, 20]
+        self.dbg.thaw()
+        self.assertEqual(sorted(self.resumed), [10, 20])
+
+
 if __name__ == '__main__':
     unittest.main()
