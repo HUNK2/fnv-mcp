@@ -272,5 +272,51 @@ class QuotedNameTests(unittest.TestCase):
                 quoted(bad)
 
 
+class AssetPathTests(unittest.TestCase):
+    """X2: fnv_asset_check's folder check was lexical (Data\\..\\.. escaped it) and ran after is_file()."""
+
+    def tools(self, root):
+        from geck_mcp import fnv_records
+        from geck_mcp.fnv_records import RecordsTools
+        game_root = root / 'game'
+        (game_root / 'Data').mkdir(parents=True)
+        fnv = SimpleNamespace(mo2_root=root / 'mo2', mo2_profile='Dev')
+        data = SimpleNamespace(project=SimpleNamespace(game_root=game_root, fnv=fnv, state_dir=None),
+                               _live_plugins=lambda: None)
+        tools = RecordsTools(data)
+        tools._asset_index = lambda entries: (SimpleNamespace(find=lambda rel: None, archives=[]), [])
+        saved = fnv_records.load_order, fnv_records._plugin_assets
+        fnv_records.load_order = lambda project, live=None: []
+        fnv_records._plugin_assets = lambda path: {}
+        self.addCleanup(lambda: setattr(fnv_records, 'load_order', saved[0]))
+        self.addCleanup(lambda: setattr(fnv_records, '_plugin_assets', saved[1]))
+        return tools, game_root
+
+    def test_dotdot_out_of_data_is_refused(self):
+        from geck_mcp.fnv_data import DataError
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools, game_root = self.tools(root)
+            outside = root / 'other.esp'
+            outside.write_bytes(b'x')
+            with self.assertRaises(DataError) as caught:
+                tools.asset_check(str(game_root / 'Data' / '..' / '..' / 'other.esp'))
+            self.assertEqual(caught.exception.code, 'BAD_PATH')
+
+    def test_a_missing_file_outside_is_bad_path_not_not_found(self):
+        from geck_mcp.fnv_data import DataError
+        with tempfile.TemporaryDirectory() as tmp:
+            tools, _ = self.tools(Path(tmp))
+            with self.assertRaises(DataError) as caught:
+                tools.asset_check(str(Path(tmp) / 'nowhere' / 'x.esp'))
+            self.assertEqual(caught.exception.code, 'BAD_PATH')
+
+    def test_a_file_in_data_is_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tools, game_root = self.tools(Path(tmp))
+            (game_root / 'Data' / 'Mine.esp').write_bytes(b'x')
+            self.assertEqual(tools.asset_check(str(game_root / 'Data' / 'Mine.esp'))['plugin'], 'Mine.esp')
+
+
 if __name__ == '__main__':
     unittest.main()

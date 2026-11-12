@@ -11,6 +11,7 @@ table refs), built per plugin file once and rebuilt when the file changes. A fie
 when the game reads it as one (known form fields, condition parameters, leveled list and container entries) or,
 for other small fields, when its value names a record that exists in the plugin's masters or itself.
 """
+import os
 import json
 import shutil
 import struct
@@ -390,9 +391,8 @@ class RecordsTools:
         target = next((e for e in entries if e['name'].lower() == plugin.lower()), None)
         if target is None:
             path = Path(plugin)
-            if not path.is_file():
-                raise DataError('PLUGIN_NOT_FOUND', '%s is neither in the load order nor a file' % plugin)
-            # a file outside the load order: only under the game Data folder or the dev profile's mods (T7)
+            # a file outside the load order: only under the game Data folder or the dev profile's mods (T7); checked
+            # before the file is looked at, so a refusal does not tell whether a path exists (X2)
             allowed = [Path(project.game_root) / 'Data']
             if getattr(project, 'state_dir', None):     # geck_plugin_build's output, before install (S6 review C I3)
                 from .authoring import default_build_dir
@@ -400,12 +400,16 @@ class RecordsTools:
             fnv = getattr(project, 'fnv', None)
             if fnv is not None and getattr(fnv, 'mo2_root', None):
                 allowed.append(Path(fnv.mo2_root) / 'mods')
-            spots = {path.absolute(), path.resolve()}    # a symlinked mod folder counts by where it is linked
-            if not any(spot.is_relative_to(root.absolute()) or spot.is_relative_to(root.resolve())
+            # The path with `..` collapsed (a symlinked mod folder counts by where it sits) or fully resolved; never
+            # the raw absolute path, whose parts still start with Data when it climbs out with `..` (X2).
+            spots = {Path(os.path.normpath(path.absolute())), path.resolve()}
+            if not any(spot.is_relative_to(Path(os.path.normpath(root.absolute()))) or spot.is_relative_to(root.resolve())
                        for spot in spots for root in allowed):
                 raise DataError('BAD_PATH', '%s is outside the game Data folder and the dev profile\'s mods. Next: '
                                 'install the plugin (fnv_install) or name a plugin of the load order.' % plugin,
                                 {'allowed': [str(r) for r in allowed]})
+            if not path.is_file():
+                raise DataError('PLUGIN_NOT_FOUND', '%s is neither in the load order nor a file' % plugin)
             target = {'name': path.name, 'path': str(path), 'mod': None}
         if not target.get('path'):
             raise DataError('PLUGIN_NOT_FOUND', '%s: file not found' % plugin)
