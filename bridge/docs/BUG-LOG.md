@@ -2294,7 +2294,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | W7 | low | open | fnv_run_script's quit guard is bypassed by (QuitGame) or a multi-line source | `audit3/contract.md L3` |
 | W8 | low | open | fnv_crawl cells moves the player with an unjournaled cow | `audit3/contract.md L4` |
 | W9 | low | open | fnv_snapshot items has no length cap; console items uncapped | `audit3/contract.md L5` |
-| X1 | high | open | fnv_name_export writes to any path the call names, under a read-only annotation | `audit3/parsers.md H1` |
+| X1 | high | fixed | fnv_name_export writes to any path the call names, under a read-only annotation | `audit3/parsers.md H1` |
 | X2 | medium | open | fnv_asset_check's folder check is lexical: Data\..\.. escapes it (T7 incomplete) | `audit3/parsers.md M1` |
 | X3 | medium | open | The record index keeps rows of a plugin path that left the load order; lookups serve them | `audit3/parsers.md M2` |
 | X4 | low | open | records.text accepts U+0080..U+009F and writes other characters | `audit3/parsers.md L1` |
@@ -2313,5 +2313,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: medium
 - Found by: the S7 gate's CI check: every fnv-mcp push failed on macOS (ModuleNotFoundError: msvcrt via fnv_procmem, imported by nearly every fnv module and so by server.py), and fail-fast cancelled the Windows job.
 - Fix: the Windows bindings are made only when msvcrt imports (else None; the fnv tools still need Windows to run); fnv_state picks msvcrt locking or flock by the same rule. The CI matrix no longer fails fast. Test: tests/test_posix_import.py imports every geck_mcp module with msvcrt and ctypes.WinDLL/windll hidden.
+- Status: fixed
+
+### X1. fnv_name_export wrote to any path the call named, under a read-only annotation
+
+- Where: geck_mcp/fnv_naming.py (export), fnv_live_tools.py (registration)
+- Severity: high
+- Found by: round-3 audit (docs/audit3/parsers.md H1)
+- Fix: a given path must resolve to a .json file under fnvsym/traces or the project's state folder (else BAD_PATH), checked before any work; the tool is kind control (it writes a file), so it no longer carries readOnlyHint. Tests: tests/test_s7_round3.py NameExportPathTests.
 - Status: fixed
 

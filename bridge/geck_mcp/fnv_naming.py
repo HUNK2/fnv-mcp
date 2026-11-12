@@ -445,10 +445,26 @@ class NamingTools:
             db.close()
         return {'counts': counts, 'callers': callers, 'samples': samples, 'fits': fits, 'idle': seconds}
 
+    def _export_path(self, path):
+        """Where the trace goes: a .json under fnvsym/traces or the project's state folder, checked on the resolved
+        path (X1: any path was written, under a read-only annotation)."""
+        if not path:
+            return FNVSYM / 'traces' / ('fnvmcp-%s.json' % time.strftime('%Y%m%d'))
+        target = Path(path).resolve()
+        roots = [(FNVSYM / 'traces').resolve()]
+        state = getattr(self.live.project, 'state_dir', None)
+        if state:
+            roots.append(Path(state).resolve())
+        if target.suffix.lower() != '.json' or not any(target.is_relative_to(root) for root in roots):
+            raise ProbeError('BAD_PATH', 'the trace goes to a .json file under %s; got %s'
+                             % (' or '.join(str(r) for r in roots), path))
+        return target
+
     def export(self, path=None, max_callers=8):
         """Write everything recorded at runtime as fnvsym-trace/2 (a superset of fnvsym's Frida trace): per function
         the calls, the atlas fits, resolved callers, `this` classes, the result's shape, oracle matches, experiment
         verdicts and field watches, with the calibration of each method."""
+        path = self._export_path(path)       # checked before any work (X1)
         engine = self.live.engine()
         image = self.live.deep._image(required=False)
         db = self.db()
@@ -544,7 +560,6 @@ class NamingTools:
         if not functions:      # nothing recorded: no empty trace file in the decomp tree (T3)
             return {'changed': False, 'exported': 0, 'path': None, 'functions': 0,
                     'note': 'Nothing to export: no harvested calls, oracle results, experiments or field watches yet.'}
-        path = Path(path) if path else FNVSYM / 'traces' / ('fnvmcp-%s.json' % time.strftime('%Y%m%d'))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(out, indent=1, default=str), encoding='utf-8')
         return {'changed': True, 'exported': len(functions), 'path': str(path), 'functions': len(functions),

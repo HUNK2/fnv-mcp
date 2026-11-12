@@ -183,7 +183,7 @@ FNV_LIVE_TOOLS = {
     'fnv_name_dossier': ('read', "one function's full case for naming: static facts, fnvsym claims, runtime callers (virtual slots resolved), this/result profile, actions, suggested tests"),
     'fnv_name_oracle': ('act', 'does a function compute a value the game already knows (script commands, form headers) on the same objects; blind calibration'),
     'fnv_name_test': ('act', 'experiments: skip or force a function during an action, with a control; blind battery re-identification'),
-    'fnv_name_export': ('read', 'write the runtime evidence as fnvsym-trace/2 into fnvsym/traces for the runtime2 evidence pass, with the calibration of each method'),
+    'fnv_name_export': ('control', 'write the runtime evidence as fnvsym-trace/2 into fnvsym/traces for the runtime2 evidence pass, with the calibration of each method'),
     'fnv_field_watch': ('act', 'hardware watchpoints: which functions write or read one field of a live object, with the values; find the field an action changes'),
     # Plan 2 wave 0
     'fnv_warnings': ('control', "the engine's own warnings (missing assets, wrong form types, script problems) from xNVSE's error log: status, enable (changes xNVSE's config file), read, summary, clear"),
@@ -1444,12 +1444,13 @@ def register(server, project, annotations, result_type, maintain=True):
             return experiments.test(hypothesis)
         return await invoke('fnv_name_test', action_fn, 'read', action=action)
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=control)     # writes a file (X1)
     async def fnv_name_export(path: Annotated[str, Field(max_length=500)] | None = None) -> result_type:
         """Write everything the naming tools recorded (harvested probe sets, atlas fits, resolved callers, this classes,
         result shapes, oracle matches, experiment verdicts, field watches) as fnvsym-trace/2 into fnvsym/traces, with the
         measured accuracy of each method (PROOF 4.1). fnvsym's `python -m namer.runtime2` turns it into evidence.
-        With nothing recorded yet it writes no file (changed: false, exported: 0)."""
+        With nothing recorded yet it writes no file (changed: false, exported: 0). path: a .json file under
+        fnvsym/traces or the project's state folder (else BAD_PATH)."""
         return await invoke('fnv_name_export', lambda: naming.export(path))
 
     @server.tool(annotations=act)
