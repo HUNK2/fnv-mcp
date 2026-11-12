@@ -58,7 +58,7 @@ static volatile LONG crash_expected;
 /* Race workers (PLAN-3 S1.1): "race <threads> <iters>" starts threads that wait for race_go, then each calls
  * bp_target <iters> times (every call returns 12). The test sets race_go (and the seam) in this process's memory,
  * so it works while the main thread is parked in a seam. */
-static volatile LONG race_go, race_started, race_done, race_bad;
+static volatile LONG race_go, race_started, race_done, race_bad, race_yield;
 static void __attribute__((thiscall)) fake_force(void *self, int control) {
     (void)self;
     force_count++;
@@ -264,8 +264,10 @@ static DWORD WINAPI race_worker(LPVOID arg) {
     int iters = (int)(intptr_t)arg;
     InterlockedIncrement(&race_started);
     while (!race_go) SwitchToThread();
-    for (int i = 0; i < iters; i++)
+    for (int i = 0; i < iters; i++) {
         if (call_bp_target(i) != 12) InterlockedIncrement(&race_bad);
+        if (race_yield) SwitchToThread(); /* leaves gaps in which the prologue is free for a hook or unhook */
+    }
     InterlockedIncrement(&race_done);
     return 0;
 }
@@ -331,8 +333,10 @@ static bool run_line(const char *line, void *ref) {
         return true;
     }
     if (!strncmp(line, "race ", 5)) {
-        int threads = 0, iters = 0;
-        if (sscanf(line + 5, "%d %d", &threads, &iters) != 2 || threads < 1 || threads > 64 || iters < 1) return false;
+        int threads = 0, iters = 0, yield = 0; /* race <threads> <iters> [1: yield between calls] */
+        if (sscanf(line + 5, "%d %d %d", &threads, &iters, &yield) < 2 || threads < 1 || threads > 64 || iters < 1)
+            return false;
+        race_yield = yield;
         race_go = 0;
         race_started = race_done = race_bad = 0;
         for (int i = 0; i < threads; i++) {

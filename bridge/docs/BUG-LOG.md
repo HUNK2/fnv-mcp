@@ -1369,7 +1369,7 @@ A second hunt the same day, after the fix pass was committed (133ed0e). Nothing 
 
 The parser sweep ran 16 plugins (about 630,000 records), the record index (866,000 references), 3,719 scripts, 58 saves (1.4 million change forms), 21 BSAs and the engine map; everything not listed here checked clean. Findings that did not hold up when checked were dropped (fnv_window persist writes the dev profile's Fallout.ini, as designed, with a backup; fnv_hook_set is gated). R entries that name an earlier ID are fixes from the first pass that are incomplete or wrong.
 
-Totals: 66 bugs, 5 high, 19 medium, 42 low. N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
+Totals: 67 bugs, 6 high, 19 medium, 42 low (N13 found by the S4.3 race tests). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
 
 Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m unittest discover -s tests` from `bridge`, ran 1,011 tests: all passed, 4 skipped, 0 failures. That includes the 54 engine companion tests, which now find Zig from the project files instead of being skipped without `GECK_MCP_ZIG`. Before S0 the same run with `GECK_MCP_ZIG` set was 1,002 tests, 4 skipped. No C test failed, so no N13.
 
@@ -1441,6 +1441,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | N10 | medium | open | 8 tool families journal after the change, so a failure leaves an unjournaled change | `fnv_live.py, fnv_code.py, fnv_probe.py, fnv_watch.py, fnv_create.py, fnv_world.py, fnv_eyes.py (see details)` |
 | N11 | low | open | The game's identity is chosen six different ways, and `tasklist` runs on every `game.process()` call | `geck_mcp/fnv_game.py:~33-52; fnv_code.py:89 and four other pickers` |
 | N12 | low | open | Nothing under `state/fnv` is pruned, and none of it has a cross-process lock | `state/fnv/*` |
+| N13 | high | fixed | Two threads passing one int3 breakpoint at once crash the game (access violation in the trap handler) | `native/engine/w2_bp.c:84 byte_set` |
 
 ## Round 2: High
 
@@ -1511,6 +1512,16 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Fix idea: gate kind in ('act','control') for mutating actions, or reclassify these tools as 'act'; set annotations to non-read for hook-installing tools.
 - Checked: fnv_hook_set is not affected (its changing actions are invoked as act). The hook-installing actions of fnv_probe, fnv_atlas, fnv_name_oracle, fnv_name_test and fnv_field_watch are invoked as 'control', and fnv_hooks remove as 'read'; LiveService.run gates only kind == 'act' (fnv_live.py:167).
 - Status: fixed (S1.5). `fnv_live_tools.MUTATING_ACTIONS` lists every tool and action that changes the game or leaves something installed (decision D2); `invoke()` derives the kind from it (`gated_kind`), so a call site cannot pass a weaker kind, and a listed tool that passes no action counts as changing. 13 tools moved from read to act annotations; the scenario runners (fnv_test_run, fnv_do, fnv_session, fnv_crawl, fnv_bisect, fnv_replay) are gated too. Tests: `tests/test_stab_gate.py` (44 mutating actions refused under engine_control read with no pipe op; their reads still allowed).
+
+### N13. Two threads passing one int3 breakpoint at once crash the game
+
+- Where: native/engine/w2_bp.c:84 (`byte_set`), called from the trap handlers (`bp_pass` restores the original byte, the single-step handler puts the 0xCC back).
+- Severity: high (an int3 breakpoint on a function several game threads call, Actor::GetLevel for one, can crash the game)
+- Confidence: confirmed (reproduced under the fake host: 3 of 6 runs died with 0xC0000005, with or without a seam)
+- What happens: `byte_set` did VirtualProtect, a store and VirtualProtect back. When two threads pass the same site, one restoring the original byte and the other reinstalling the 0xCC, one can put the page protection back between the other's VirtualProtect and its store: the store faults inside the trap handler and the process dies. The S1 review had flagged the pattern as minor (M1).
+- Fix: `byte_set` writes through WriteProcessMemory (it changes the protection itself and fails instead of faulting), retried briefly; the same approach as the R1 coverage restore.
+- Test: `tests/test_engine_races.py::BreakHookRaceTests::test_bp_two_threads_same_int3` (seam 3 between the passed trap and the stop registration); 0 crashes in 12 repeated runs after the fix.
+- Status: fixed (S4.3); live check with the S4 batch.
 
 ## Round 2: Medium
 

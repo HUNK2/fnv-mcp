@@ -81,12 +81,17 @@ static ThreadBp *tb_get(DWORD tid) {
 }
 static bool tr_on(DWORD tid) { return tr.active && tr.tid == tid; }
 
+/* One code byte, from the trap handlers too. Two threads passing the same site at once (one restoring the original
+ * byte, the other putting the 0xCC back) used to fault (N13): VirtualProtect + store races with the other thread
+ * putting the page protection back between them. WriteProcessMemory changes the protection itself and fails instead
+ * of faulting; it is retried briefly. */
 static void byte_set(uint32_t addr, unsigned char value) {
     unsigned char *p = (unsigned char *)(uintptr_t)addr;
-    DWORD old;
-    if (!VirtualProtect(p, 1, PAGE_EXECUTE_READWRITE, &old)) return;
-    *p = value;
-    VirtualProtect(p, 1, old, &old);
+    for (int tries = 0; tries < 64 && *p != value; tries++) {
+        SIZE_T done = 0;
+        if (WriteProcessMemory(GetCurrentProcess(), p, &value, 1, &done) && done == 1) break;
+        SwitchToThread();
+    }
     FlushInstructionCache(GetCurrentProcess(), p, 1);
 }
 static bool isite_live(uint32_t addr) {
@@ -373,6 +378,7 @@ static void bp_hit(CONTEXT *c, EXCEPTION_RECORD *rec, int site, DWORD tid) {
         return;
     }
     if (tr_on(tid) || in_served_call() || exiting) return;
+    SEAM(3); /* tests: the trap is passed, the stop not registered yet */
     bp_park(c, rec, STOP_BP, id, tid);
 }
 /* A debug-register hit of breakpoint id. The resume flag is set in every case, so the instruction does not trap again. */

@@ -66,8 +66,8 @@ class CoverageRaceTests(StopTestCase):
     def read32(self, key):
         return int.from_bytes(bytes.fromhex(self.host.link.one('rd', hexint(self.t[key]), '4')['hex']), 'little')
 
-    def start_race(self, threads, iters):
-        self.host.link.schedule(0, 'race %d %d' % (threads, iters))
+    def start_race(self, threads, iters, yield_between=False):
+        self.host.link.schedule(0, 'race %d %d %d' % (threads, iters, 1 if yield_between else 0))
         end = time.time() + 5
         while self.read32('raceStarted') < threads and time.time() < end:
             time.sleep(0.01)
@@ -205,6 +205,99 @@ class CoverageRaceTests(StopTestCase):
         self.assertEqual(self.hits(), 1)
         self.assertEqual(link.one('cov', 'add', lower.to_bytes(4, 'little').hex())['added'], 1)
         self.assertTrue(link.one('cov', 'reset').get('ok'))
+
+
+@needs_zig
+class BreakHookRaceTests(StopTestCase):
+    """S4.3: breakpoints, hooks and coverage under several threads (seam build)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.receipt = build(cls.tmp.name, defines=SEAM)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        self.host = StopHost(self.receipt, Path(self.receipt['dll']).parent, self.tmp.name, 120)
+        self.addCleanup(self.host.close)
+        self.t = self.host.t
+        self.original = self.host.link.one('rd', hexint(self.t['bpTarget']), '6')['hex']
+
+    read32 = CoverageRaceTests.read32
+    start_race = CoverageRaceTests.start_race
+    wait_done = CoverageRaceTests.wait_done
+    release_seam = CoverageRaceTests.release_seam
+
+    def alive(self):
+        return 'the host died (exit 0x%08X)' % ((self.host.process.poll() or 0) & 0xFFFFFFFF)
+
+    def test_bp_two_threads_same_int3(self):
+        link = self.host.link
+        self.assertTrue(link.one('bp', 'set', hexint(1), hexint(self.t['bpTarget']), 'int3', 'ff', '0').get('ok'))
+        poke(self.host.process, self.t['seam'], 3)        # the first thread parks after the trap, before its stop
+        self.start_race(2, 1)
+        poke(self.host.process, self.t['raceGo'], 1)
+        time.sleep(0.5)                                   # the second thread traps on the same int3 meanwhile
+        self.release_seam()
+        stops = self.wait_stops(2)
+        self.assertIsNone(self.host.process.poll(), self.alive())
+        self.assertEqual(len([s for s in stops if s.get('kind') == 'bp']), 2, stops)
+        self.assertEqual(link.one('bp', 'clear', hexint(1)).get('cleared'), 1)
+        link.one('resume', 'ff', 'run')
+        self.wait_done(2)
+        self.assertEqual(self.read32('raceDone'), 2)
+        self.assertEqual(self.read32('raceBad'), 0)
+        self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
+
+    def test_hook_from_8_threads_during_unhook(self):
+        link = self.host.link
+        args = (hexint(self.t['bpTarget']), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0), hexint(1),
+                '0', '0', hexint(0), hexint(0), fnv_link.hexs('race'))
+        self.start_race(8, 200000, yield_between=True)
+        poke(self.host.process, self.t['raceGo'], 1)
+        cycles = busy = 0
+        while cycles < 200 and self.host.process.poll() is None:
+            hook = link.one('hook', *args)
+            if not hook.get('ok'):
+                busy += hook.get('error') == 'busy'      # a worker stood inside the prologue: refused, not patched
+                continue
+            cycles += 1
+            removed = link.one('unhook', hexint(hook['hook']['id']))
+            self.assertTrue(removed.get('ok') or removed.get('error') == 'busy', removed)
+            if not removed.get('ok'):                     # retry until the prologue is free
+                for _ in range(100):
+                    if link.one('unhook', hexint(hook['hook']['id'])).get('ok'):
+                        break
+        self.wait_done(8, timeout=120)
+        self.assertIsNone(self.host.process.poll(), self.alive())
+        self.assertEqual(self.read32('raceDone'), 8)
+        self.assertEqual(self.read32('raceBad'), 0)
+        self.assertGreater(cycles, 0)
+        self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
+
+    def test_stress_cov_arm_cycle(self):
+        link = self.host.link
+        sites = b''.join(self.t[k].to_bytes(4, 'little') for k in ('bpTarget', 'bpCall', 'bpAfter', 'bpRet')).hex()
+        self.start_race(8, 1000000)
+        poke(self.host.process, self.t['raceGo'], 1)
+        end = time.monotonic() + 2.0
+        cycles = 0
+        while cycles < 200 and self.host.process.poll() is None:
+            self.assertTrue(link.one('cov', 'disarm').get('ok'))
+            reset = link.one('cov', 'reset')
+            if reset.get('ok'):
+                link.one('cov', 'add', sites)
+            self.assertTrue(link.one('cov', 'arm').get('ok'))
+            cycles += 1
+            if time.monotonic() > end and cycles >= 50:
+                break
+        self.assertIsNone(self.host.process.poll(), self.alive())
+        link.one('cov', 'disarm')
+        self.assertEqual(self.read32('raceBad'), 0)
+        self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
 
 
 if __name__ == '__main__':
