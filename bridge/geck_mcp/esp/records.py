@@ -11,7 +11,9 @@ import struct
 
 from .codec import Record, Subrecord, zstring
 
-EDID_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,127}$')
+EDID_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,127}\Z')     # \Z: `$` also matches before a trailing newline (P9)
+# Windows device names: a file named so (any extension) opens the device, not a file (P9).
+DEVICE_NAMES = {'con', 'prn', 'aux', 'nul'} | {'com%d' % i for i in range(1, 10)} | {'lpt%d' % i for i in range(1, 10)}
 HEDR_VERSION = 1.34                  # FNV plugin format version, as GECK writes it
 BRUS_NONE = 0xFF                     # STAT passthrough sound: none
 FLT_MAX = struct.unpack('<f', b'\xff\xff\x7f\x7f')[0]  # XCLW "no water"
@@ -53,6 +55,8 @@ def check_edid(edid, where):
 def text(value, where, max_len=512):
     if not isinstance(value, str):
         raise SpecError(where, 'expected text')
+    if '\0' in value:      # a NUL would end the string in the plugin (P9)
+        raise SpecError(where, 'text must not contain a NUL character')
     try:
         encoded = zstring(value)
     except UnicodeEncodeError:
@@ -70,6 +74,10 @@ def model_path(value, where):
     if (path.startswith('\\') or ':' in path or '..' in parts or
             parts[0].lower() == 'meshes' or not path.lower().endswith('.nif')):
         raise SpecError(where, 'model must be a .nif path relative to Data\\meshes (got %r)' % value)
+    if any(ord(c) < 32 for c in path) or any(c in '*?"<>|' for c in path) or \
+            any(part.split('.', 1)[0].strip().lower() in DEVICE_NAMES for part in parts):
+        raise SpecError(where, 'model path has a control character, one of *?"<>| or a device name (got %r)'
+                        % value)
     return text(path, where, 260)
 
 

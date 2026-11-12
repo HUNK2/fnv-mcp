@@ -377,5 +377,37 @@ class LintVanillaTests(unittest.TestCase):
                          [])
 
 
+class SpecCheckTests(unittest.TestCase):
+    """P9: `$` matched before a trailing newline; model_path and text() took control characters."""
+
+    def test_edid_trailing_newline_refused(self):
+        from geck_mcp.esp import records
+        with self.assertRaises(records.SpecError):
+            records.check_edid('Thing\n', 'records.Thing')
+        records.check_edid('Thing', 'records.Thing')
+
+    def test_spec_names_with_trailing_newline_refused(self):
+        from geck_mcp.esp import build, records
+        base = {'schema': build.SCHEMA, 'project_id': 'p', 'plugin': 'x.esp', 'masters': ['FalloutNV.esm']}
+        for field, value in (('plugin', 'x.esp\n'), ('project_id', 'p\n')):
+            with self.assertRaises(records.SpecError, msg=field):
+                build.check_spec(dict(base, **{field: value}))
+        self.assertTrue(build.REF_ID_RE.match('ref1'))
+        self.assertIsNone(build.REF_ID_RE.match('ref1\n'))
+
+    def test_model_path_refuses_control_and_device_names(self):
+        from geck_mcp.esp import records
+        for bad in ('a\0.nif', 'a\n.nif', 'a\t.nif', 'a*.nif', 'con.nif', 'dir\\NUL.nif', 'x?.nif'):
+            with self.assertRaises(records.SpecError, msg=repr(bad)):
+                records.model_path(bad, 'records.X.model')
+        records.model_path('clutter\\cup.nif', 'records.X.model')
+
+    def test_text_refuses_nul(self):
+        from geck_mcp.esp import records
+        with self.assertRaises(records.SpecError):
+            records.text('a\0b', 'records.X.name')
+        records.text('two\nlines', 'records.X.name')
+
+
 if __name__ == '__main__':
     unittest.main()

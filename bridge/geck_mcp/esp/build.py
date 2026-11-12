@@ -35,7 +35,7 @@ TOP_ORDER = ['GMST', 'TXST', 'MICN', 'GLOB', 'CLAS', 'FACT', 'HDPT', 'HAIR', 'EY
              'ARMA', 'ECZN', 'MESG', 'RGDL', 'DOBJ', 'LGTM', 'MUSC', 'IMOD', 'REPU', 'RCPE', 'RCCT',
              'CHIP', 'CSNO', 'LSCT', 'MSET', 'ALOC', 'CHAL', 'AMEF', 'CCRD', 'CMNY', 'CDCK', 'DEHY',
              'HUNG', 'SLPD']
-REF_ID_RE = re.compile(r'^[A-Za-z0-9_.-]{1,64}$')
+REF_ID_RE = re.compile(r'^[A-Za-z0-9_.-]{1,64}\Z')
 TOP_KEYS = {'schema', 'project_id', 'plugin', 'author', 'description', 'masters', 'records',
             'cells', 'release'}
 
@@ -56,10 +56,10 @@ def check_spec(spec):
         raise SpecError('spec', 'unknown top-level field(s): %s' % ', '.join(sorted(unknown)))
     if spec.get('schema') != SCHEMA:
         raise SpecError('schema', 'must be %d' % SCHEMA)
-    if not isinstance(spec.get('project_id'), str) or not re.match(r'^[a-z0-9][a-z0-9_-]{0,63}$', spec['project_id']):
+    if not isinstance(spec.get('project_id'), str) or not re.match(r'^[a-z0-9][a-z0-9_-]{0,63}\Z', spec['project_id']):
         raise SpecError('project_id', 'lowercase letters, digits, - and _ only')
     plugin = spec.get('plugin')
-    if not isinstance(plugin, str) or not re.match(r'^[A-Za-z0-9 _.-]{1,60}\.esp$', plugin):
+    if not isinstance(plugin, str) or not re.match(r'^[A-Za-z0-9 _.-]{1,60}\.esp\Z', plugin):
         raise SpecError('plugin', 'must be a simple .esp filename')
     masters = spec.get('masters')
     if not isinstance(masters, list) or not masters or len(set(m.lower() for m in masters)) != len(masters):

@@ -1427,7 +1427,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | P6 | low | fixed | `_form` off-by-one | `fnv_data.py:430 high >= len(own) + 1` |
 | P7 | low | fixed | Index and lookup gaps | `fnv_data.py SKIP_EDID` |
 | P8 | low | fixed | Lint false positives on vanilla scripts | `fnv_data.py _split_args` |
-| P9 | low | open | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
+| P9 | low | fixed | Spec validation regexes accept a trailing newline | `esp/records.py:14 EDID_RE` |
 | P10 | low | open | Save parser: FLT_MAX rotation sentinel passed through | `fnv_save.py ACHR/ACRE initial block decode` |
 | N1 | medium | fixed | An unknown undo op is marked undone without running | `geck_mcp/fnv_live.py:1347-1382` |
 | N2 | medium | fixed | A console undo is marked undone even when the game rejected the line | `geck_mcp/fnv_live.py:1356-1357, 1380-1381` |
@@ -2144,7 +2144,8 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - Confidence: confirmed
 - What happens: `'x.esp\n'` passes check_spec; pydantic `config.Record` correctly rejects it. model_path accepts NUL, newline, `*`, tab and `con.nif`; `text()` accepts an embedded NUL.
 - Fix idea: use `fullmatch` or `\Z`; reject control characters and reserved device names.
-- Status: open
+- Status: fixed (PLAN-3 S6)
+- Resolution: EDID_RE, REF_ID_RE and the project_id and plugin checks end in \Z; model_path refuses control characters, *?"<>| and Windows device names (con.nif); text() refuses a NUL (S6.15, test_stab_s6b).
 
 ### P10. Save parser: FLT_MAX rotation sentinel passed through
 
