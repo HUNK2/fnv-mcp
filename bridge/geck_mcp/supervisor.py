@@ -112,9 +112,31 @@ class Watcher:
         return self._hash
 
 
+def busy_calls(path):
+    """The calls a child reports as still running (geck_mcp/busy.py writes the file): [] when there is none, or the
+    file is missing or unreadable. Read here, not imported, so a broken edit in the package cannot stop the
+    supervisor."""
+    if path is None:
+        return []
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+        if int(data.get('count', 0)) <= 0:
+            return []
+        return [str(c) for c in data.get('calls') or []] or ['?']
+    except (OSError, ValueError, TypeError, AttributeError):
+        return []
+
+
 class Child:
-    def __init__(self, argv, cwd, on_message, on_exit):
+    def __init__(self, argv, cwd, on_message, on_exit, busy_file=None):
         env = dict(os.environ, PYTHONUNBUFFERED='1')
+        # A cancelled act call is not answered, but the server keeps running it: the server reports such calls in
+        # this file (geck_mcp/busy.py), so a reload waits for them instead of killing them (R4).
+        self.busy_file = Path(busy_file) if busy_file else None
+        if self.busy_file is not None:
+            self.busy_file.parent.mkdir(parents=True, exist_ok=True)
+            self.busy_file.unlink(missing_ok=True)
+            env['GECK_MCP_BUSY_FILE'] = str(self.busy_file)
         self.proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=None)
         self.write_lock = threading.Lock()
@@ -134,6 +156,11 @@ class Child:
             self.proc.wait(5)
         except subprocess.TimeoutExpired:
             pass
+        if self.busy_file is not None:
+            try:
+                self.busy_file.unlink(missing_ok=True)
+            except OSError:
+                pass
         self._on_exit(self)
 
     def send(self, line):
@@ -189,6 +216,10 @@ class Supervisor:
         self.failed = None                    # fingerprint whose child failed to start
         self.closing = False
         self.methods = set()                  # client methods seen (names only), for the log
+        self.close_grace = 10.0               # seconds a replaced child gets to exit before it is killed
+        self.drain_limit = 660.0              # longest a reload waits for a busy child (longest tool timeout + margin)
+        self.children = 0
+        self.busy_since = None                # when the current child was first seen busy with a pending reload
 
     # -- output to the client --------------------------------------------------------------------------
     def emit(self, message):
@@ -207,7 +238,10 @@ class Supervisor:
     # -- children --------------------------------------------------------------------------------------
     def spawn(self):
         """Start a child and make it ready for the client's era. Returns the child, or None if it failed."""
-        child = Child(self.argv, self.cwd, self.from_child, self.child_exited)
+        self.children += 1
+        busy_file = Path(os.environ.get('TEMP') or os.environ.get('TMPDIR') or '/tmp') / 'geck-mcp' / (
+            'busy-%d-%d.json' % (os.getpid(), self.children))
+        child = Child(self.argv, self.cwd, self.from_child, self.child_exited, busy_file)
         if self.initialize is not None:
             probe = dict(self.initialize)
         elif self.envelope is not None:
@@ -281,7 +315,7 @@ class Supervisor:
             return False
         old, self.child, self.code, self.failed = self.child, child, fingerprint, None
         if old is not None:
-            old.close()
+            old.close(self.close_grace)
         self.reloads += 1
         note(f'reloaded the server (process {child.proc.pid}) after a code change')
         self.announce()
@@ -424,6 +458,20 @@ class Supervisor:
                     busy = bool(self.in_flight)
                 if busy or (self.initialize is not None and self.initialized is None):
                     continue                                      # wait until no call is running
+                # A cancelled act call is gone from in_flight but still running in the child (R4). Wait for it: the
+                # old child stays current and serves new calls meanwhile (two servers would fight over the game's
+                # single-instance pipe). Past drain_limit, reload anyway and say so.
+                calls = busy_calls(self.child.busy_file) if self.child is not None else []
+                if calls:
+                    now = time.monotonic()
+                    if self.busy_since is None:
+                        self.busy_since = now
+                        note(f'reload waits: the server is still running {calls}')
+                    if now - self.busy_since < self.drain_limit:
+                        continue
+                    log(f'killed a busy server: {calls} still running after {self.drain_limit:.0f} s; it had '
+                        f'{self.close_grace:.0f} s to finish before the kill')
+                self.busy_since = None
                 if self.child is None:
                     self.code = fingerprint                       # the next call starts the new code anyway
                     self.announce()

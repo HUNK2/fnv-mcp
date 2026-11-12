@@ -389,6 +389,16 @@ class Service:
 
     def run(self, name, args, action, request_key=None, modifies=False, editor=True, lock_root=None,
             resume_id=None):
+        kwargs = dict(request_key=request_key, modifies=modifies, editor=editor, lock_root=lock_root,
+                      resume_id=resume_id)
+        if not modifies:
+            return self._run(name, args, action, **kwargs)
+        from . import busy
+        with busy.track(name):          # a cancelled call keeps running: the supervisor waits for it (R4)
+            return self._run(name, args, action, **kwargs)
+
+    def _run(self, name, args, action, request_key=None, modifies=False, editor=True, lock_root=None,
+             resume_id=None):
         started = time.monotonic()
         operation_id = resume_id or str(uuid.uuid4())
         fingerprint = hashlib.sha256(json.dumps([name, args], sort_keys=True).encode()).hexdigest()

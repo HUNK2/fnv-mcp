@@ -233,6 +233,30 @@ class LiveServiceTests(GameHelperTests):
         link.expressions['GetNumericGameSetting "fJumpHeightMin"'] = {'type': 'number', 'value': 64.0}
         return live, link
 
+    def test_act_calls_are_reported_busy(self):          # R4: the supervisor waits for them before a reload
+        from geck_mcp import busy
+        live, link = self.live('full')
+        path = Path(self.tmp.name) / 'busy.json'
+        seen = {}
+        with mock.patch.dict(os.environ, {'GECK_MCP_BUSY_FILE': str(path)}):
+            live.run('fnv_x', lambda: seen.setdefault('act', busy.count(path)) and {}, 'act')
+            live.run('fnv_y', lambda: seen.setdefault('control', busy.count(path)) and {}, 'control')
+            live.run('fnv_z', lambda: seen.setdefault('read', busy.count(path)) and {}, 'read')
+        self.assertEqual(seen, {'act': 1, 'control': 1, 'read': 0})
+        self.assertEqual(busy.count(path), 0)
+
+    def test_geck_changes_are_reported_busy(self):
+        from types import SimpleNamespace
+        from geck_mcp import busy
+        from geck_mcp.service import Service
+        path = Path(self.tmp.name) / 'busy.json'
+        seen = []
+        fake = SimpleNamespace(_run=lambda *a, **k: seen.append(busy.count(path)) or {'ok': True})
+        with mock.patch.dict(os.environ, {'GECK_MCP_BUSY_FILE': str(path)}):
+            Service.run(fake, 'geck_plugin_save', {}, lambda: {}, modifies=True)
+            Service.run(fake, 'geck_status', {}, lambda: {}, modifies=False)
+        self.assertEqual(seen, [1, 0])
+
     def test_act_tools_refuse_without_full_control(self):
         live, link = self.live('read')
         result = live.run('fnv_mem_write', lambda: live.mem_write('0x10000000', 1, as_type='u8'), 'act')

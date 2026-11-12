@@ -1378,7 +1378,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | R1 | high | fixed (live check pending) | Coverage: two threads that reach the same coverage line at once crash the game (B1 fix) | `native/engine/w6_cov.c:31-55` |
 | R2 | high | fixed | The F5 fix makes bisect unable to find a plugin that crashes the game while it loads (F5) | `geck_mcp/fnv_suite.py:75-83` |
 | R3 | high | fixed | The plugin backup and `restore.json` are written but never read: a server that dies mid-bisect leaves the plugin pruned, and the next bisect makes that permanent (F3) | `geck_mcp/fnv_suite.py:131-146` |
-| R4 | high | open | Hot reload kills a cancelled call that is still running in the old server (A5 fix) | `geck_mcp/supervisor.py:331-338` |
+| R4 | high | fixed (live check pending) | Hot reload kills a cancelled call that is still running in the old server (A5 fix) | `geck_mcp/supervisor.py:331-338` |
 | T1 | high | open | The engine_control gate is bypassed by tools registered as control or read | `fnv_live.py:167` |
 | G1 | medium | open | Undoing a nudge/rotate/scale leaves the export pose at the undone value | `geck_mcp/fnv_create.py:1109-1119` |
 | G4 | medium | open | fnv_revert_all lists every non-undoable entry ever journaled (57 KB reply, over the client's limit) | `geck_mcp/fnv_live.py:1419` |
@@ -1500,7 +1500,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
   - In the repro, a 14 s call that the client cancelled after 1 s was killed (exit code 1 after 10.8 s), and its work never finished.
   - Calls that can be cut this way include `fnv_wait_for` (gate held between rounds), `fnv_crawl` (hooks and file log on), `fnv_bisect records` (the user's plugin left pruned; see finding 3) and any debugger or act tool mid-change. A `notifications/cancelled` from the client is enough.
 - **Fix idea:** Keep cancelled requests in a separate "draining" set, owned by the child, and don't reload while it is non-empty. Or reload without killing: when the old child still has draining calls, let it exit on its own once they finish, with no 10 s kill (or a kill only after a much longer bound). Clear the drained id when the child's late response arrives or when it exits.
-- Status: open
+- Status: fixed (S1.4), live check pending. The server reports its act and changing calls in a per-child busy file (`geck_mcp/busy.py`, `GECK_MCP_BUSY_FILE`); the supervisor treats a child with a running call as busy even after the call was cancelled, defers the reload, and keeps the old child serving meanwhile (the game pipe is single-instance). Past `drain_limit` (660 s) it reloads anyway and logs `killed a busy server`. Tests: `tests/test_supervisor.py` (BusyReloadTests, BusyFileTests) and `tests/test_fnv_live.py` (`test_act_calls_are_reported_busy`, `test_geck_changes_are_reported_busy`).
 
 ### T1. The engine_control gate is bypassed by tools registered as control or read
 

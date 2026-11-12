@@ -161,6 +161,13 @@ class LiveService:
         return self._engine
 
     def run(self, name, action, kind='read'):
+        if kind == 'read':
+            return self._run(name, action, kind)
+        from . import busy
+        with busy.track(name):          # a cancelled call keeps running: the supervisor waits for it (R4)
+            return self._run(name, action, kind)
+
+    def _run(self, name, action, kind):
         started = time.monotonic()
         operation_id = str(uuid.uuid4())
         try:
