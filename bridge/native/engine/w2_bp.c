@@ -86,13 +86,7 @@ static bool tr_on(DWORD tid) { return tr.active && tr.tid == tid; }
  * putting the page protection back between them. WriteProcessMemory changes the protection itself and fails instead
  * of faulting; it is retried briefly. */
 static void byte_set(uint32_t addr, unsigned char value) {
-    unsigned char *p = (unsigned char *)(uintptr_t)addr;
-    for (int tries = 0; tries < 64 && *p != value; tries++) {
-        SIZE_T done = 0;
-        if (WriteProcessMemory(GetCurrentProcess(), p, &value, 1, &done) && done == 1) break;
-        SwitchToThread();
-    }
-    FlushInstructionCache(GetCurrentProcess(), p, 1);
+    code_byte(addr, value);
 }
 static bool isite_live(uint32_t addr) {
     for (int i = 0; i < (int)ISITES; i++)

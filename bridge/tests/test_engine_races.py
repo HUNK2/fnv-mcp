@@ -259,7 +259,8 @@ class BreakHookRaceTests(StopTestCase):
         self.start_race(8, 200000, yield_between=True)
         poke(self.host.process, self.t['raceGo'], 1)
         cycles = busy = 0
-        while cycles < 200 and self.host.process.poll() is None:
+        deadline = time.monotonic() + 60                  # a hook left in place would refuse every later one
+        while cycles < 200 and self.host.process.poll() is None and time.monotonic() < deadline:
             hook = link.one('hook', *args)
             if not hook.get('ok'):
                 busy += hook.get('error') == 'busy'      # a worker stood inside the prologue: refused, not patched
@@ -276,6 +277,34 @@ class BreakHookRaceTests(StopTestCase):
         self.assertEqual(self.read32('raceDone'), 8)
         self.assertEqual(self.read32('raceBad'), 0)
         self.assertGreater(cycles, 0)
+        self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
+
+    def test_probe_budget_disarm_under_8_threads(self):
+        # An int3 probe puts its byte back by itself at its call budget, inside the trap handler of whichever
+        # threads reach it. Many threads at once must not fault (the N13 pattern, review S4 I1).
+        import struct
+        link = self.host.link
+        info = link.one('probe', 'info')
+        if info.get('ok') and info.get('armed'):
+            link.one('probe', 'disarm')
+        self.assertTrue(link.one('probe', 'init', '4', '2', '0', '0')['ok'])
+        record = struct.pack('<IBBB3sH', self.t['bpTarget'], 2, 1, 0, b'\0\0\0', 0)   # push ebp: 1 byte
+        self.assertEqual(link.one('probe', 'add', record.hex())['added'], 1)
+        self.assertTrue(link.one('probe', 'int3budget', '20')['ok'])
+        self.start_race(8, 2000000)
+        poke(self.host.process, self.t['raceGo'], 1)
+        hot = cycles = 0
+        deadline = time.monotonic() + 30
+        while cycles < 150 and time.monotonic() < deadline and self.host.process.poll() is None:
+            arm = link.one('probe', 'arm')
+            if not arm.get('ok'):
+                continue
+            cycles += 1
+            hot = link.one('probe', 'info').get('int3Hot', hot)
+        self.assertIsNone(self.host.process.poll(), self.alive())
+        link.one('probe', 'disarm')
+        self.assertGreater(cycles, 10)
+        self.assertEqual(self.read32('raceBad'), 0)
         self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
 
     def test_stress_cov_arm_cycle(self):

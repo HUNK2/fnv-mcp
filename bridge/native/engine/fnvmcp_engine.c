@@ -707,6 +707,19 @@ static Hook *hook_find(uint32_t id) {
 static int code_write_frozen(uint32_t address, const void *bytes, size_t length); /* after probe_suspend */
 static void cov_release_range(uint32_t addr, uint32_t len);                       /* w6_cov.c */
 static bool cov_in_flight(uint32_t addr, uint32_t len);                           /* w6_cov.c */
+/* One code byte from a trap handler, with the other threads running (breakpoint pass and reinstall, a probe's
+ * budget disarm). VirtualProtect + store there faults when another thread puts the page protection back between
+ * the two (N13). WriteProcessMemory changes the protection itself and fails instead of faulting; it is retried
+ * briefly, and writing the same byte twice is harmless. */
+static void code_byte(uint32_t address, unsigned char value) {
+    unsigned char *p = (unsigned char *)(uintptr_t)address;
+    for (int tries = 0; tries < 64 && *p != value; tries++) {
+        SIZE_T done = 0;
+        if (WriteProcessMemory(GetCurrentProcess(), p, &value, 1, &done) && done == 1) break;
+        SwitchToThread();
+    }
+    FlushInstructionCache(GetCurrentProcess(), p, 1);
+}
 static bool code_write(uint32_t address, const void *bytes, size_t length) {
     DWORD old;
     if (!VirtualProtect((void *)(uintptr_t)address, length, PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -1202,12 +1215,7 @@ static LONG CALLBACK on_trap(EXCEPTION_POINTERS *e) {
         if (read_u32((uint32_t)c->Esp, &ret)) probe_caller((uint32_t)i, ret);
         if ((uint32_t)n >= int3_budget) {
             unsigned char *code_at = (unsigned char *)(uintptr_t)probes[i].target;
-            DWORD old;
-            if (VirtualProtect(code_at, 1, PAGE_EXECUTE_READWRITE, &old)) {
-                if (*code_at == 0xCC) *code_at = probes[i].original[0];
-                VirtualProtect(code_at, 1, old, &old);
-                FlushInstructionCache(GetCurrentProcess(), code_at, 1);
-            }
+            if (*code_at == 0xCC) code_byte(probes[i].target, probes[i].original[0]); /* other threads run: no VirtualProtect + store */
             probes[i].state = PROBE_DISARMED;
             InterlockedIncrement(&int3_hot);
         }
