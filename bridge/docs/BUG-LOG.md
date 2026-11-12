@@ -1369,7 +1369,7 @@ A second hunt the same day, after the fix pass was committed (133ed0e). Nothing 
 
 The parser sweep ran 16 plugins (about 630,000 records), the record index (866,000 references), 3,719 scripts, 58 saves (1.4 million change forms), 21 BSAs and the engine map; everything not listed here checked clean. Findings that did not hold up when checked were dropped (fnv_window persist writes the dev profile's Fallout.ini, as designed, with a backup; fnv_hook_set is gated). R entries that name an earlier ID are fixes from the first pass that are incomplete or wrong.
 
-Totals: 69 bugs, 6 high, 19 medium, 44 low (N13 found by the S4.3 race tests, N14 and N15 by the S4.5 smoke tests). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
+Totals: 70 bugs, 6 high, 20 medium, 44 low (N13 found by the S4.3 race tests, N14 and N15 by the S4.5 smoke tests, N16 by the live suite). N1-N12 came from the stabilization research (PLAN-3, `fnv-mcp/research/stabilize/`), found by reading the code; they were added on 2026-11-12 with the S0 baseline.
 
 Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m unittest discover -s tests` from `bridge`, ran 1,011 tests: all passed, 4 skipped, 0 failures. That includes the 54 engine companion tests, which now find Zig from the project files instead of being skipped without `GECK_MCP_ZIG`. Before S0 the same run with `GECK_MCP_ZIG` set was 1,002 tests, 4 skipped. No C test failed, so no N13.
 
@@ -1444,6 +1444,7 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 | N13 | high | fixed | Two threads passing one int3 breakpoint at once crash the game (access violation in the trap handler) | `native/engine/w2_bp.c:84 byte_set` |
 | N14 | low | fixed | fnv_name_oracle with no record index fails with a raw SQLite error (FNV_ERROR, no next step) | `geck_mcp/fnv_oracle.py forms` |
 | N15 | low | fixed | A scenario's coc or save start is sent to the console unchecked when the game already runs | `geck_mcp/fnv_scenario.py prepare` |
+| N16 | medium | open | fnv_play goto reports arrival outside activation reach, so the next activate fails (s1-play flaky) | `geck_mcp/fnv_hands.py:607 goto` |
 
 ## Round 2: High
 
@@ -1728,6 +1729,15 @@ Baseline (S0, 2026-11-12): the full offline suite, `.venv\Scripts\python.exe -m 
 - What happens: The journal entry is written after the game was changed. A timeout or exception between the change and the journal write (for example COMPANION_TIMEOUT on a memory write) leaves a change that undo cannot see; the tool reports outcome_unknown.
 - Fix idea: Journal the intent as pending before the change and confirm after (D5, PLAN-3 S3.2).
 - Evidence: `fnv-mcp/research/stabilize/CONTRACT-MAP.md (journal sites table, before/after column; item 9)`.
+- Status: open
+
+### N16. fnv_play goto reports arrival outside activation reach, so the next activate fails
+
+- Where: geck_mcp/fnv_hands.py:607 (`goto`: `arrived = left <= ARRIVE * 1.5`, horizontal distance, 135 units) against the activate check (`not_in_crosshair`, about 150 units of 3D reach).
+- Severity: medium (makes the S1 acceptance scenario flaky, which blocks the exit gate's three passes in a row)
+- Confidence: confirmed in the live suite 2026-11-12 19:44: examples/hello-courier/tests/s1-play.json failed with "the target is 179 units away (activation reach is about 150 units)" right after goto said it arrived; the run before passed.
+- What happens: goto measures arrival in the horizontal plane with a 135-unit tolerance; a token on a table or step is farther in 3D than the activation reach, and the next activate cannot pick it.
+- Fix idea: when goto has a reference target, arrive by 3D distance to within the activation reach minus a margin (or keep walking until the crosshair can pick it); live test: s1-play passing three runs in a row.
 - Status: open
 
 ## Round 2: Low
