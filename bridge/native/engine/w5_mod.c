@@ -165,11 +165,13 @@ static void op_hooknative(int argc, char **argv) {
     if (req->target != h->target) return fail("wrong_target");
     if (!h->native_skip) {
         if (hook_code_used + 16 > 65536) return fail("out_of_memory");
+        h->native_skip = hook_code + hook_code_used;
+        hook_code_used += 16;
+    }
+    { /* written every time: a reused hook's stub may hold another module's pop (K3 review I2) */
         unsigned char stub[4], *q = stub;
         if (req->pop) { *q++ = 0xC2; *q++ = (unsigned char)(req->pop & 0xFF); *q++ = (unsigned char)(req->pop >> 8); }
         else *q++ = 0xC3; /* eax comes back from the frame (popal), so the stub only returns */
-        h->native_skip = hook_code + hook_code_used;
-        hook_code_used += 16;
         if (!code_write((uint32_t)(uintptr_t)h->native_skip, stub, (size_t)(q - stub))) return fail("unwritable");
     }
     h->native_user = req->user;

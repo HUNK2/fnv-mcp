@@ -402,6 +402,37 @@ class HookReuseTests(StopTestCase):
         self.host.link.schedule(0, 'hookme 5')
         self.assertTrue(self.wait_line('hookme 1005'), 'the function runs normally after all that')
 
+    def install(self, flags=0, label='k3r'):
+        return self.host.link.one('hook', hexint(self.t['hookme']), hexint(6), '-', hexint(flags), hexint(0),
+                                  hexint(0), hexint(0), hexint(1), '0', '0', hexint(0), hexint(0), fnv_link.hexs(label))
+
+    def test_review_i3_the_spare_list_has_no_bound(self):
+        # Removals beyond the 32 listed + 32 spare slots were dropped with their memory. The lost memory does not show
+        # on the wire (each install can reuse the hook just removed), so the source is checked: the spare list is
+        # linked through the hooks, with no slot array.
+        source = (Path(__file__).resolve().parents[1] / 'native' / 'engine' / 'fnvmcp_engine.c').read_text(
+            encoding='utf-8')
+        self.assertIn('static Hook *hook_spare;', source)
+        self.assertNotIn('hook_spare[', source)
+
+    def test_review_i1_a_call_still_inside_a_removed_hook_keeps_it(self):
+        link = self.host.link
+        poke(self.host.process, self.t['hookReuseMs'], 0)
+        hook = self.install(1)                              # exit capture: the call keeps a shadow frame
+        self.assertTrue(link.one('bp', 'set', hexint(1), hexint(self.t['hookme'] + 6), 'int3', 'ff',
+                                 hexint(0)).get('ok'))
+        link.schedule(0, 'hookme 5')
+        stop = self.wait_stops()[0]                         # parked inside hookme, below the hook's frame
+        self.assertTrue(link.one('unhook', hexint(hook['hook']['id'])).get('ok'))
+        other = link.one('hook', hexint(self.t['bpTarget']), hexint(6), '-', hexint(0), hexint(0), hexint(0),
+                         hexint(0), hexint(1), '0', '0', hexint(0), hexint(0), fnv_link.hexs('k3o'))
+        self.assertTrue(other.get('ok'), other)
+        self.assertNotEqual(other['hook']['hook'], hook['hook']['hook'], 'the parked call still uses it')
+        link.one('bp', 'clear', 'ff')
+        self.assertTrue(link.one('resume', hexint(stop['seq']), 'run').get('ok'))
+        self.assertTrue(self.wait_line('hookme 1005'))
+        link.one('unhook', hexint(other['hook']['id']))
+
     def test_the_grace_period_keeps_a_fresh_removal(self):
         link = self.host.link        # the default grace period: a hook removed just now is not reused
         first = link.one('hook', hexint(self.t['hookme']), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0),

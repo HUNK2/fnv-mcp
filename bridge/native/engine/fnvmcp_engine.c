@@ -441,14 +441,15 @@ typedef struct {
     unsigned char *native_skip;
     volatile LONG act_applied; /* calls the action changed (act_hits also counts the calls past act_limit; G11) */
     ULONGLONG removed_at; /* GetTickCount64 of the unhook (or of a failed install); 0 while live (K3) */
+    volatile LONG inflight; /* shadow frames of calls into this hook not yet returned: no reuse while > 0 (K3) */
+    void *spare_next; /* the spare list (removed hooks no longer listed), linked through the hook (K3) */
 } Hook;
 /* A frame is a watch hook's (hook set) or a mass probe's (probe = index + 1, sample = its sample record). */
 typedef struct { uint32_t ret_slot, ret; Hook *hook; uint64_t t0; LONG seq; uint32_t ecx, a0, a1, override, probe; uint32_t *sample; } ShadowFrame;
 typedef struct { int count; ShadowFrame frames[SHADOW]; } Shadow;
 static Hook *hooks[HOOKS];
 static int hook_count;
-static Hook *hook_spare[HOOKS]; /* removed hooks no longer listed, kept for reuse (K3) */
-static int hook_spare_count;
+static Hook *hook_spare; /* removed hooks no longer listed, kept for reuse; unbounded (K3 review I3) */
 static unsigned char *hook_code;
 static uint32_t hook_code_used;
 static DWORD shadow_tls = TLS_OUT_OF_INDEXES;
@@ -652,6 +653,7 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
         f->ret_slot = (uint32_t)(uintptr_t)&fr[10];
         f->ret = fr[10];
         f->hook = h;
+        InterlockedIncrement(&h->inflight); /* dropped when the frame pops (K3) */
         f->t0 = (uint64_t)now.QuadPart;
         f->seq = seq;
         f->ecx = fr[7];
@@ -677,6 +679,7 @@ uint32_t fnvmcp_on_exit(uint32_t *fr, const uint32_t *fpu) {
     bool found = false;
     while (s && s->count && s->frames[s->count - 1].ret_slot < sp) {
         f = s->frames[--s->count];
+        if (f.hook) InterlockedDecrement(&((Hook *)f.hook)->inflight); /* unwound frames too (K3) */
         found = true;
     }
     if (!found) {
@@ -764,16 +767,16 @@ static void emit_hook(const Hook *h) {
 static bool stop_holds_hook(uint32_t id, uint32_t lo, uint32_t hi);
 static bool hook_reusable(Hook *h, ULONGLONG now) {
     uint32_t lo = (uint32_t)(uintptr_t)h->entry;
-    return !h->stolen && h->removed_at && now - h->removed_at >= HOOK_REUSE_MS &&
+    return !h->stolen && h->removed_at && now - h->removed_at >= HOOK_REUSE_MS && !h->inflight &&
            !(h->native_busy && *h->native_busy) && !stop_holds_hook(h->id, lo, lo + 64);
 }
 static Hook *hook_reuse(void) {
     ULONGLONG now = GetTickCount64();
     Hook *h = NULL;
-    for (int i = 0; i < hook_spare_count && !h; i++)
-        if (hook_reusable(hook_spare[i], now)) {
-            h = hook_spare[i];
-            hook_spare[i] = hook_spare[--hook_spare_count];
+    for (Hook **link = &hook_spare; *link && !h; link = (Hook **)&(*link)->spare_next)
+        if (hook_reusable(*link, now)) {
+            h = *link;
+            *link = h->spare_next;
         }
     for (int i = 0; i < hook_count && !h; i++)
         if (hook_reusable(hooks[i], now)) {
@@ -791,13 +794,15 @@ static Hook *hook_reuse(void) {
     h->native_skip = native_skip;
     h->records = records;
     h->table = table;
+    if (records) memset(records, 0, HOOK_RING * HOOK_WORDS * 4); /* no stale record reads as a new one */
     return h;
 }
 /* A hook that never went live (a failed install) goes to the spare list, reusable at once. */
 static void hook_retire(Hook *h) {
     h->stolen = 0;
     h->removed_at = 1; /* long ago */
-    if (hook_spare_count < HOOKS) hook_spare[hook_spare_count++] = h;
+    h->spare_next = hook_spare;
+    hook_spare = h;
 }
 
 /* K1: bytes another patch owns. An int3 or coverage byte inside a hook's jump corrupts it, and a hook over a live
@@ -825,7 +830,10 @@ static void op_hook(int argc, char **argv) {
         int kept = 0;
         for (int i = 0; i < hook_count; i++) {
             if (hooks[i]->stolen) hooks[kept++] = hooks[i];
-            else if (hook_spare_count < HOOKS) hook_spare[hook_spare_count++] = hooks[i];
+            else {
+                hooks[i]->spare_next = hook_spare;
+                hook_spare = hooks[i];
+            }
         }
         hook_count = kept;
     }
@@ -939,6 +947,7 @@ static void op_unhook(int argc, char **argv) {
         return fail(written == 1 ? "busy" : "unwritable");
     }
     h->stolen = 0;
+    h->native = NULL; /* a module's handler ends with its hook (K3 review I2) */
     h->removed_at = GetTickCount64();
     emit("{\"ok\":true,\"id\":%u}", id);
 }

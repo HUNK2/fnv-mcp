@@ -2416,7 +2416,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Where: native/engine/fnvmcp_engine.c (op_hook, op_unhook), w2_stop.c
 - Severity: medium
 - Found by: round-3 audit (docs/audit3/companion.md M2): about 1000 hook installs per game ended every hook tool (64 KB stub area), and each recording hook kept 768 KB.
-- Fix: a removed hook's memory (its 64-byte stub and trampoline, skip stubs, ring and table) is reused for a new hook once HOOK_REUSE_MS (60 s) has passed since the unhook, and never while a parked stop belongs to the hook or sits in its stub or a native handler runs on it; failed installs go to a spare list at once instead of leaking. Tests: tests/test_engine_races.py HookReuseTests (1100 install/remove cycles with recording; the grace period keeps a fresh removal).
+- Fix: a removed hook's memory (its 64-byte stub and trampoline, skip stubs, ring and table) is reused for a new hook once HOOK_REUSE_MS (60 s) has passed since the unhook, and never while a parked stop belongs to the hook or sits in its stub or a native handler runs on it; failed installs go to a spare list at once instead of leaking. Review (S7 batch 3): a per-hook in-flight count (shadow frames not yet returned, unwound ones included) also blocks reuse (I1); the spare list is unbounded, linked through the hooks (I3); an unhook ends a module's handler and the module skip stub is rewritten on every hooknative (I2); a reused ring is cleared. Tests: tests/test_engine_races.py HookReuseTests (1100 install/remove cycles with recording; the grace period keeps a fresh removal).
 - Status: fixed
 
 ### K4. fnv_flow trace took an old parked stop of a cleared break with the same bp id as its own hit
