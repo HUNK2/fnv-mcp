@@ -73,6 +73,9 @@ class ChildProcessTests(unittest.TestCase):
         self.assertEqual(sorted(self.proc.resume_all(suspended)), sorted(suspended))
 
     def test_context_round_trip(self):
+        # held for the whole round trip: a child still starting up runs between the reads (seen on the CI runner)
+        held = self.proc.suspend_all(keep=[])
+        self.addCleanup(self.proc.resume_all, held)
         raw = self.proc.get_context(self.main)
         self.assertEqual(len(raw), fnv_procmem.WOW64_CONTEXT_SIZE)
         before = fnv_procmem.parse_context(raw)
