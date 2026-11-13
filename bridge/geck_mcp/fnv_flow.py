@@ -178,6 +178,7 @@ class FlowTools:
                 if when:   # breakpoints take a predicate slot (wire 2): store the program first
                     pred_slot = self.dbg._store_pred(when)
                     pred = word(pred_slot)
+                self._seen_stops = {s.get('seq') for s in self.dbg._stops()}   # parked before this arm (K4)
                 bp_id = self.dbg._free_bp_id()
                 mechanism = 'hw' if self._hw_used() < HW_SLOTS else 'int3'
                 try:
@@ -198,7 +199,7 @@ class FlowTools:
         try:
             callees = self._callee_ranges(db, fn) if depth == 1 else []
             slot = self._write_call(prepared) if prepared is not None else None
-            stop = self._await_bp(bp_id, arm_wait)
+            stop = self._await_bp(bp_id, arm_wait, addr=fn['addr'], seen=getattr(self, '_seen_stops', ()))
         except BaseException:
             # Nothing armed may outlive the call: the module's slot first (a call made later lands in whatever break
             # is there then), then the breakpoint; each on its own (R5, S6 review A M2).
@@ -369,12 +370,17 @@ class FlowTools:
             out.append(dict(local, code=code))
         return out, skipped
 
-    def _await_bp(self, bp_id, wait):
+    def _await_bp(self, bp_id, wait, addr=None, seen=()):
+        """This arm's hit: a bp stop with its id, not one of the stops parked before it was armed (`seen`), at the
+        function's address. A cleared break's stop can stay parked with the same id (K4)."""
         deadline = self.clock() + wait
         while True:
             for s in self.dbg._stops():
-                if s.get('kind') == 'bp' and int(s.get('id')) == bp_id:
-                    return s
+                if s.get('kind') != 'bp' or int(s.get('id')) != bp_id or s.get('seq') in seen:
+                    continue
+                if addr is not None and s.get('eip') is not None and int(str(s['eip']), 16) != addr:
+                    continue
+                return s
             if self.clock() >= deadline:
                 return None
             self.sleep(0.05)

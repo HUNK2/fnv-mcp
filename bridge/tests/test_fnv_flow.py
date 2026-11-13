@@ -146,13 +146,18 @@ class TraceRoundTripTests(unittest.TestCase):
     def test_trace_is_read_under_the_step_stop_that_ends_it(self):
         live = make_live()
         link = live.link
-        stops = {'bp': [{'seq': 4, 'kind': 'bp', 'id': 0, 'main': True, 'thread': 1, 'eip': '0x00401000'}]}
+        stops = {'bp': []}      # the hit parks once the breakpoint is armed (K4: earlier stops are not its hit)
         reads = []
         base_one = link.one
 
         def one(*op, timeout=None):
             if op[0] == 'stops':
                 return {'stops': stops['bp']}
+            if op[:2] == ('bp', 'set'):
+                result = base_one(*op, timeout=timeout)
+                stops['bp'] = [{'seq': 4, 'kind': 'bp', 'id': int(op[2], 16), 'main': True, 'thread': 1,
+                                'eip': '0x%08X' % int(op[3], 16)}]
+                return result
             if op[0] == 'resume' and op[2] == 'trace':
                 self.assertEqual(op[1], '4')
                 stops['bp'] = [{'seq': 5, 'kind': 'step', 'id': 255, 'main': True, 'thread': 1, 'eip': '0x00401010'}]

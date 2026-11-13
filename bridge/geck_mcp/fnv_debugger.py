@@ -610,6 +610,8 @@ class Debugger:
     def _free_bp_id(self):
         used = {b['id'] for b in self.breaks.values() if b['mechanism'] in ('hw', 'int3')}
         used |= {b['id'] for b in self.link.one('bp', 'list').get('bps', [])}
+        # a cleared break's stop can stay parked with its id; a new arm with that id would take it for its own (K4)
+        used |= {int(s['id']) for s in self._stops() if s.get('kind') == 'bp' and s.get('id') is not None}
         for i in range(BP_IDS):
             if i not in used:
                 return i

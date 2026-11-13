@@ -470,5 +470,36 @@ class Batch2ReviewTests(unittest.TestCase):
             self.assertEqual([b.hex() for b in get(holder)], before['holder'])
 
 
+class FlowStaleStopTests(unittest.TestCase):
+    """K4: fnv_flow trace took an old parked stop of a cleared break with the same bp id as its own hit."""
+
+    def flow(self, stops):
+        from geck_mcp.fnv_flow import FlowTools
+        flow = FlowTools.__new__(FlowTools)
+        flow.dbg = SimpleNamespace(_stops=lambda: list(stops))
+        times = iter(range(1000))
+        flow.clock = lambda: next(times) * 0.05
+        flow.sleep = lambda s: None
+        return flow
+
+    def test_an_old_stop_of_the_same_id_is_not_taken(self):
+        old = {'kind': 'bp', 'id': 0, 'seq': 5, 'eip': '0x00401000'}
+        flow = self.flow([old])
+        self.assertIsNone(flow._await_bp(0, 1.0, addr=0x00402000, seen={5}))
+
+    def test_the_new_hit_at_the_function_is_taken(self):
+        old = {'kind': 'bp', 'id': 0, 'seq': 5, 'eip': '0x00401000'}
+        new = {'kind': 'bp', 'id': 0, 'seq': 9, 'eip': '0x00402000'}
+        self.assertEqual(self.flow([old, new])._await_bp(0, 1.0, addr=0x00402000, seen={5})['seq'], 9)
+
+    def test_a_free_id_skips_ids_parked_stops_hold(self):
+        from geck_mcp.fnv_debugger import Debugger
+        dbg = Debugger.__new__(Debugger)
+        dbg.breaks = {}
+        dbg.live = SimpleNamespace(link=SimpleNamespace(one=lambda *a: {'bps': []}))
+        dbg._stops = lambda: [{'kind': 'bp', 'id': 0, 'seq': 5}]
+        self.assertEqual(dbg._free_bp_id(), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -2275,7 +2275,7 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 | K1 | high | fixed | An int3 can land inside a hook's patched bytes or be copied into its trampoline: the game crashes | `audit3/companion.md H1` |
 | K2 | medium | fixed | A worker parked at a stop the main thread waits on cannot be released while the bridge keeps talking (dead-man reset by unserved requests) | `audit3/companion.md M1` |
 | K3 | medium | fixed | Hook stubs and record rings are never reused: ~1000 installs end every hook tool; each recording hook leaks 768 KB | `audit3/companion.md M2` |
-| K4 | medium | open | fnv_flow trace takes an old parked stop of a cleared break with the same bp id as its own hit | `audit3/companion.md M3` |
+| K4 | medium | fixed | fnv_flow trace takes an old parked stop of a cleared break with the same bp id as its own hit | `audit3/companion.md M3` |
 | K5 | low | open | A thread=main trap break that falls to int3 parks every thread (E24 incomplete) | `audit3/companion.md L1` |
 | K6 | low | open | A failed unhook silently ends the action or hold; break clear drops the record anyway | `audit3/companion.md L2` |
 | K7 | low | open | op_hookact rewrites a live skip stub in place | `audit3/companion.md L3` |
@@ -2417,5 +2417,13 @@ gate's CI and suite runs. Entries get a detail section when they are fixed.
 - Severity: medium
 - Found by: round-3 audit (docs/audit3/companion.md M2): about 1000 hook installs per game ended every hook tool (64 KB stub area), and each recording hook kept 768 KB.
 - Fix: a removed hook's memory (its 64-byte stub and trampoline, skip stubs, ring and table) is reused for a new hook once HOOK_REUSE_MS (60 s) has passed since the unhook, and never while a parked stop belongs to the hook or sits in its stub or a native handler runs on it; failed installs go to a spare list at once instead of leaking. Tests: tests/test_engine_races.py HookReuseTests (1100 install/remove cycles with recording; the grace period keeps a fresh removal).
+- Status: fixed
+
+### K4. fnv_flow trace took an old parked stop of a cleared break with the same bp id as its own hit
+
+- Where: geck_mcp/fnv_flow.py (_await_bp), fnv_debugger.py (_free_bp_id)
+- Severity: medium
+- Found by: round-3 audit (docs/audit3/companion.md M3)
+- Fix: the trace notes the stops parked before it arms, and takes only a new bp stop with its id at the traced function's address; _free_bp_id also skips ids that parked stops still hold. Tests: tests/test_s7_round3.py FlowStaleStopTests; the trace fakes in test_fnv_flow and test_bugfix_e now park the hit when the breakpoint is set.
 - Status: fixed
 

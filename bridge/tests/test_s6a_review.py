@@ -48,7 +48,7 @@ class PendingToTests(unittest.TestCase):
 class FlowSlotTests(unittest.TestCase):
     def test_m2_a_failed_trace_zeroes_the_call_slot(self):
         flow, link = _flow(signature='int __cdecl F(void)')
-        flow._await_bp = lambda bp_id, wait: {'seq': 4}
+        flow._await_bp = lambda bp_id, wait, **kw: {'seq': 4}
         released = []
         flow._release_quietly = lambda seq, end=None: released.append(seq)
         real = link.one
