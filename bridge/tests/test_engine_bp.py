@@ -277,10 +277,22 @@ class PatchOverlapTests(StopTestCase):
         # I5: a new probe set would reuse the stub area the hook's saved bytes jump into
         self.host.link.one('probe', 'disarm')
         self.assertEqual(self.host.link.one('probe', 'init', '4', '2', '0', '0').get('error'), 'in_use')
-        # the probe saw its jump overwritten and leaves it: after the unhook the function keeps the probe's jump,
-        # so put the original bytes back for the next tests
+        # round 4 M1: the probe is disarmed, so the unhook puts the function's own bytes back, not the probe's jump
+        # (which nothing tracked any more: the next probe set would send its calls into another function)
         self.assertTrue(self.host.link.one('unhook', hexint(hooked['hook']['id'])).get('ok'))
-        self.host.link.one('wr', hexint(self.t['bpTarget']), original)
+        self.assertEqual(self.host.link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], original)
+        self.assertTrue(self.host.link.one('probe', 'init', '4', '2', '0', '0').get('ok'))
+
+    def test_a_hook_removed_while_its_probe_is_armed_gives_the_probe_back(self):
+        original = self.host.link.one('rd', hexint(self.t['bpTarget']), '6')['hex']
+        self.probe(0, 6)
+        jump = self.host.link.one('rd', hexint(self.t['bpTarget']), '6')['hex']
+        hooked = self.hook(self.t['bpTarget'])
+        self.assertTrue(hooked.get('ok'), hooked)
+        self.assertTrue(self.host.link.one('unhook', hexint(hooked['hook']['id'])).get('ok'))
+        self.assertEqual(self.host.link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], jump)
+        self.assertEqual(self.host.link.one('probe', 'disarm').get('restored'), 1)
+        self.assertEqual(self.host.link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], original)
 
     def test_an_int3_probe_blocks_a_hook(self):
         self.probe(2, 1)
@@ -312,6 +324,59 @@ class PatchOverlapTests(StopTestCase):
         self.assertTrue(self.hook(self.t['bpTarget']).get('ok'))
         self.assertEqual(self.hook(self.t['bpTarget'] + 1, 'k1b').get('error'), 'already_hooked')
 
+    # Round 4 (deferred K1 minor raised to medium): fnv_code's patches and int3 sites must not overlap
+    def swap_jump(self):
+        # an empty probe set first: an int3 is refused at any function of the current set (bp_probe_at)
+        self.host.link.one('probe', 'disarm')
+        self.assertTrue(self.host.link.one('probe', 'init', '4', '2', '0', '0').get('ok'))
+        return 'e9' + struct.pack('<i', 0x100).hex()
+
+    def test_no_code_patch_over_a_live_int3(self):
+        target = self.t['bpTarget']
+        jump = self.swap_jump()
+        original = self.host.link.one('rd', hexint(target), '5')['hex']
+        first = self.host.link.one('bp', 'set', hexint(1), hexint(target), 'int3', 'ff', hexint(0))
+        self.assertTrue(first.get('ok'), first)
+        self.assertEqual(self.host.link.one('code', 'patch', hexint(target), jump).get('error'), 'in_use')
+        self.host.link.one('bp', 'clear', 'ff')
+        self.assertEqual(self.host.link.one('rd', hexint(target), '5')['hex'], original)
+
+    def test_no_int3_inside_a_code_patch_until_it_is_put_back(self):
+        target = self.t['bpTarget']
+        swap = self.host.link.one('code', 'patch', hexint(target), self.swap_jump())
+        self.assertTrue(swap.get('ok'), swap)
+        try:
+            for offset in (0, 1, 4):
+                self.assertEqual(self.host.link.one('bp', 'set', hexint(1), hexint(target + offset), 'int3', 'ff',
+                                                    hexint(0)).get('error'), 'in_use', offset)
+        finally:
+            self.assertTrue(self.host.link.one('code', 'patch', hexint(target), swap['old']).get('ok'))
+        after = self.host.link.one('bp', 'set', hexint(1), hexint(target + 1), 'int3', 'ff', hexint(0))
+        self.assertTrue(after.get('ok'), after)                # after the unswap the bytes are the function's again
+
+
+    # Round-4 review I2: fnv_patch and its undo write through wr; the same rules hold there
+    def test_no_int3_inside_a_raw_code_write_until_it_is_put_back(self):
+        target = self.t['bpTarget']
+        self.swap_jump()                                                     # an empty probe set
+        nops = self.host.link.one('wr', hexint(target + 1), '9090909090')
+        self.assertTrue(nops.get('ok'), nops)
+        try:
+            self.assertEqual(self.host.link.one('bp', 'set', hexint(1), hexint(target + 2), 'int3', 'ff',
+                                                hexint(0)).get('error'), 'in_use')
+        finally:
+            self.assertTrue(self.host.link.one('wr', hexint(target + 1), nops['old']).get('ok'))
+        after = self.host.link.one('bp', 'set', hexint(1), hexint(target + 2), 'int3', 'ff', hexint(0))
+        self.assertTrue(after.get('ok'), after)
+
+    def test_no_raw_code_write_over_a_live_int3(self):
+        target = self.t['bpTarget']
+        self.swap_jump()
+        original = self.host.link.one('rd', hexint(target), '6')['hex']
+        self.assertTrue(self.host.link.one('bp', 'set', hexint(1), hexint(target + 3), 'int3', 'ff', hexint(0)).get('ok'))
+        self.assertEqual(self.host.link.one('wr', hexint(target), '909090909090').get('error'), 'in_use')
+        self.host.link.one('bp', 'clear', 'ff')
+        self.assertEqual(self.host.link.one('rd', hexint(target), '6')['hex'], original)
 
 if __name__ == '__main__':
     unittest.main()

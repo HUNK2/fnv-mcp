@@ -811,8 +811,14 @@ static bool hook_range(uint32_t addr, uint32_t len);
 static bool probe_range(uint32_t addr, uint32_t len);
 static bool probe_blocks_hook(uint32_t target, uint32_t len);
 static bool hook_on_probe_code(void);
+static uint32_t hook_restore_bytes(const Hook *h, unsigned char *out, uint32_t *probe_index);
+static void probe_unchained(uint32_t probe_index);
 static bool isite_in(uint32_t addr, uint32_t len);
-static bool patched_range(uint32_t addr, uint32_t len) { return hook_range(addr, len) || probe_range(addr, len); }
+static bool code_patch_range(uint32_t addr, uint32_t len);
+static void code_site_note(uint32_t addr, uint32_t length, const unsigned char *old, const unsigned char *now);
+static bool patched_range(uint32_t addr, uint32_t len) {
+    return hook_range(addr, len) || probe_range(addr, len) || code_patch_range(addr, len);
+}
 
 static void op_hook(int argc, char **argv) {
     uint32_t target, stolen, flags, filter_value, nargs, snap_len, v[6];
@@ -941,11 +947,14 @@ static void op_unhook(int argc, char **argv) {
     h->act_mode = ACT_NONE;
     if (!read_bytes(h->target, now, 5)) return fail("unreadable");
     if (memcmp(now, expected, 5)) return fail("overwritten_by_another_patch");
-    int written = code_write_frozen(h->target, h->original, h->stolen);
+    unsigned char restore[16];
+    uint32_t chained, length = hook_restore_bytes(h, restore, &chained);
+    int written = code_write_frozen(h->target, restore, length);
     if (written) {
         h->active = 1; /* still hooked: keep recording until a later unhook succeeds */
         return fail(written == 1 ? "busy" : "unwritable");
     }
+    probe_unchained(chained);
     h->stolen = 0;
     h->native = NULL; /* a module's handler ends with its hook (K3 review I2) */
     h->removed_at = GetTickCount64();
@@ -1147,6 +1156,33 @@ static bool hook_on_probe_code(void) {
     return false;
 }
 static volatile uint32_t probe_limit, probe_mask = 0xFFFFFFFFu, probe_action, probe_exit_samples;
+/* The bytes an unhook writes back. A hook that chained on an entry probe saved the probe's jump; when that probe is
+ * no longer armed (disarmed while the hook held its target: it saw its jump changed and left it), writing the jump
+ * back would leave a live jump into probe code nothing tracks, and the next probe set would send the function's calls
+ * into another function's trampoline (round 4 M1). Then the probe's clean bytes go back instead, over the probe's
+ * stolen length, with the hook's own saved bytes after it. *probe_index names that probe, else UINT32_MAX. */
+static uint32_t hook_restore_bytes(const Hook *h, unsigned char *out, uint32_t *probe_index) {
+    *probe_index = UINT32_MAX;
+    memcpy(out, h->original, h->stolen);
+    uint32_t length = h->stolen;
+    if (!probe_code || length < 5 || h->original[0] != 0xE9) return length;
+    int32_t rel;
+    memcpy(&rel, h->original + 1, 4);
+    uint32_t dest = h->target + 5 + (uint32_t)rel, lo = (uint32_t)(uintptr_t)probe_code;
+    if (dest < lo || dest >= lo + probe_capacity * PROBE_STUB || (dest - lo) % PROBE_STUB) return length;
+    uint32_t i = (dest - lo) / PROBE_STUB;
+    if (i >= probe_used) return length;
+    const Probe *p = &probes[i];
+    if (p->mode != 0 || p->target != h->target || p->state == PROBE_ARMED || p->stolen > 16) return length;
+    memcpy(out, p->original, p->stolen);
+    if (p->stolen > length) length = p->stolen;
+    *probe_index = i;
+    return length;
+}
+/* After hook_restore_bytes gave a probe's clean bytes back: the probe is disarmed (a later arm may patch it again). */
+static void probe_unchained(uint32_t probe_index) {
+    if (probe_index != UINT32_MAX && probe_index < probe_used) probes[probe_index].state = PROBE_DISARMED;
+}
 
 uint32_t fnvmcp_probe_enter(uint32_t *fr) {
     DWORD error = GetLastError();
@@ -2028,11 +2064,22 @@ static void op_write(int argc, char **argv) {
     long length;
     if (argc != 3 || !parse_u32(argv[1], &address) || (length = unhex(argv[2])) <= 0 || length > (long)READ_MAX)
         return fail("bad_arguments");
+    /* Into code (fnv_patch, fnv_mem_write and their undos): never over a live int3, a hook's or a probe's bytes,
+     * and the change is kept as a code site so no int3 or coverage byte lands inside it later (round-4 review I2). */
+    MEMORY_BASIC_INFORMATION info;
+    bool code = VirtualQuery((LPCVOID)(uintptr_t)address, &info, sizeof(info)) && info.State == MEM_COMMIT &&
+                (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+    if (code && (isite_in(address, (uint32_t)length) || hook_range(address, (uint32_t)length) ||
+                 probe_range(address, (uint32_t)length)))
+        return fail("in_use");
     unsigned char *old = malloc((size_t)length);
     if (!old) return fail("out_of_memory");
     if (!read_bytes(address, old, (size_t)length)) fail("unreadable");
     else if (!write_bytes(address, argv[2], (size_t)length)) fail("unwritable");
-    else { emit("{\"ok\":true,\"old\":"); emit_hex(old, (size_t)length); emit("}"); }
+    else {
+        if (code) code_site_note(address, (uint32_t)length, old, (const unsigned char *)argv[2]);
+        emit("{\"ok\":true,\"old\":"); emit_hex(old, (size_t)length); emit("}");
+    }
     free(old);
 }
 static void call_guarded(uint32_t target, bool is_float, uint32_t ecx, uint32_t edx, const uint32_t *words, uint32_t count);
