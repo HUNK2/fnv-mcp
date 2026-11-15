@@ -1035,23 +1035,53 @@ class PlaceTools:
         self.live.journal.confirm(entry['id'], {'cell': cell, **pose})
         return {'ref': element.get('formId'), 'base': base['formId'], **self._rounded(pose), 'journalId': entry['id']}
 
-    def _ground(self, x, y, z, ignore=0):
-        """Height of the first surface under (x, y) from above z, or None; hits on `ignore` (the reference being
-        snapped, whose own collision a ray from above meets first, seen live) are passed through."""
+    def _ground(self, x, y, z, ignore=0, reach=200.0, sink=64.0):
+        """Height of the surface under the point (x, y, z), or None (see _ground_info)."""
+        return self._ground_info(x, y, z, ignore, reach, sink)[0]
+
+    def _ground_info(self, x, y, z, ignore=0, reach=200.0, sink=64.0):
+        """(surface height or None, the nearest surface left overhead or None) at (x, y, z). The ray starts `reach`
+        above z, but the first hit from above is not taken as the surface (P1: in a low interior that was the
+        ceiling):
+        - with `ignore` (the reference being snapped or checked) and its own collision met by the ray: a surface hit
+          before the object is wholly above it and is left overhead (a ceiling, a shelf); the first surface hit after
+          it is the one it rests on or is sunk into. A wholly buried object cannot be told from one under a ceiling
+          by vertical rays, so it counts as over whatever is under it; check names the overhead surface;
+        - otherwise (a point, or an object whose own collision the ray misses): the first surface at or below
+          z + `sink` (a curb, a stair tread or a slope the point is in), one above only when none is under it (a
+          point inside a hill)."""
         rays = self.hands.rays if self.hands else None
         if rays is None:
-            return None
+            return None, None
         for layer in (0x25, 0x26, 6):
-            top = z + 200.0
-            for _ in range(4):
+            top = z + reach
+            surfaces, own_at = [], None
+            for _ in range(8):
                 hit = rays.cast([((x, y, top), (x, y, z - 2000.0))], layer=layer, refs=bool(ignore))[0]
                 if not hit.get('point'):
                     break
+                h = hit['point'][2]
                 if ignore and hit.get('ref') == ignore:
-                    top = hit['point'][2] - 1.0
-                    continue
-                return hit['point'][2]
-        return None
+                    if own_at is None:
+                        own_at = len(surfaces)
+                else:
+                    surfaces.append(h)
+                    if h <= z:
+                        break             # a surface under the point: nothing below it matters
+                top = h - 1.0
+            if own_at is not None:
+                over = surfaces[own_at - 1] if own_at else None
+                after = surfaces[own_at:]
+                if after or surfaces:
+                    return (after[0] if after else None), over
+                continue
+            if surfaces:
+                below = [h for h in surfaces if h <= z + sink]
+                if not below:
+                    return surfaces[-1], None
+                over = [h for h in surfaces if h > z + sink]
+                return below[0], (over[-1] if over else None)
+        return None, None
 
     def at(self, base, position=None, near=None, offset=None, rotation=None, scale=None, snap=False):
         self.live.in_game()
@@ -1138,13 +1168,14 @@ class PlaceTools:
                 self.live.journal.add({'kind': 'place_pose', 'ref': form_id, 'source': source, **pose, 'undo': None})
                 return
 
-    def _surface(self, x, y, z, ignore=0, d=24.0):
+    def _surface(self, x, y, z, ignore=0, d=24.0, reach=200.0, sink=64.0):
         """The surface under (x, y): its height and the slope (dz/dx, dz/dy) from four more rays d units around
         (the pick rays give no normal). None when the centre ray finds nothing."""
-        g = self._ground(x, y, z, ignore=ignore)
+        g = self._ground(x, y, z, ignore=ignore, reach=reach, sink=sink)
         if g is None:
             return None
-        around = [self._ground(x + dx, y + dy, z, ignore=ignore) for dx, dy in ((d, 0), (-d, 0), (0, d), (0, -d))]
+        around = [self._ground(x + dx, y + dy, z, ignore=ignore, reach=reach, sink=sink)
+                  for dx, dy in ((d, 0), (-d, 0), (0, d), (0, -d))]
         xp, xm, yp, ym = [g if v is None or abs(v - g) > 4 * d else v for v in around]   # a step or a wall: flat
         return g, (xp - xm) / (2 * d), (yp - ym) / (2 * d)
 
@@ -1160,13 +1191,30 @@ class PlaceTools:
         x = math.asin(max(-1.0, min(1.0, ny / max(1e-6, math.cos(y)))))
         return math.degrees(x), math.degrees(y)
 
+    CLOSE_OVER = 64.0
+
+    def _ambiguous(self, g, over, z):
+        """A surface close over the object and the ground found well under it: it is buried under the one over it,
+        or floats under a low ceiling or shelf, and vertical rays cannot tell which (round-4 V2, review I1)."""
+        return g is not None and over is not None and over - z <= self.CLOSE_OVER and g < z - 5
+
+    @staticmethod
+    def _ambiguous_text(g, over, z):
+        return ('ambiguous: a surface %.0f units over it and the next %.0f under it: it is buried under the one over '
+                'it, or floats under a low ceiling or shelf' % (over - z, z - g))
+
     def snap(self, ref, align=False):
         self.live.in_game()
         r = self.live.resolve(ref)
         pose = self._pose(r['ptr'])
         x, y, z = pose['position']
-        surface = self._surface(x, y, z + 50, ignore=r['ptr']) if align else None
-        g = surface[0] if surface else self._ground(x, y, z + 50, ignore=r['ptr'])
+        centre, over = self._ground_info(x, y, z, ignore=r['ptr'], reach=250.0, sink=50.0)
+        if self._ambiguous(centre, over, z):
+            return {'ref': r['formId'], 'snapped': False, 'surface': round(centre, 2), 'over': round(over, 2),
+                    'note': self._ambiguous_text(centre, over, z) + '; snap does not guess. Look (fnv_photo), then '
+                            'move it with fnv_place nudge offset=[0, 0, dz].'}
+        surface = self._surface(x, y, z, ignore=r['ptr'], reach=250.0, sink=50.0) if align else None
+        g = surface[0] if surface else centre
         if g is None:
             return {'ref': r['formId'], 'snapped': False, 'note': 'No surface found under it on the pick layers.'}
         if not align:
@@ -1187,14 +1235,19 @@ class PlaceTools:
         r = self.live.resolve(ref)
         pose = self._pose(r['ptr'])
         x, y, z = pose['position']
-        g = self._ground(x, y, z + 50, ignore=r['ptr'])
+        g, over = self._ground_info(x, y, z, ignore=r['ptr'], reach=250.0, sink=50.0)
         issues = []
+        if self._ambiguous(g, over, z):
+            issues.append(self._ambiguous_text(g, over, z))
+        elif g is not None and z > g + 10:
+            issues.append('floats %.0f units above the surface under it' % (z - g))
         if g is not None and z < g - 5:
             issues.append('below the surface under it by %.0f units' % (g - z))
-        if g is not None and z > g + 10:
-            issues.append('floats %.0f units above the surface under it' % (z - g))
         if g is None:
             issues.append('no surface found under it')
+            if over is not None and over - z <= self.CLOSE_OVER:
+                issues.append('a surface %.0f units over it: a low ceiling or shelf, or it is buried under it'
+                              % (over - z))
         overlaps = self._overlaps(r['ptr'])
         for o in overlaps:
             issues.append('overlaps %s (%s, %.0f units inside its bound)' % (o['ref'], o['how'], o['depth']))
