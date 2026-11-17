@@ -105,6 +105,30 @@ def _cstr(raw):
 
 PATH_TAGS = {'MODL', 'MOD2', 'MOD3', 'MOD4', 'ICON', 'MICO', 'ICO2', 'MIC2', 'TX00', 'TX01', 'TX02', 'TX03',
              'TX04', 'TX05', 'NAM1', 'NIFZ'}
+PATHS_VERSION = 1      # of the asset_paths rows in the record index: a higher one makes every plugin read again
+
+
+def _scan_paths(path):
+    """([(path, record type, form id, editor id, tag)], unreadable notes) of one plugin: the files it names."""
+    from .esp import codec
+    found, notes = [], []
+    try:
+        plugin = codec.parse(Path(path).read_bytes())
+        for rec, _labels in plugin.records():
+            try:
+                subs = rec.subrecords
+            except Exception:  # noqa: BLE001 - a record whose compressed data is bad
+                notes.append(':%08X' % rec.form_id)
+                continue
+            for sub in subs:
+                if sub.tag in PATH_TAGS and sub.data:
+                    text = _norm(sub.data.split(b'\0', 1)[0].decode('cp1252', 'replace'))
+                    found.append((text, rec.type, rec.form_id, rec.editor_id, sub.tag))
+    except Exception as exc:  # noqa: BLE001 - kept like a good plugin: read again only when the file changes
+        notes.append(': %s' % str(exc)[:80])
+    return found, notes
+
+
 NOT_AV = ('Data', 'Property', 'ExtraData', 'Controller', 'Interpolator', 'SkinInstance', 'SkinPartition',
           'Partition', 'Palette', 'Sequence')
 
@@ -592,45 +616,51 @@ class AssetTools:
 
     def users(self, path, limit=100):
         """Records in the load order that name this file (models, icons, texture sets): which record to fix when a
-        file is bad."""
+        file is bad. The paths each plugin names are kept in the record index (tables asset_paths, path_files) under
+        the plugin's file id, which changes when the file does: a new server reads no plugin."""
         from .fnv_data import load_order
-        from .esp import codec
         want = _norm(path)
         bare = want.split('\\', 1)[1] if want.split('\\', 1)[0] in ('meshes', 'textures', 'sound', 'music') else want
-        rows = []
+        rows, unreadable = [], []
         entries = load_order(self.live.project, self.records.data._live_plugins())
-        cache = self.__dict__.setdefault('_path_users', {})
-        unreadable = []
+        db = self.records.db
         for e in entries:
             if not e.get('path'):
                 continue
-            stamp = os.path.getmtime(e['path'])
-            held = cache.get(e['path'])
-            if not held or held[0] != stamp:
-                table = {}
-                try:
-                    plugin = codec.parse(Path(e['path']).read_bytes())
-                    for rec, _labels in plugin.records():
-                        try:
-                            subs = rec.subrecords
-                        except Exception:  # noqa: BLE001 - a record whose compressed data is bad
-                            unreadable.append('%s:%08X' % (e['name'], rec.form_id))
-                            continue
-                        for sub in subs:
-                            if sub.tag in PATH_TAGS and sub.data:
-                                text = _norm(sub.data.split(b'\0', 1)[0].decode('cp1252', 'replace'))
-                                table.setdefault(text, []).append((rec.type, rec.form_id, rec.editor_id, sub.tag))
-                except Exception as exc:  # noqa: BLE001 - one bad plugin does not stop the search
-                    unreadable.append('%s: %s' % (e['name'], str(exc)[:80]))
-                held = cache[e['path']] = (stamp, table)
-            for key in {want, bare}:
-                for rtype, fid, edid, tag in held[1].get(key, []):
-                    rows.append({'plugin': e['name'], 'type': rtype, 'formId': '%08X' % fid, 'editorId': edid,
-                                 'field': tag})
+            try:
+                file_id, notes = self._plugin_paths(db, e['path'])
+            except Exception as exc:  # noqa: BLE001 - one bad plugin does not stop the search
+                unreadable.append('%s: %s' % (e['name'], str(exc)[:80]))
+                continue
+            unreadable += ['%s%s' % (e['name'], note) for note in notes]
+            for rtype, fid, edid, tag in db.execute('select type, form_id, edid, tag from asset_paths where file = ? '
+                                                    'and path in (?, ?) order by rowid', (file_id, want, bare)):
+                rows.append({'plugin': e['name'], 'type': rtype, 'formId': '%08X' % fid, 'editorId': edid,
+                             'field': tag})
         return {'path': want, 'users': rows, 'count': len(rows), 'unreadable': unreadable[:20] or None,
                 'how': 'every record of the load order plugins with a model, icon or texture field naming the file '
                        '(form ids as in each plugin, as fnv_record action=find shows them); each plugin is read once and '
-                       'kept until its file changes'}
+                       'kept in the record index until its file changes'}
+
+    def _plugin_paths(self, db, path):
+        """(file id, unreadable notes) of a plugin whose named paths are in the index, reading it first if not."""
+        from .fnv_state import write_txn
+        file_id = self.records.data.index.ensure(path)
+        row = db.execute('select version, unreadable from path_files where file = ?', (file_id,)).fetchone()
+        if row and row[0] >= PATHS_VERSION:
+            return file_id, json.loads(row[1] or '[]')
+        found, notes = _scan_paths(path)
+        if db.in_transaction:      # never build on top of a transaction an earlier failure left open
+            db.rollback()
+        with write_txn(db):        # one transaction: another server that built it meanwhile is kept
+            row = db.execute('select version, unreadable from path_files where file = ?', (file_id,)).fetchone()
+            if row and row[0] >= PATHS_VERSION:
+                return file_id, json.loads(row[1] or '[]')
+            db.execute('delete from asset_paths where file = ?', (file_id,))
+            db.executemany('insert into asset_paths values (?, ?, ?, ?, ?, ?)', ((file_id,) + r for r in found))
+            db.execute('insert or replace into path_files values (?, ?, ?, ?, ?)',
+                       (file_id, PATHS_VERSION, time.time(), len(found), json.dumps(notes)))
+        return file_id, notes
 
     def queue(self, wait_idle=False, timeout=30):
         self.live.ready()

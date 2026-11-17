@@ -253,7 +253,7 @@ class RecordIndex:
 
     @staticmethod
     def _drop_refs(db, file_id):
-        for table in ('refs', 'ref_files'):
+        for table in ('refs', 'ref_files', 'asset_paths', 'path_files'):    # the per-file tables of fnv_records
             if db.execute("select 1 from sqlite_master where type = 'table' and name = ?", (table,)).fetchone():
                 db.execute('delete from %s where file = ?' % table, (file_id,))
 

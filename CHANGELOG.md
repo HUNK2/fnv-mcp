@@ -78,7 +78,9 @@ The first version of the fork. The entries below this one are geck-mcp-nv's own 
   changes, the archive file lists until an archive changes, and the game's plugin list once per game process:
   `fnv_save_inspect` 1,594 ms to 392 ms, `fnv_asset_check` 134 ms to 4 ms, `fnv_asset nif` and `dds` 135 ms to
   6 ms; the conflicts of one plugin (`fnv_conflicts plugin=`) join from that plugin's records instead of grouping
-  the whole load order: `fnv_author check` 549 ms to 12 ms.
+  the whole load order: `fnv_author check` 549 ms to 12 ms. `fnv_asset users` kept the file paths each plugin
+  names in memory only, so the first call of every server read the whole load order (7 to 8 s); they are now kept
+  in the record index per plugin file and dropped with it when the file changes: 35 ms on a new server.
 - **Hardening:** `fnv_run_script` refuses a quit anywhere in the script; the bridge checks that the companion
   pipe belongs to the game (`PIPE_NOT_GAME`); decompression is capped at 256 MiB; `fnv_func` regex searches
   refuse nested repeats and stop after 20 seconds; Windows tools are run from the system folder; a cached engine

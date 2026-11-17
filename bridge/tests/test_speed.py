@@ -585,6 +585,69 @@ class ArchiveNameSpeed(unittest.TestCase):
         self.assertIsNone(index.find('textures\\t.dds'))
 
 
+class AssetUsersSpeed(unittest.TestCase):
+    """fnv_asset users kept the file paths each plugin names in memory only: the first call of every server parsed
+    every plugin of the load order in full, 7 s on a real one. The paths now live in the record index, per plugin
+    file, and go with the plugin's other rows when the file changes."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)   # per-thread connections close on GC
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.mo2, data_dir = root / 'MO2', root / 'Game' / 'Data'
+        profile = self.mo2 / 'profiles' / 'Dev'
+        for folder in (profile, data_dir, self.mo2 / 'mods' / 'Mod'):
+            folder.mkdir(parents=True)
+        self.project = SimpleNamespace(fnv=SimpleNamespace(mo2_root=str(self.mo2), mo2_profile='Dev'),
+                                       game_root=str(root / 'Game'), state_dir=str(root / 'state'))
+        write_plugin(data_dir / 'FalloutNV.esm', [
+            record('STAT', 0x800, edid('Rock'), sub('MODL', b'Clutter\\Rock.nif\0')),
+            record('STAT', 0x801, edid('Crate'), sub('MODL', b'clutter\\crate.nif\0'))])
+        self.mod = self.mo2 / 'mods' / 'Mod' / 'Mod.esp'
+        self.write_mod(b'clutter\\rock.nif')
+        (profile / 'modlist.txt').write_text('+Mod\n', encoding='utf-8')
+        (profile / 'plugins.txt').write_text('*FalloutNV.esm\n*Mod.esp\n', encoding='utf-8')
+        (profile / 'loadorder.txt').write_text('FalloutNV.esm\nMod.esp\n', encoding='utf-8')
+
+    def write_mod(self, model):
+        write_plugin(self.mod, [record('MISC', 0x01000800, edid('Pebble'), sub('MODL', model + b'\0'),
+                                       sub('ICON', b'interface\\pebble.dds\0'))], masters=['FalloutNV.esm'])
+
+    def server(self):
+        """The asset tools of a newly started server: nothing kept in memory, the same state folder."""
+        from geck_mcp.fnv_create import AssetTools
+        data = DataTools(self.project)
+        self.addCleanup(lambda: data.index.db.close())
+        return AssetTools(SimpleNamespace(project=self.project), fnv_records.RecordsTools(data))
+
+    def users(self, tools, path):
+        """(users as (plugin, form id, field), plugins parsed in full) of one call."""
+        from geck_mcp.esp import codec
+        with mock.patch.object(codec, 'parse', wraps=codec.parse) as parse:
+            out = tools.users(path)
+        return sorted((u['plugin'], u['formId'], u['field']) for u in out['users']), parse.call_count
+
+    def test_a_new_server_reads_no_plugin(self):
+        first, parsed = self.users(self.server(), 'meshes/clutter/rock.nif')
+        self.assertEqual(first, [('FalloutNV.esm', '00000800', 'MODL'), ('Mod.esp', '01000800', 'MODL')])
+        self.assertEqual(parsed, 2)
+        again, parsed = self.users(self.server(), 'Meshes\\Clutter\\Rock.nif')
+        self.assertEqual(again, first)
+        self.assertEqual(parsed, 0, 'a new server parsed the plugins again')
+
+    def test_a_changed_plugin_is_read_again(self):
+        self.users(self.server(), 'meshes/clutter/rock.nif')
+        time.sleep(0.01)
+        self.write_mod(b'clutter\\pebble.nif')
+        os.utime(self.mod, None)
+        tools = self.server()
+        rock, parsed = self.users(tools, 'meshes/clutter/rock.nif')
+        self.assertEqual(rock, [('FalloutNV.esm', '00000800', 'MODL')])
+        self.assertEqual(parsed, 1, 'only the changed plugin is read')
+        self.assertEqual(self.users(tools, 'meshes/clutter/pebble.nif')[0], [('Mod.esp', '01000800', 'MODL')])
+        self.assertEqual(self.users(tools, 'textures/interface/pebble.dds')[0], [('Mod.esp', '01000800', 'ICON')])
+
+
 class LivePluginListSpeed(unittest.TestCase):
     """With the game running, every record lookup also asked the game for its plugin list: a ping and two requests,
     about two frames, 200 times for one save. A game's plugins are fixed once it has loaded them, so the list is

@@ -153,6 +153,12 @@ class RecordsTools:
                     offset integer, tag text, to_owner text, to_local integer);
                 create index if not exists refs_to on refs(to_owner, to_local);
                 create index if not exists refs_file on refs(file);
+                create table if not exists path_files(file integer primary key, version integer, built real,
+                    paths integer, unreadable text);
+                create table if not exists asset_paths(file integer, path text, type text, form_id integer,
+                    edid text, tag text);
+                create index if not exists asset_paths_path on asset_paths(path);
+                create index if not exists asset_paths_file on asset_paths(file);
             ''')
             self._db_ready = True
         return db
