@@ -35,6 +35,14 @@ class FnvSettings(BaseModel):
     # Your own unpacked copy of FalloutNV.exe 1.4.0.525 (the Steam exe's code is encrypted on disk): the
     # reference fnv_patch_map compares the running game's code with. Read locally, never copied.
     clean_exe: Path | None = None
+    # The direct install (no MO2: the game started by Steam or nvse_loader.exe, see fnv_layout.py). It is the user's
+    # real game, so the tools that write into its Data folder, plugins.txt or ini, or load or overwrite its saves,
+    # refuse unless this is true. It has no effect on the MO2 dev profile.
+    allow_direct_install_changes: bool = False
+    # Where the direct install keeps Fallout.ini and the saves (default: Documents\My Games\FalloutNV) and its
+    # plugins.txt (default: %LOCALAPPDATA%\FalloutNV). Only needed when those folders are somewhere else.
+    game_user_dir: Path | None = None
+    game_appdata_dir: Path | None = None
 
 
 class Project(BaseModel):
@@ -149,7 +157,8 @@ class Project(BaseModel):
             def resolve(value):
                 value = Path(value).expanduser()
                 return str((value if value.is_absolute() else path.parent / value).resolve())
-            for key in ('engine_map', 'decomp_root', 'symdb', 'research_dir', 'mo2_root', 'zig', 'tests_dir', 'clean_exe'):
+            for key in ('engine_map', 'decomp_root', 'symdb', 'research_dir', 'mo2_root', 'zig', 'tests_dir', 'clean_exe',
+                        'game_user_dir', 'game_appdata_dir'):
                 if fnv.get(key):
                     fnv[key] = resolve(fnv[key])
             fnv['crash_dirs'] = [resolve(v) for v in fnv.get('crash_dirs', [])]

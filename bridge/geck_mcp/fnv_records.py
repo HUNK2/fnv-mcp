@@ -22,7 +22,7 @@ from pathlib import Path
 from .esp import assets
 from .esp.codec import inflate
 from .fnv_data import DataError, NOT_FORMS, STRING_TAGS, load_order, read_record
-from .fnv_link import profile_locked
+from .fnv_state import locked
 from .fnv_state import atomic_write, write_txn
 
 REFS_VERSION = 4  # 3: text-or-form tags (RNAM...) are scanned when they are not text; 4: or when the 4 bytes name a record (R9)
@@ -457,16 +457,10 @@ class RecordsTools:
 
     def _asset_index(self, entries):
         project = self.data.project
-        fnv = project.fnv
+        from . import fnv_layout
+        layout = fnv_layout.current(project)
         data_dir = Path(project.game_root) / 'Data'
-        roots = []
-        if fnv and fnv.mo2_root and fnv.mo2_profile:
-            mods_dir = Path(fnv.mo2_root) / 'mods'
-            modlist = Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile / 'modlist.txt'
-            if modlist.exists():
-                for line in modlist.read_text(encoding='utf-8', errors='replace').splitlines():
-                    if line.startswith('+') and (mods_dir / line[1:]).is_dir():
-                        roots.append(mods_dir / line[1:])
+        roots = [r for r in layout.loose_roots() if r != layout.data_dir] if layout.configured else []
         bsas = []
         for root in roots + [data_dir]:
             bsas.extend(sorted(root.glob('*.bsa')))
@@ -495,25 +489,33 @@ class RecordsTools:
                                                                                 for c in name):
                     raise ValueError('%s name %r: no control characters, no / or \\, not only dots and spaces'
                                      % (what, name))
-        fnv = self.data.project.fnv
-        if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
-            raise DataError('NO_MO2_PROFILE', 'Set fnv.mo2_root and fnv.mo2_profile in the project file')
-        with profile_locked(fnv.mo2_root, fnv.mo2_profile):
-            return self._profile_set(mods, plugins, game, dry_run)
-
-    def _profile_set(self, mods, plugins, game, dry_run):
+        from . import fnv_layout
         project = self.data.project
-        fnv = project.fnv
-        if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
+        if game is None:
+            layout = fnv_layout.current(project)
+        else:     # a game object without layout(): the configured one
+            layout = game.layout() if hasattr(game, 'layout') else fnv_layout.configured(project)
+        if layout.kind == fnv_layout.DIRECT and mods:
+            raise DataError('NO_MODS', 'The direct install has no mods to switch (that is Mod Organizer 2); change '
+                            'plugins only.')
+        if layout.kind == fnv_layout.MO2 and not layout.configured:
             raise DataError('NO_MO2_PROFILE', 'Set fnv.mo2_root and fnv.mo2_profile in the project file')
+        if not dry_run:
+            fnv_layout.guard(layout, 'change plugins.txt')
+        with locked(layout.lock_path(project.state_dir), 30.0):
+            return self._profile_set(mods, plugins, game, dry_run, layout)
+
+    def _profile_set(self, mods, plugins, game, dry_run, layout):
+        project = self.data.project
         if game is not None and game.process(fresh=True):
-            raise DataError('GAME_RUNNING', 'Quit the game first: MO2 reads the profile when the game starts')
-        profile = Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile
-        mods_dir = Path(fnv.mo2_root) / 'mods'
-        files = {n: profile / n for n in ('modlist.txt', 'plugins.txt', 'loadorder.txt')}
+            raise DataError('GAME_RUNNING', 'Quit the game first: the plugin lists are read when the game starts')
+        files = {n: layout.lists_dir / n for n in ('plugins.txt', 'loadorder.txt')}
+        if layout.kind == 'mo2':
+            files = {'modlist.txt': layout.modlist, **files}
         text = {n: (p.read_text(encoding='utf-8').splitlines() if p.exists() else []) for n, p in files.items()}
         changes, errors = [], []
-        modlist = text['modlist.txt']
+        modlist = text.get('modlist.txt', [])
+        mods_dir = layout.mods_dir
         for name, on in (mods or {}).items():
             idx = next((i for i, l in enumerate(modlist) if l[:1] in '+-' and l[1:].lower() == name.lower()), None)
             if idx is None:
@@ -552,7 +554,8 @@ class RecordsTools:
                 if p.exists():
                     shutil.copy2(p, backup / n)
             for n, p in files.items():
-                if text[n] or p.exists():
+                # the direct install's load order is file times: a loadorder.txt that is not there is not made
+                if p.exists() or (text[n] and (layout.kind == 'mo2' or n != 'loadorder.txt')):
                     atomic_write(p, '\n'.join(text[n]) + '\n')
         after = load_order(project) if changes and not dry_run else None
         problems = [e for e in (after or []) if e.get('missingMasters')]

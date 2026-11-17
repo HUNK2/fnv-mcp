@@ -116,12 +116,15 @@ def _header(path):
 
 
 def load_order(project, live_plugins=None):
-    """[{index, name, path, mod, active, masters}] from the MO2 dev profile (or the running game's list). The caller
-    owns the list it gets: it may change it."""
-    fnv = project.fnv
-    if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
+    """[{index, name, path, mod, active, masters}] from the MO2 dev profile, or the direct install's plugins.txt and
+    Data folder (or the running game's list). The caller owns the list it gets: it may change it."""
+    from . import fnv_layout
+    layout = fnv_layout.current(project)
+    if layout.kind == fnv_layout.DIRECT:
+        return _direct_load_order(layout, live_plugins)
+    if not layout.configured:
         raise DataError('NO_MO2_PROFILE', 'Set fnv.mo2_root and fnv.mo2_profile in the project file')
-    root, profile = Path(fnv.mo2_root), Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile
+    root, profile = layout.mo2_root, layout.profile_dir
     data_dir = Path(project.game_root) / 'Data'
     key = (str(root), str(profile), str(data_dir), tuple(sorted(live_plugins.items())) if live_plugins else None)
     # The profile files by what they say: a mod turned off ('+' to '-') keeps the size, and a write in the same tick of
@@ -180,6 +183,49 @@ def _load_order(root, profile, data_dir, live_plugins, stamps):
                 entry['error'] = str(e)
         else:
             entry['error'] = 'file not found in the MO2 mods or the game Data folder'
+        out.append(entry)
+    names = {e['name'].lower() for e in out if e['active']}
+    for e in out:
+        missing = [m for m in e.get('masters', []) if m.lower() not in names]
+        if e['active'] and missing:
+            e['missingMasters'] = missing
+    return out
+
+
+def _direct_load_order(layout, live_plugins):
+    """The direct install, as the game itself orders it without a mod manager: every plugin in Data, master files
+    (ESM flag) first, each group by file time; active = listed in plugins.txt (FalloutNV.esm always), or in the running
+    game's list when given."""
+    data_dir = layout.data_dir
+    listed = set()
+    if layout.plugins_txt.exists():
+        listed = {l.strip().lstrip('*').lower() for l in
+                  layout.plugins_txt.read_text(encoding='utf-8', errors='replace').splitlines()
+                  if l.strip() and not l.strip().startswith('#')}
+    files = []
+    try:
+        candidates = [e for e in os.scandir(data_dir) if e.is_file() and e.name.lower().endswith(('.esm', '.esp'))]
+    except OSError:
+        candidates = []
+    for e in candidates:
+        head = _header(e.path) or b''
+        master = (struct.unpack_from('<I', head, 8)[0] & 1) if len(head) >= 12 and head[:4] == b'TES4' \
+            else e.name.lower().endswith('.esm')
+        files.append((0 if master else 1, e.stat().st_mtime, e.name.lower(), e.name, Path(e.path)))
+    files.sort()
+    live = {p.lower(): i for p, i in (live_plugins or {}).items()} if live_plugins else None
+    out, index = [], 0
+    for _, _, low, name, path in files:
+        active = (low in listed or low == 'falloutnv.esm') if live is None else low in live
+        entry = {'name': name, 'active': active, 'path': str(path), 'mod': None}
+        if active:
+            entry['index'] = live[low] if live is not None else index
+            entry['prefix'] = '%02X' % entry['index']
+            index += 1
+        try:
+            entry['masters'] = plugin_masters(path)
+        except (OSError, codec.FormatError) as e:
+            entry['error'] = str(e)
         out.append(entry)
     names = {e['name'].lower() for e in out if e['active']}
     for e in out:

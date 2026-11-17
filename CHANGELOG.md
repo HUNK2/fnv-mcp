@@ -13,6 +13,22 @@ The first version of the fork. The entries below this one are geck-mcp-nv's own 
   puts code or files into it or its mod profile needs `full`. Paths from tool arguments stay inside the project's
   folders; package names are plain names; `fnv_game quit` closes only the game `fnv_game launch` started; tools never take a
   compiler path.
+- **Without Mod Organizer 2:** the tools attach to a game started by Steam's Play button or `nvse_loader.exe`
+  (`fnv_companion_install target=game` puts the companion into `Data\NVSE\Plugins`; `fnv_game launch via=direct`
+  starts it from the game folder). `fnv.mo2_root` and `fnv.mo2_profile` are optional. A running game is the MO2
+  dev profile when MO2's file system is loaded in it, else the direct install; `fnv_status` says which and the
+  folders in use, and saves, `Fallout.ini`, `plugins.txt`, the load order, setup check and plugin installs follow
+  it. On the direct install, the tools that change its files or load its saves refuse unless
+  `fnv.allow_direct_install_changes` is true.
+- **`fnv_place` snaps by the object's bounds:** `snap`, and `at`/`array` with `snap=true`, rest the bottom of
+  the object's bounds on the surface instead of its origin, and `check` reports floating and sinking by that
+  bottom. A shack whose origin is at its centre sank half into the ground before.
+- **`fnv_place` snaps by the whole footprint:** rays are cast over the object's bounds, not one under its origin,
+  and `rest=low` (default) puts it on the lowest ground under it, so no corner floats on a slope and a boulder
+  under its middle is no longer its seat (`rest=centre` keeps the old seat, `high` sinks nothing). The result
+  reports how much sank or floats and any overhang, warns on steep ground with a suggested heading, and refuses
+  ground rising more than the object's height (`TOO_STEEP`). `check` judges the footprint; `snap align=true` fits
+  the slope over it and no longer sinks aligned objects a few units.
 - **No private data needed:** the watch hooks find their functions by address, so an engine map built without
   the fnvsym proof table is enough; the `fnv_name_*` tools are an optional extra that needs `FNVSYM_ROOT`.
 - **A project file for the game alone** (`projects/example-fnv.json`): the GECK settings are optional and the

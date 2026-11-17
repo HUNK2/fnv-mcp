@@ -25,7 +25,8 @@ tool list by the tests.
 
 - **Windows** 10 or 11 (Windows only), Python 3.12 and an MCP client (Claude Code, Claude Desktop, Codex...).
 - Fallout: New Vegas from Steam (FalloutNV.exe 1.4.0.525), xNVSE, JIP LN NVSE, Yvile's Crash Logger and a portable
-  Mod Organizer 2 instance for a dev profile of its own.
+  Mod Organizer 2 instance for a dev profile of its own; or, without MO2, the game as Steam installed it, started
+  with Steam's Play button (the tools then refuse to change its files unless you allow it).
 - Zig 0.14.1, to build the engine companion that runs inside the game.
 - A checkout of the [fnv_decomp](https://github.com/momusdigital/fnv_decomp) decompilation, from which you generate
   the engine map on your own machine.

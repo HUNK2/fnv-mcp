@@ -385,9 +385,14 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_anim': {'action': 'What to do: sta
                'spacing': 'For action=array: distance between neighbouring objects in game units.',
                'columns': 'For action=array shape=grid: number of columns per row.',
                'radius': 'For action=array shape=circle: circle radius in game units.',
-               'snap': 'If true, drop the placed object onto the surface below it.',
+               'snap': 'If true, drop the placed object onto the surface below it (the bottom of its bounds on the '
+                       'ground under its footprint).',
+               'rest': 'For snapping (at/array with snap=true, and action=snap): low (default) rests the bottom on '
+                       'the lowest ground under the footprint so no corner floats; centre on the ground under its '
+                       'origin; high on the highest ground so nothing sinks.',
                'local': "For action=nudge: if true, the offset is in the object's own axes instead of world axes.",
-               'align': 'For action=snap: if true, also tilt the object to the slope of the surface at its heading.',
+               'align': 'For action=snap: if true, also tilt the object to the slope of the ground under its '
+                        'footprint at its heading.',
                'export': 'For action=at: false makes a test placement (PlaceAtMe near a ref) that fnv_author export '
                          'leaves out. Default true.',
                'distance': 'For action=at with export=false: how far from the near ref to place, in game units.',

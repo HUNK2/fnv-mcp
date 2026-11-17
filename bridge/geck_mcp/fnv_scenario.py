@@ -523,6 +523,8 @@ class ScenarioRunner:
                 if kind == 'continue':
                     from .fnv_game import parse_start
                     kind, value = parse_start('continue', self.game.saves_dir)
+                if kind == 'save':
+                    self.game.guard_direct('load a save of your real game')
                 line = 'load "%s"' % value if kind == 'save' else 'coc %s' % value
                 if kind == 'coc':  # the closer goes in the same request: once the cell loads the main loop is busy
                     first, _ = self.game.link.batch([('every', '12C', '%X' % 90000, fnv_link.hexs(self.game.ARRIVAL_CLOSER)),

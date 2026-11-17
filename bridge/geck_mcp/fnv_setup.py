@@ -78,30 +78,42 @@ def setup_check(project):
     add('xNVSE', bool(nvse_version) and (game / 'nvse_loader.exe').exists(), 'nvse_1_4.dll %s' % (nvse_version or 'not found'),
         'Install xNVSE 6.4.9 or newer into the game folder (nvse_loader.exe and nvse_1_4.dll next to FalloutNV.exe).')
 
-    mo2 = Path(fnv.mo2_root) if fnv.mo2_root else None
-    profile = mo2 / 'profiles' / fnv.mo2_profile if mo2 and fnv.mo2_profile else None
-    add('MO2 instance', bool(mo2 and (mo2 / 'ModOrganizer.exe').exists() and profile and profile.is_dir()),
-        '%s, profile %s' % (mo2 or 'fnv.mo2_root not set', fnv.mo2_profile or 'not set'),
-        'Create a portable Mod Organizer 2 instance for New Vegas with a separate dev profile, and set fnv.mo2_root '
-        'and fnv.mo2_profile in the project file.')
+    from . import fnv_layout
+    layout = fnv_layout.current(project)
+    direct = not (fnv.mo2_root and fnv.mo2_profile)
+    mo2 = None if direct else Path(fnv.mo2_root)
+    profile = None if direct else mo2 / 'profiles' / fnv.mo2_profile
+    if direct:
+        add('install', True, 'direct install (no MO2): the game folder, %s and %s; changes to them %s'
+            % (layout.user_dir, layout.appdata_dir,
+               'allowed' if layout.changes_allowed else 'refused (fnv.allow_direct_install_changes is false)'))
+    else:
+        add('MO2 instance', bool((mo2 / 'ModOrganizer.exe').exists() and profile.is_dir()),
+            '%s, profile %s' % (mo2, fnv.mo2_profile),
+            'Create a portable Mod Organizer 2 instance for New Vegas with a separate dev profile, and set fnv.mo2_root '
+            'and fnv.mo2_profile in the project file.')
     if mo2 and (mo2 / 'ModOrganizer.ini').exists():
         ini = (mo2 / 'ModOrganizer.ini').read_text(encoding='utf-8', errors='replace')
         titles = re.findall(r'^\d+\\title=(.+)$', ini, re.M)
         wanted = fnv.mo2_executable or 'NVSE'
         add('MO2 executable', wanted in titles, 'executables: %s' % ', '.join(titles),
             'Add an MO2 executable titled "%s" that runs nvse_loader.exe.' % wanted)
-    plugins = []
-    if mo2:
+    nvse_plugins = Path(project.game_root) / 'Data' / 'NVSE' / 'Plugins'
+    if direct:
+        plugins = [p.name.lower() for p in nvse_plugins.glob('*.dll')]
+        where, how = 'in %s' % nvse_plugins, 'into %s' % nvse_plugins
+    else:
         plugins = [p.name.lower() for p in (mo2 / 'mods').glob('*/NVSE/Plugins/*.dll')]
-    add('JIP LN NVSE', 'jip_nvse.dll' in plugins, 'in the MO2 mods' if 'jip_nvse.dll' in plugins else 'not found',
-        'Install JIP LN NVSE as an MO2 mod (used for CloseActiveMenu, effects and input).')
+        where, how = 'in the MO2 mods', 'as an MO2 mod'
+    add('JIP LN NVSE', 'jip_nvse.dll' in plugins, where if 'jip_nvse.dll' in plugins else 'not found',
+        'Install JIP LN NVSE %s (used for CloseActiveMenu, effects and input).' % how)
     add('crash logger', 'crashlogger.dll' in plugins, 'Yvile\'s Crash Logger' if 'crashlogger.dll' in plugins else 'not found',
-        'Install Yvile\'s Crash Logger as an MO2 mod (the crash doctor reads its logs).')
-    if profile:
-        ini = profile / 'Fallout.ini'
-        text = ini.read_text(encoding='utf-8', errors='replace') if ini.exists() else ''
-        add('keep running unfocused', bool(re.search(r'^bAlwaysActive=1', text, re.M)), str(ini),
-            'Set bAlwaysActive=1 under [General] in the dev profile\'s Fallout.ini.')
+        'Install Yvile\'s Crash Logger %s (the crash doctor reads its logs).' % how)
+    ini = (layout.user_dir if direct else profile) / 'Fallout.ini'
+    text = ini.read_text(encoding='utf-8', errors='replace') if ini.exists() else ''
+    add('keep running unfocused', bool(re.search(r'^bAlwaysActive=1', text, re.M | re.I)), str(ini),
+        'Set bAlwaysActive=1 under [General] in %s.' % ('Fallout.ini' if direct else 'the dev profile\'s Fallout.ini'),
+        required=not direct)
 
     from . import fnv_link
     try:
@@ -111,9 +123,10 @@ def setup_check(project):
         zig, zig_version = None, None
     add('Zig 0.14.1', zig_version == '0.14.1', '%s %s' % (zig, zig_version) if zig else 'fnv.zig not set',
         'Install Zig 0.14.1 and set fnv.zig (or FNV_MCP_ZIG); it builds the engine companion.')
-    installed = mo2 / 'mods' / fnv_link.MOD_NAME / 'NVSE/Plugins' / fnv_link.DLL_NAME if mo2 else None
+    installed = mo2 / 'mods' / fnv_link.MOD_NAME / 'NVSE/Plugins' / fnv_link.DLL_NAME if mo2 \
+        else nvse_plugins / fnv_link.DLL_NAME
     current = None
-    receipt = Path(project.state_dir) / 'engine/install.json'
+    receipt = Path(project.state_dir) / ('engine/install.json' if mo2 else fnv_link.GAME_RECEIPT)
     if receipt.exists():
         import json
         try:
@@ -121,8 +134,9 @@ def setup_check(project):
         except ValueError:
             current = None
     add('engine companion', bool(installed and installed.exists()),
-        '%s%s' % (installed or 'no MO2 instance', ' (installed build %s)' % current.get('build_id') if current else ''),
-        'With the game closed, call fnv_companion_install.')
+        '%s%s' % (installed, ' (installed build %s)' % current.get('build_id') if current else ''),
+        'With the game closed, call fnv_companion_install.' if mo2 else
+        "With the game closed, call fnv_companion_install with target='game'.")
     if current and installed and installed.exists():
         same = fnv_link.file_digest(installed) == current.get('sha256')
         sources = current.get('source') == fnv_link.source_hashes()

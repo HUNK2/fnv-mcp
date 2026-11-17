@@ -534,6 +534,64 @@ def install(mo2_root, profile, receipt, state_dir):
     return {'installed': True, 'unchanged': False, 'target': str(target), 'backup': record['backup']}
 
 
+GAME_RECEIPT = 'engine/install-game.json'
+
+
+def install_game(game_root, receipt, state_dir):
+    """Install the DLL into the game folder's Data\\NVSE\\Plugins, for a game started without MO2 (Steam or
+    nvse_loader.exe). Game must be closed. A different file it replaces is backed up; the receipt
+    (state engine/install-game.json) records the target and digest that uninstall_game checks."""
+    target = Path(game_root) / 'Data' / 'NVSE' / 'Plugins' / DLL_NAME
+    source = Path(receipt['dll'])
+    if receipt.get('defines'):
+        raise LinkError('TEST_BUILD', 'A build with defines %s is a test build and is never installed' % receipt['defines'])
+    if file_digest(source) != receipt['sha256']:
+        raise LinkError('BUILD_CHANGED', 'The built DLL changed after its build receipt was written')
+    record_path = Path(state_dir) / GAME_RECEIPT
+    backup = None
+    if target.exists():
+        if file_digest(target) == receipt['sha256']:
+            if not record_path.exists():
+                _write_game_receipt(record_path, receipt, target, None)
+            return {'installed': True, 'unchanged': True, 'target': str(target), 'install': 'game'}
+        backup = Path(state_dir) / 'engine/backups' / ('%d-game-%s' % (time.time(), DLL_NAME))
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_bytes(target.read_bytes())
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_suffix('.tmp')
+    temp.write_bytes(source.read_bytes())
+    os.replace(temp, target)
+    _write_game_receipt(record_path, receipt, target, backup)
+    return {'installed': True, 'unchanged': False, 'target': str(target), 'backup': str(backup) if backup else None,
+            'install': 'game'}
+
+
+def _write_game_receipt(path, receipt, target, backup):
+    record = {**receipt, 'target': str(target), 'installed_at': time.time(), 'backup': str(backup) if backup else None}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+
+
+def uninstall_game(game_root, state_dir):
+    """Remove the companion from the game folder, only when it is the file install_game put there (same digest as
+    its receipt). Game must be closed."""
+    target = Path(game_root) / 'Data' / 'NVSE' / 'Plugins' / DLL_NAME
+    record_path = Path(state_dir) / GAME_RECEIPT
+    if not target.exists():
+        record_path.unlink(missing_ok=True)
+        return {'removed': False, 'target': str(target), 'note': 'not installed in the game folder'}
+    try:
+        record = json.loads(record_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        record = {}
+    if record.get('sha256') != file_digest(target):
+        raise LinkError('NOT_OURS', '%s is not the file fnv_companion_install put there (no receipt, or it changed '
+                        'since); remove it yourself if you want it gone' % target, {'target': str(target)})
+    target.unlink()
+    record_path.unlink(missing_ok=True)
+    return {'removed': True, 'target': str(target)}
+
+
 def profile_locked(mo2_root, profile, timeout=30.0):
     """The lock every edit of an MO2 profile's lists (modlist.txt, plugins.txt, loadorder.txt) holds: two server
     processes editing one profile keep both changes (S2.4)."""

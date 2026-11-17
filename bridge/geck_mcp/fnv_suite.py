@@ -122,12 +122,24 @@ class BisectTools:
         self._masters = {}                          # plugins level: name.lower() -> its masters
         self._runs = []                             # classification and crash flag of every run of this bisect
 
+    def _lists(self):
+        """(install kind, folder with the plugin lists, the lock file the list edits hold): the MO2 profile, or the
+        direct install's %LOCALAPPDATA%\\FalloutNV with its lock in the bridge state (fnv_layout)."""
+        game = self.live.game
+        if hasattr(game, 'layout'):
+            layout = game.layout()
+            return layout.kind, Path(layout.lists_dir), Path(layout.lock_path(self.live.project.state_dir))
+        profile = Path(game.profile_dir)
+        return 'mo2', profile, profile / 'modlist.txt'
+
     def _candidates(self, level, keep):
         if level == 'records':
             return self._record_candidates(keep)
-        profile = self.live.game.profile_dir
+        kind, profile, _lock = self._lists()
         keep = {k.lower() for k in keep or []}
         if level == 'mods':
+            if kind == 'direct':
+                raise ConvError('NO_MODS', 'The direct install has no mods (that is Mod Organizer 2): bisect plugins.')
             lines = (profile / 'modlist.txt').read_text(encoding='utf-8').splitlines()
             mods = [l[1:] for l in lines if l.startswith('+')]
             return [m for m in mods if m.lower() not in PROTECTED_MODS and m.lower() not in keep
@@ -304,7 +316,7 @@ class BisectTools:
         """Copies of the profile's lists and their marker, before the first _set of a mods or plugins bisect."""
         if not self._state_dir():
             return None
-        profile = Path(self.live.game.profile_dir)
+        _kind, profile, lock = self._lists()
         folder = bisect_dir(self._state_dir())
         folder.mkdir(parents=True, exist_ok=True)
         backups, shas = {}, {}
@@ -317,7 +329,8 @@ class BisectTools:
             backups[name] = str(folder / ('profile.%s.%s.orig' % (name, shas[name][:16])))
             _atomic_write(backups[name], data)
         return self._write_marker('profile.restore.json', {'profile': str(profile), 'backups': backups,
-                                                           'sha256': shas})
+                                                           'sha256': shas,
+                                                           'lock': str(lock)})
 
     def _drop_marker(self, name):
         if self._state_dir():
@@ -366,7 +379,8 @@ class BisectTools:
                                 'missing or changed; fix it by hand, then delete %s.' % (name, marker['marker']),
                                 marker)
         restored = []
-        with locked(profile / 'modlist.txt', 30.0):          # the profile lock every list edit takes (S2.4)
+        # the lock every list edit takes (S2.4): the marker names it (the direct install's is in the bridge state)
+        with locked(Path(marker.get('lock') or profile / 'modlist.txt'), 30.0):
             for name, sha in shas.items():
                 if _sha(profile / name) != sha:
                     _atomic_write(profile / name, Path(backups[name]).read_bytes())
@@ -387,6 +401,11 @@ class BisectTools:
             raise ConvError('BAD_ARGUMENTS', 'level is mods, plugins or records (with plugin).')
         if not steps:
             raise ConvError('BAD_ARGUMENTS', 'steps (the failing scenario, as for fnv_test steps) are needed.')
+        # every level changes files the game loads (plugin lists, or a plugin rewritten): the user's real game only
+        # with fnv.allow_direct_install_changes
+        guard = getattr(self.live.game, 'guard_direct', None)
+        if guard is not None:
+            guard('bisect: it switches plugins off and rewrites plugin files of your real game')
         if not self._busy.acquire(blocking=False):
             raise ConvError('BUSY', 'Another fnv_bisect is running; it owns the profile and the plugin file.')
         try:

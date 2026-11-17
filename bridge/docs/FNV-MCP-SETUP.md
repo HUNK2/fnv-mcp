@@ -99,12 +99,45 @@ Nothing here downloads files or ships game files, the decompilation or anything 
 7. **Check the machine.** Ask the agent to call **`fnv_setup_check`**: it lists each prerequisite with what to do
    when one is missing.
 8. With the game closed, call **`fnv_companion_install`**: it builds the engine companion with Zig and installs it
-   as its own MO2 mod.
+   as its own MO2 mod. (Without MO2: see "Without Mod Organizer 2" below.)
 9. **`fnv_game launch start=coc:GSProspectorSaloonInterior`** (or `continue` for your newest dev save), then
    **`fnv_status`**: it answers from the running game. From here, `fnv_guide` has step-by-step guides.
 
 A first prompt to give the agent: *"Call fnv_setup_check and fix what it reports with me, then launch the game
 with fnv_game launch and show me fnv_status."*
+
+## Without Mod Organizer 2 (the direct install)
+
+The tools also work with the game as Steam installed it: you start it with Steam's Play button (or
+`nvse_loader.exe` in the game folder) and the agent attaches to it. Skip step 3 and leave `fnv.mo2_root` and
+`fnv.mo2_profile` unset (`null`), then:
+
+1. Install xNVSE into the game folder as its readme says, and JIP LN NVSE and Yvile's Crash Logger into
+   `Data\NVSE\Plugins` (by hand or with your mod manager). `fnv_setup_check` looks for them there.
+2. With the game closed, call **`fnv_companion_install target=game`**. It puts `fnvmcp_engine.dll` into the game
+   folder's `Data\NVSE\Plugins`, keeps a receipt in `<state_dir>\engine\install-game.json` and a copy of any file it
+   replaces; `action=uninstall target=game` removes it again (only the file it put there).
+3. Start the game however you like. **`fnv_status`** then answers from it, and its `install` part says
+   `"kind": "direct"` and which folders are in use: saves and `Fallout.ini` in `Documents\My Games\FalloutNV`,
+   `plugins.txt` in `%LOCALAPPDATA%\FalloutNV`. `fnv_game launch` (or `via=direct` when the project also names an
+   MO2 profile) starts it the same way.
+
+How the tools tell the two apart: a running game with MO2's file system (`usvfs_x86.dll`) loaded is the MO2 dev
+profile; one without it is the direct install, even when the project also names an MO2 profile. With no game
+running, the project file decides.
+
+**This is your real game.** The tools that would change its files refuse with `DIRECT_INSTALL_PROTECTED` unless you
+set `fnv.allow_direct_install_changes` to `true`: installing plugins into `Data` (`fnv_install`, `fnv_plugin_build
+install`), editing `plugins.txt` (`fnv_profile_set`, `fnv_bisect`), writing `Fallout.ini` (`fnv_window persist`) or
+xNVSE's config (`fnv_warnings enable`), and loading or writing saves (`fnv_game launch` with a save start,
+`fnv_test` save starts, `fnv_test_save`, `fnv_replay`). Start tests at the menu or with a `coc:` start instead. The
+companion itself is the one exception: you ask for it by name with `target=game`. With the setting on, a plugin
+`fnv_install` copies gets the current file time (without a mod manager the game orders plugins by file time, so it
+loads last), and the replaced file and the old `plugins.txt` are kept under `<state_dir>\fnv`.
+
+The live tools need nothing else: reading, looking, playing, debugging and `engine_control = "full"` changes of the
+running game work the same on both. `fnv_game quit` still closes only a game the bridge started unless
+`engine_control` is `"full"`.
 
 ## Safety levels
 
@@ -119,7 +152,8 @@ with fnv_game launch and show me fnv_status."*
   journaled and undoable; files put into the mod profile are not.
 
 The tools act on the MO2 profile named in `fnv.mo2_profile`, so point it at a profile of its own, not the one you
-play with.
+play with. On the direct install (no MO2) they act on your real game, and changes to its files need a second switch,
+`fnv.allow_direct_install_changes` (see "Without Mod Organizer 2").
 
 ## What each tool family needs
 
@@ -159,8 +193,11 @@ Paths in the project file may be relative to the project file. `fnv_*` keys go i
 | `fnv.symdb` | `<state_dir>/symdb.sqlite` | The symbol database (optional) |
 | `fnv.research_dir` | none | A folder of your own Markdown notes that `fnv_guide engine` searches; without it, it searches the shipped guides |
 | `fnv.crash_dirs` | `[]` | More folders for crash logs |
-| `fnv.mo2_root` | none | The portable MO2 instance |
+| `fnv.mo2_root` | none | The portable MO2 instance; without it (and `mo2_profile`) the tools use the direct install |
 | `fnv.mo2_profile` | none | The MO2 profile the tools act on (one of its own) |
+| `fnv.allow_direct_install_changes` | `false` | Lets the tools change the direct install's files: plugins into `Data`, `plugins.txt`, `Fallout.ini`, xNVSE's config, saves (see "Without Mod Organizer 2"). No effect on the MO2 dev profile |
+| `fnv.game_user_dir` | `Documents\My Games\FalloutNV` | The direct install's folder with `Fallout.ini` and the saves, when it is somewhere else |
+| `fnv.game_appdata_dir` | `%LOCALAPPDATA%\FalloutNV` | The direct install's folder with `plugins.txt`, when it is somewhere else |
 | `fnv.mo2_executable` | `NVSE` | The MO2 executable entry that starts the game |
 | `fnv.zig` | none | Zig 0.14.1 `zig.exe` |
 | `fnv.engine_pipe` | `fnvmcp-engine` | Name of the engine companion's pipe. The tools talk only to a pipe the running FalloutNV.exe serves (`PIPE_NOT_GAME` otherwise) |
@@ -199,14 +236,19 @@ Nothing here runs by itself; there is no uninstall tool. Close the game, the GEC
      `modlist.txt`;
    - plugins installed with `fnv_install`: their mod folders, their `modlist.txt` lines, and their names in
      `profiles\Dev\plugins.txt` and `loadorder.txt`.
-4. **Files the companion and the server write outside the clone:**
+4. **The direct install** (only if you used it): `fnv_companion_install action=uninstall target=game` removes the
+   companion from `Data\NVSE\Plugins`. With `fnv.allow_direct_install_changes` on, plugins the tools copied into
+   `Data` stay there until you delete them and take them out of `%LOCALAPPDATA%\FalloutNV\plugins.txt`; the files
+   they replaced and the old `plugins.txt` are under `bridge\state\fnv` (`install-backups`,
+   `plugin-lists-backups`).
+5. **Files the companion and the server write outside the clone:**
    - `%LOCALAPPDATA%\fnvmcp`: the companion's exit notes, crash-context files and `companion.log`;
    - `%TEMP%\geck-mcp`: the busy files the server writes while a call runs.
-5. **The clone.** Everything else stays inside it: `bridge\state` (journals, the engine map, builds, test
+6. **The clone.** Everything else stays inside it: `bridge\state` (journals, the engine map, builds, test
    reports, screenshots, backups), `bridge\.venv` and your `bridge\projects\*.json` files. Delete the clone.
 
-The Steam game itself, its saves in `Documents\My Games\FalloutNV` and its INIs there are not changed by the
-setup: the dev profile keeps its own copies.
+With the MO2 dev profile, the Steam game itself, its saves in `Documents\My Games\FalloutNV` and its INIs there
+are not changed by the setup: the dev profile keeps its own copies.
 
 ## Known issues
 

@@ -673,11 +673,12 @@ class FnvService:
 
     # ----------------------------------------------------------------------------- saves
     def saves_dir(self):
-        from pathlib import Path
-        fnv = getattr(self.project, 'fnv', None)
-        if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
-            raise ValueError('Set fnv.mo2_root and fnv.mo2_profile in the project file, or pass a full path')
-        return Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile / 'saves'
+        """The saves of the MO2 dev profile, or of the direct install (Documents\\My Games\\FalloutNV)."""
+        from . import fnv_layout
+        try:
+            return fnv_layout.current(self.project).saves_dir
+        except fnv_layout.LayoutError as e:
+            raise ValueError('%s Or pass a full path.' % e) from None
 
     def _save_path(self, name):
         from . import fnv_save

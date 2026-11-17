@@ -28,6 +28,23 @@ from .fnv_live import LiveError
 from .safe_paths import inside, plain_name, read_roots
 
 MODEL_LOADER = 0x011C3B3C
+# TESBoundObject: boundMin then boundMax, three int16 each (the record's OBND), after TESForm (0x18) and TESObject's
+# list pointers (0x18..0x24), read live 2026-11-18; TESObjectREFR +0x20: its base form.
+# A snap rests the bottom of these bounds on the surface, not the origin: architecture such as WoodShack01 has its
+# origin at its centre (bounds z -279..279) and sank half into the ground (seen live 2026-11-18).
+BOUND_OFFSET = 0x24
+REF_BASE_OFFSET = 0x20
+FORM_TYPE_OFFSET = 4                         # TESForm's type byte
+ACTOR_BASE_TYPES = (0x2A, 0x2B, 0x2C, 0x2D)  # NPC_, CREA, LVLC, LVLN: placed as actors, which stand on one point
+# Footprint snap (2026-11-18): one ray under the centre let a building float on the downhill side of a slope or sit
+# on a boulder under its middle. Rays are cast over the bounds' X/Y rectangle instead (turned to the heading, scaled),
+# at most FOOT_SPACING apart and at most FOOT_MAX of them, pulled FOOT_INSET in from the edges. Objects narrower than
+# FOOT_SMALL both ways keep one ray.
+FOOT_SMALL = 48.0
+FOOT_SPACING = 128.0
+FOOT_MAX = 64
+FOOT_INSET = 4.0
+FOOT_REST = ('low', 'centre', 'high')
 CLEAR_UNUSED_MODELS = 0x00448620
 FILE_GET = 0x00AFDF20
 DATA_HANDLER = 0x011C3F2C
@@ -1067,6 +1084,283 @@ class PlaceTools:
         self.live.journal.confirm(entry['id'], {'cell': cell, **pose})
         return {'ref': element.get('formId'), 'base': base['formId'], **self._rounded(pose), 'journalId': entry['id']}
 
+    def _bounds(self, base_ptr):
+        """(minX, minY, minZ, maxX, maxY, maxZ) of a base form, read from the engine (its OBND), or None when it
+        cannot be read or is not a bound (min over max)."""
+        reads = getattr(self.live, 'reads', None) if self.live is not None else None
+        if not reads or not base_ptr:
+            return None
+        try:
+            raw = reads([(base_ptr + BOUND_OFFSET, 12)])[0]
+        except Exception:  # noqa: BLE001 - no bounds: snap by the origin as before
+            return None
+        if not raw or len(raw) != 12:
+            return None
+        b = struct.unpack('<6h', raw)
+        return b if all(b[i] <= b[i + 3] for i in range(3)) else None
+
+    def _base_of(self, ref_ptr):
+        u32s = getattr(self.live, 'u32s', None) if self.live is not None else None
+        if not u32s or not ref_ptr:
+            return 0
+        try:
+            return u32s([ref_ptr + REF_BASE_OFFSET])[0] or 0
+        except Exception:  # noqa: BLE001
+            return 0
+
+    @staticmethod
+    def _lift(bounds, scale=None, rotation=None):
+        """How far over the surface the origin sits when the bottom of the bounds rests on it: -minZ times the
+        scale, tilted by the X and Y angles (cos X cos Y is the world height of the object's up axis)."""
+        if not bounds:
+            return 0.0
+        rx, ry = (list(rotation or []) + [0, 0])[:2]
+        return -bounds[2] * float(scale or 1.0) * math.cos(math.radians(rx or 0)) * math.cos(math.radians(ry or 0))
+
+    @staticmethod
+    def _lift_on_plane(bounds, scale, pitch, roll):
+        """How far over a sloped surface the origin sits when the object is laid on it (align): the bottom lies on the
+        plane, so the origin is -minZ * scale along the normal, which is that divided by cos X cos Y straight up.
+        (_lift's cos X cos Y is the height of the bottom's centre, right for a tilted object on flat ground.)"""
+        if not bounds:
+            return 0.0
+        nz = math.cos(math.radians(pitch)) * math.cos(math.radians(roll))
+        return -bounds[2] * float(scale or 1.0) / max(nz, 0.1)
+
+    @staticmethod
+    def _face_heights(bounds, pose, points, top=False):
+        """Height of the object's bottom face (the plane minZ * scale along its up axis from the origin), or with
+        `top` its top face (maxZ), over each (x, y) point. Up axis from the X and Y angles: (-sin Y, sin X cos Y,
+        cos X cos Y)."""
+        x, y, z = pose['position']
+        rx, ry = (math.radians(a or 0) for a in (list(pose.get('rotation') or []) + [0, 0])[:2])
+        nx, ny, nz = -math.sin(ry), math.sin(rx) * math.cos(ry), max(0.1, math.cos(rx) * math.cos(ry))
+        d = bounds[5 if top else 2] * float(pose.get('scale') or 1.0)
+        return [z + (d - nx * (px - x) - ny * (py - y)) / nz for px, py in points]
+
+    def _form_type(self, ptr):
+        reads = getattr(self.live, 'reads', None) if self.live is not None else None
+        if not reads or not ptr:
+            return None
+        try:
+            raw = reads([(ptr + FORM_TYPE_OFFSET, 1)])[0]
+        except Exception:  # noqa: BLE001 - unknown type: treated as an object
+            return None
+        return raw[0] if raw else None
+
+    @staticmethod
+    def _footprint_points(bounds, x, y, heading, scale):
+        """The (x, y) points a footprint snap casts from: the origin first, then a grid over the bounds' X/Y rectangle
+        (scaled, pulled FOOT_INSET in, turned to the heading; corners and edges included), or None for an object
+        narrower than FOOT_SMALL both ways."""
+        s = float(scale or 1.0)
+        x0, y0, x1, y1 = bounds[0] * s, bounds[1] * s, bounds[3] * s, bounds[4] * s
+        if x1 - x0 < FOOT_SMALL and y1 - y0 < FOOT_SMALL:
+            return None
+
+        def axis(lo, hi):
+            if hi - lo > 2 * FOOT_INSET:
+                lo, hi = lo + FOOT_INSET, hi - FOOT_INSET
+            return lo, hi, max(3, math.ceil((hi - lo) / FOOT_SPACING) + 1)
+
+        ax0, ax1, nx = axis(x0, x1)
+        ay0, ay1, ny = axis(y0, y1)
+        while nx * ny > FOOT_MAX - 1:
+            if nx >= ny:
+                nx -= 1
+            else:
+                ny -= 1
+        xs = [ax0 + (ax1 - ax0) * k / (nx - 1) for k in range(nx)]
+        ys = [ay0 + (ay1 - ay0) * k / (ny - 1) for k in range(ny)]
+        h = math.radians(heading or 0)
+        c, sn = math.cos(h), math.sin(h)
+        # local x (the object's right) is world (cos h, -sin h), local y (forward) is (sin h, cos h)
+        return [(x, y)] + [(x + lx * c + ly * sn, y - lx * sn + ly * c) for ly in ys for lx in xs]
+
+    @staticmethod
+    def _split_overhangs(values, height):
+        """The cut under which samples are overhangs: a group of the lowest samples (fewer than half) more than
+        max(64, a quarter of the object's height, 3 x the spread of the rest) under the rest, as where one edge runs
+        past a cliff or over a gully. A smaller step is rested on (the high side sinks a little) rather than left
+        floating over. None when there is none."""
+        v = sorted(values)
+        n = len(v)
+        best, cut = 0.0, None
+        for k in range(1, (n + 1) // 2):
+            gap = v[k] - v[k - 1]
+            if gap > max(64.0, 0.25 * height, 3 * (v[-1] - v[k])) and gap > best:
+                best, cut = gap, v[k]
+        return cut
+
+    def _footprint(self, bounds, x, y, z, heading, scale, ignore=0, reach=200.0, sink=64.0, points=None,
+                   plane=False, pose=None, rest=None):
+        """Cast the footprint and measure it. Returns the samples and, per sample, the ground (None: no ground
+        found), which are overhangs, and with `plane` a least-squares plane through the kept samples (the slope
+        align lays the object on). `pose`: the object stands there (snap, check): the ground at a sample is the
+        first surface at or below its top there. `rest` (a placement: nothing stands there yet): the seat is found
+        by the centre's rules, then every sample is judged again against the top the object will have, from the
+        surfaces its ray already met, as check will judge it (live: a boulder top inside the shack was overhead to
+        the placement, which said sunk 336 where check said 530). None when no sample found ground."""
+        pts = points or self._footprint_points(bounds, x, y, heading, scale)
+        s = float(scale or 1.0)
+        radius = max(math.hypot(px - x, py - y) for px, py in pts)
+        tops = self._face_heights(bounds, pose, pts, top=True) if pose else None
+        # start over the object's own top (its collision, for snap and check) and over ground rising up to ~63
+        # degrees across the footprint
+        keep = {} if rest and pose is None else None
+        found = self._ground_many(pts, z, ignore, reach + max(0.0, bounds[5] * s) + 2 * radius, sink, tops=tops,
+                                  land=True, keep=keep)
+        grounds = [f[0] for f in found]
+        valid = [g for g in grounds if g is not None]
+        if not valid:
+            return None
+        seat = None
+        if keep is not None:
+            height = max(1.0, (bounds[5] - bounds[2]) * s)
+            first = {'points': pts, 'values': grounds, 'plane': None, 'missed': 0, 'heading': heading or 0.0,
+                     'overhang': self._overhang_flags(grounds, height)}
+            seat = self._rest_on(first, rest, height)[0]
+            for i, (surfaces, landed) in keep.items():
+                again = self._ground_under_top(surfaces, seat + height, landed)
+                if again is not None:
+                    grounds[i] = again[0]
+        fit = None
+        values = list(grounds)
+        if plane:
+            fit = self._fit_plane([(px - x, py - y, g) for (px, py), g in zip(pts, grounds) if g is not None])
+            if fit is not None:
+                a, b, c = fit
+                values = [None if g is None else g - (a * (px - x) + b * (py - y) + c)
+                          for (px, py), g in zip(pts, grounds)]
+        return {'points': pts, 'grounds': grounds, 'values': values, 'plane': fit, 'seat': seat,
+                'overhang': self._overhang_flags(values, (bounds[5] - bounds[2]) * s),
+                'missed': sum(1 for g in grounds if g is None), 'heading': heading or 0.0}
+
+    @classmethod
+    def _overhang_flags(cls, values, height):
+        cut = cls._split_overhangs([v for v in values if v is not None], height)
+        return [v is not None and cut is not None and v < cut for v in values]
+
+    @staticmethod
+    def _fit_plane(samples):
+        """(a, b, c) of z = a dx + b dy + c through (dx, dy, z) samples by least squares, or None when they do not
+        span a plane."""
+        if len(samples) < 3:
+            return None
+        sxx = sum(dx * dx for dx, dy, _ in samples)
+        sxy = sum(dx * dy for dx, dy, _ in samples)
+        syy = sum(dy * dy for dx, dy, _ in samples)
+        sx = sum(dx for dx, _, _ in samples)
+        sy = sum(dy for _, dy, _ in samples)
+        n = float(len(samples))
+        sxz = sum(dx * z for dx, _, z in samples)
+        syz = sum(dy * z for _, dy, z in samples)
+        sz = sum(z for _, _, z in samples)
+        m = [[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]]
+        r = [sxz, syz, sz]
+
+        def det(a):
+            return (a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+                    + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]))
+        d = det(m)
+        if abs(d) < 1e-9 * max(1.0, n * sxx * syy):
+            return None
+        out = []
+        for col in range(3):
+            mc = [row[:] for row in m]
+            for k in range(3):
+                mc[k][col] = r[k]
+            out.append(det(mc) / d)
+        return tuple(out)
+
+    @staticmethod
+    def _rest_on(fp, rest, height, bottom=None):
+        """Where the bottom goes on a measured footprint and what that leaves: (bottom value, report). `rest`: low =
+        the lowest kept sample (nothing floats; the high side sinks), high = the highest (nothing sinks), centre =
+        the origin's sample. `bottom` given: judge that bottom instead (check). Values are ground heights, or with a
+        plane, heights over that plane."""
+        values, over = fp['values'], fp['overhang']
+        kept = [v for v, o in zip(values, over) if v is not None and not o]
+        lo, hi = min(kept), max(kept)
+        if bottom is None:
+            if rest == 'high':
+                bottom = hi
+            elif rest == 'centre':
+                bottom = values[0] if values[0] is not None else lo
+            else:
+                bottom = lo
+        sunk, floats = max(0.0, hi - bottom), max(0.0, bottom - lo)
+        report = {'samples': len(values), 'rest': rest, 'heading': round(fp['heading'], 1),
+                  'spread': round(hi - lo, 2), 'sunk': round(sunk, 2), 'floats': round(floats, 2)}
+        if fp['plane'] is None:
+            report.update({'groundMin': round(lo, 2), 'groundMax': round(hi, 2)})
+        overhangs = [{'at': [round(p[0], 1), round(p[1], 1)], 'under': round(lo - v, 1)}
+                     for p, v, o in zip(fp['points'], values, over) if o]
+        report['overhangs'] = overhangs
+        if fp['missed']:
+            report['missed'] = fp['missed']
+        warn = []
+        if overhangs:
+            warn.append('%d of %d samples are %.0f or more units under the rest: that part overhangs a drop (a cliff '
+                        'edge or a gully) and is left hanging' % (len(overhangs), len(values),
+                                                                   min(o['under'] for o in overhangs)))
+        if fp['missed']:
+            warn.append('%d of %d samples found no ground (an edge, a gap, or ground over the rays\' start)'
+                        % (fp['missed'], len(values)))
+        if sunk > 0.25 * height:
+            warn.append('its high side is sunk %.0f units into the ground (%.0f%% of its %.0f-unit height)'
+                        % (sunk, 100 * sunk / height, height))
+        if floats > 10:
+            warn.append('its low side floats %.0f units over the ground' % floats)
+        if warn:
+            report['warning'] = '; '.join(warn)
+        steep = hi - lo > 0.25 * height
+        return bottom, report, steep, sunk > height
+
+    def _suggest_heading(self, bounds, x, y, z, scale, ignore, reach, sink, current, current_spread, pose=None,
+                         rest=None):
+        """The heading of the eight 45 degrees apart that leaves the least spread under the footprint (a
+        rectangle is the same turned 180, so four are cast)."""
+        best = {'heading': round(current % 180.0, 1), 'spread': round(current_spread, 2)}
+        for h in (0.0, 45.0, 90.0, 135.0):
+            if abs(((h - current) + 90.0) % 180.0 - 90.0) < 1e-6:
+                continue
+            fp = self._footprint(bounds, x, y, z, h, scale, ignore, reach, sink, pose=pose, rest=rest)
+            if fp is None:
+                continue
+            kept = [v for v, o in zip(fp['values'], fp['overhang']) if v is not None and not o]
+            spread = max(kept) - min(kept)
+            if spread < best['spread'] - 1e-6:
+                best = {'heading': h, 'spread': round(spread, 2)}
+        best['note'] = ('the narrow side facing downhill spreads least; turn it with rotation=[0, 0, %g] (or %g)'
+                        % (best['heading'], best['heading'] + 180))
+        return best
+
+    def _snap_foot(self, base_ptr, bounds, x, y, z, rotation, scale, rest, ignore=0, reach=200.0, sink=64.0):
+        """Footprint snap of one object: (ground the bottom rests on, footprint report), or (None, None) when the
+        footprint does not apply (no bounds, an actor, a small object) or found no ground. Raises TOO_STEEP when
+        resting low would sink it deeper than its whole height."""
+        if not bounds or self._form_type(base_ptr) in ACTOR_BASE_TYPES:
+            return None, None
+        heading = (list(rotation or []) + [0, 0, 0])[2] or 0.0
+        pts = self._footprint_points(bounds, x, y, heading, scale)
+        if not pts:
+            return None, None
+        fp = self._footprint(bounds, x, y, z, heading, scale, ignore, reach, sink, points=pts, rest=rest)
+        if fp is None:
+            return None, None
+        height = max(1.0, (bounds[5] - bounds[2]) * float(scale or 1.0))
+        bottom, report, steep, too_deep = self._rest_on(fp, rest, height, bottom=fp['seat'])
+        if steep:
+            report['suggestHeading'] = self._suggest_heading(bounds, x, y, z, scale, ignore, reach, sink, heading,
+                                                             report['spread'], rest=rest)
+        if too_deep and rest == 'low':
+            raise LiveError('TOO_STEEP', 'The ground under it rises %.0f units across its footprint, more than its '
+                            '%.0f-unit height: resting it low would bury its high side. Turn it (see '
+                            'suggestHeading), move it, or pass rest="centre" or "high" to place it anyway.'
+                            % (report['spread'], height), report)
+        return bottom, report
+
     def _ground(self, x, y, z, ignore=0, reach=200.0, sink=64.0):
         """Height of the surface under the point (x, y, z), or None (see _ground_info)."""
         return self._ground_info(x, y, z, ignore, reach, sink)[0]
@@ -1083,38 +1377,99 @@ class PlaceTools:
         - otherwise (a point, or an object whose own collision the ray misses): the first surface at or below
           z + `sink` (a curb, a stair tread or a slope the point is in), one above only when none is under it (a
           point inside a hill)."""
+        return self._ground_many([(x, y)], z, ignore, reach, sink)[0]
+
+    def _ground_many(self, points, z, ignore=0, reach=200.0, sink=64.0, tops=None, land=False, keep=None):
+        """_ground_info for many (x, y) points at one height z, the rays of every point batched into one cast per
+        step down (a footprint costs a few casts, not a few per point). Same rules, point by point, and for a
+        footprint two more (both found live 2026-11-18 at a boulder):
+        - `land`: the landscape (a hit that names no reference) ends the way down: nothing under it is ground. A
+          boulder's buried underside under it was taken for ground and the snap sank a shack under the ground;
+        - `tops` (each point's height of the top of the object being judged, its own collision passed through): the
+          first surface at or below that top is the ground there, one above it is overhead. Where the object is
+          sunk into a slope the ground is met before its own collision, and the own-collision rule left it
+          overhead and the point without ground.
+        `keep` (a dict): filled with each point's surfaces, top down, and whether the ray ended on the landscape."""
         rays = self.hands.rays if self.hands else None
-        if rays is None:
-            return None, None, None
+        out = [(None, None, None)] * len(points)
+        if rays is None or not points:
+            return out
+        pending = list(range(len(points)))
         for layer in (0x25, 0x26, 6):
-            top = z + reach
-            surfaces, own_at = [], None
-            for _ in range(8):
-                hit = rays.cast([((x, y, top), (x, y, z - 2000.0))], layer=layer, refs=bool(ignore))[0]
-                if not hit.get('point'):
+            if not pending:
+                break
+            top = {i: z + reach for i in pending}
+            surfaces = {i: [] for i in pending}
+            own_at = {i: None for i in pending}
+            landed = set()
+            active = list(pending)
+            for _ in range(8 if tops is None else 12):
+                if not active:
                     break
-                h = hit['point'][2]
-                if ignore and hit.get('ref') == ignore:
-                    if own_at is None:
-                        own_at = len(surfaces)
+                hits = rays.cast([((points[i][0], points[i][1], top[i]), (points[i][0], points[i][1], z - 2000.0))
+                                  for i in active], layer=layer, refs=bool(ignore) or land)
+                still = []
+                for i, hit in zip(active, hits):
+                    if not hit.get('point'):
+                        continue
+                    h = hit['point'][2]
+                    if ignore and hit.get('ref') == ignore:
+                        if own_at[i] is None:
+                            own_at[i] = len(surfaces[i])
+                    else:
+                        surfaces[i].append(h)
+                        if land and not hit.get('ref'):
+                            landed.add(i)
+                            continue      # the landscape: nothing under it is ground
+                        if h <= (z if tops is None else tops[i] + 2.0):
+                            continue      # a surface under the point: nothing below it matters
+                    top[i] = h - 1.0
+                    still.append(i)
+                active = still
+            unresolved = []
+            for i in pending:
+                if tops is not None:
+                    found = self._ground_under_top(surfaces[i], tops[i], i in landed)
                 else:
-                    surfaces.append(h)
-                    if h <= z:
-                        break             # a surface under the point: nothing below it matters
-                top = h - 1.0
-            if own_at is not None:
-                over = surfaces[own_at - 1] if own_at else None
-                after = surfaces[own_at:]
-                if after or surfaces:
-                    return (after[0] if after else None), over, layer
-                continue
-            if surfaces:
-                below = [h for h in surfaces if h <= z + sink]
-                if not below:
-                    return surfaces[-1], None, layer
-                over = [h for h in surfaces if h > z + sink]
-                return below[0], (over[-1] if over else None), layer
-        return None, None, None
+                    found = self._ground_rule(surfaces[i], own_at[i], z, sink)
+                if found is None:
+                    unresolved.append(i)
+                else:
+                    out[i] = (found[0], found[1], layer)
+                    if keep is not None:
+                        keep[i] = (list(surfaces[i]), i in landed)
+            pending = unresolved
+        return out
+
+    @staticmethod
+    def _ground_under_top(surfaces, top, landed):
+        """(under, over) for a point of an object whose top there is `top`: the first surface at or below the top
+        (inside the object where it is sunk, under it where it is not); over it, overhead. With none under the top,
+        the landscape over it when the ray ended on it (that part is buried), else None."""
+        for k, h in enumerate(surfaces):
+            if h <= top + 2.0:
+                return h, (surfaces[k - 1] if k else None)
+        if landed and surfaces:
+            return surfaces[-1], None
+        return None
+
+    @staticmethod
+    def _ground_rule(surfaces, own_at, z, sink):
+        """(under, over) from the surfaces one ray met going down (own collision left out, `own_at` = how many came
+        before it), or None when this layer found nothing to go by."""
+        if own_at is not None:
+            over = surfaces[own_at - 1] if own_at else None
+            after = surfaces[own_at:]
+            if after or surfaces:
+                return (after[0] if after else None), over
+            return None
+        if surfaces:
+            below = [h for h in surfaces if h <= z + sink]
+            if not below:
+                return surfaces[-1], None
+            over = [h for h in surfaces if h > z + sink]
+            return below[0], (over[-1] if over else None)
+        return None
 
     EYE_HEIGHT = 100.0     # over the player's feet: inside its capsule, under any ceiling it stands under
     EYE_REACH = 3000.0
@@ -1198,8 +1553,28 @@ class PlaceTools:
             side = self._side(x, y, z, over, own, layer)
         return g, over, side
 
-    def at(self, base, position=None, near=None, offset=None, rotation=None, scale=None, snap=False):
+    @staticmethod
+    def _rest_mode(rest):
+        rest = (rest or 'low').lower()
+        rest = 'centre' if rest == 'center' else rest
+        if rest not in FOOT_REST:
+            raise ValueError('rest is low, centre or high')
+        return rest
+
+    def _snapped(self, b, bounds, position, rotation, scale, rest):
+        """(position snapped onto the ground, footprint report or None). Big objects rest by their footprint, the
+        rest by the ground under the origin; either way the bottom of the bounds goes on it."""
+        g, report = self._snap_foot(b.get('ptr'), bounds, position[0], position[1], position[2], rotation, scale,
+                                    rest)
+        if report is None:
+            g = self._ground(position[0], position[1], position[2])
+        if g is None:
+            return position, None
+        return [position[0], position[1], g + self._lift(bounds, scale, rotation)], report
+
+    def at(self, base, position=None, near=None, offset=None, rotation=None, scale=None, snap=False, rest=None):
         self.live.in_game()
+        rest = self._rest_mode(rest)
         b = self.live.resolve(base)
         if position is None:
             anchor = self.live.resolve(near or 'player')
@@ -1209,16 +1584,17 @@ class PlaceTools:
                 offset = [math.sin(heading) * 150, math.cos(heading) * 150, 0]
             off = offset or [0, 0, 0]
             position = [x + off[0], y + off[1], z + off[2]]
+        report = None
         if snap:
-            g = self._ground(position[0], position[1], position[2])
-            if g is not None:
-                position = [position[0], position[1], g]
+            position, report = self._snapped(b, self._bounds(b.get('ptr')), position, rotation, scale, rest)
         self.live.changing('place')
-        return self._place_one(b, position, rotation, scale)
+        out = self._place_one(b, position, rotation, scale)
+        return {**out, 'footprint': report} if report else out
 
     def array(self, base, origin=None, shape='row', count=5, spacing=128.0, columns=None, radius=None, rotation=None,
-              snap=False):
+              snap=False, rest=None):
         self.live.in_game()
+        rest = self._rest_mode(rest)
         if not 1 <= int(count) <= 100:
             raise ValueError('count is 1..100')
         b = self.live.resolve(base)
@@ -1239,15 +1615,25 @@ class PlaceTools:
         else:
             raise ValueError('shape is row, grid or circle')
         self.live.changing('place array')
-        out = []
+        bounds = self._bounds(b.get('ptr')) if snap else None
+        out, skipped = [], []
         for p in points:
-            pos = list(p)
+            pos, report = list(p), None
             if snap:
-                g = self._ground(*pos)
-                if g is not None:
-                    pos[2] = g
-            out.append(self._place_one(b, pos, rotation))
-        return {'placed': out, 'count': len(out), 'shape': shape}
+                try:
+                    pos, report = self._snapped(b, bounds, pos, rotation, None, rest)
+                except LiveError as e:
+                    if e.code != 'TOO_STEEP':
+                        raise
+                    skipped.append({'position': [round(v, 2) for v in p], 'code': e.code, 'message': str(e),
+                                    'footprint': e.evidence})
+                    continue
+            placed = self._place_one(b, pos, rotation)
+            out.append({**placed, 'footprint': report} if report else placed)
+        result = {'placed': out, 'count': len(out), 'shape': shape}
+        if skipped:
+            result['skipped'] = skipped
+        return result
 
     def adjust(self, ref, move=None, rotate=None, scale=None, local=False):
         self.live.in_game()
@@ -1319,8 +1705,9 @@ class PlaceTools:
         return ('ambiguous: a surface %.0f units over it and the next %.0f under it: it is buried under the one over '
                 'it, or floats under a low ceiling or shelf' % (over - z, z - g))
 
-    def snap(self, ref, align=False):
+    def snap(self, ref, align=False, rest=None):
         self.live.in_game()
+        rest = self._rest_mode(rest)
         r = self.live.resolve(ref)
         pose = self._pose(r['ptr'])
         x, y, z = pose['position']
@@ -1343,23 +1730,68 @@ class PlaceTools:
                      'under the surface over it, a ceiling or shelf'}
         else:
             at, reach = z, 250.0
+        base_ptr = self._base_of(r['ptr'])
+        bounds = self._bounds(base_ptr)
+        if bounds:
+            extra['bounds'] = list(bounds)
+        # the footprint, in the plain case only: buried or under a ceiling, the centre's answer stands
+        foot = None
+        if side is None and bounds and self._form_type(base_ptr) not in ACTOR_BASE_TYPES:
+            pts = self._footprint_points(bounds, x, y, pose['rotation'][2], pose['scale'])
+            if pts:
+                foot = self._footprint(bounds, x, y, z, pose['rotation'][2], pose['scale'], ignore=r['ptr'],
+                                       reach=250.0, sink=50.0, points=pts, plane=align, pose=pose)
+        if foot is not None and not (align and foot['plane'] is None):
+            return self._snap_by_footprint(ref, r, pose, bounds, foot, rest, align, extra)
         surface = self._surface(x, y, at, ignore=r['ptr'], reach=reach, sink=50.0) if align else None
         g = surface[0] if surface else centre
         if g is None:
             return {'ref': r['formId'], 'snapped': False, 'note': 'No surface found under it on the pick layers.'}
         if not align:
-            return {**self.adjust(ref, move=[0, 0, g - z]), 'snapped': True, 'ground': round(g, 2), **extra}
+            lift = self._lift(bounds, pose['scale'], pose['rotation'])
+            return {**self.adjust(ref, move=[0, 0, g + lift - z]), 'snapped': True, 'ground': round(g, 2),
+                    'lift': round(lift, 2), **extra}
         _, dzdx, dzdy = surface
-        heading = pose['rotation'][2]
-        pitch, roll = self._tilt(dzdx, dzdy, heading)
+        return self._lay(ref, pose, bounds, g, dzdx, dzdy, extra,
+                         'the surface slope from five rays 24 units apart (the pick rays carry no normal); SetAngle X '
+                         'and Y lay the object on it at its heading')
+
+    def _lay(self, ref, pose, bounds, g, dzdx, dzdy, extra, how):
+        """Turn the object onto the slope (dzdx, dzdy) at its heading and rest its bottom on the plane through g."""
+        z = pose['position'][2]
+        pitch, roll = self._tilt(dzdx, dzdy, pose['rotation'][2])
         rotate = [((pitch - pose['rotation'][0] + 180) % 360) - 180, ((roll - pose['rotation'][1] + 180) % 360) - 180,
                   0]
-        out = self.adjust(ref, move=[0, 0, g - z], rotate=rotate)
+        lift = self._lift_on_plane(bounds, pose['scale'], pitch, roll)
+        out = self.adjust(ref, move=[0, 0, g + lift - z], rotate=rotate)
         slope = math.degrees(math.atan(math.hypot(dzdx, dzdy)))
-        return {**out, 'snapped': True, 'ground': round(g, 2), **extra, 'aligned': True,
-                'slopeDegrees': round(slope, 1),
-                'how': 'the surface slope from five rays 24 units apart (the pick rays carry no normal); SetAngle X '
-                       'and Y lay the object on it at its heading'}
+        return {**out, 'snapped': True, 'ground': round(g, 2), **extra, 'lift': round(lift, 2), 'aligned': True,
+                'slopeDegrees': round(slope, 1), 'how': how}
+
+    def _snap_by_footprint(self, ref, r, pose, bounds, foot, rest, align, extra):
+        x, y, z = pose['position']
+        height = max(1.0, (bounds[5] - bounds[2]) * float(pose['scale'] or 1.0))
+        bottom, report, steep, too_deep = self._rest_on(foot, rest, height)
+        if steep and not align:
+            report['suggestHeading'] = self._suggest_heading(bounds, x, y, z, pose['scale'], r['ptr'], 250.0, 50.0,
+                                                             pose['rotation'][2], report['spread'], pose=pose)
+        extra['footprint'] = report
+        if too_deep and rest == 'low':
+            return {'ref': r['formId'], 'snapped': False, **extra,
+                    'note': 'too steep: the ground under it rises %.0f units across its footprint, more than its '
+                            '%.0f-unit height; resting it low would bury its high side. Turn it (suggestHeading), '
+                            'move it, align it (align=true), or snap with rest="centre" or "high".'
+                            % (report['spread'], height)}
+        if not align:
+            lift = self._lift(bounds, pose['scale'], pose['rotation'])
+            return {**self.adjust(ref, move=[0, 0, bottom + lift - z]), 'snapped': True, 'ground': round(bottom, 2),
+                    'lift': round(lift, 2), **extra}
+        a, b, c = foot['plane']
+        return self._lay(ref, pose, bounds, c + bottom, a, b, extra,
+                         'a plane fitted through %d samples over its footprint (the pick rays carry no normal), '
+                         'moved to rest %s on them; SetAngle X and Y lay the object on it at its heading'
+                         % (report['samples'], {'low': 'on the lowest', 'high': 'on the highest',
+                                                'centre': 'through the centre one'}[rest]))
 
     def check(self, ref):
         self.live.in_game()
@@ -1367,17 +1799,60 @@ class PlaceTools:
         pose = self._pose(r['ptr'])
         x, y, z = pose['position']
         g, over, side = self._settle(x, y, z, r['ptr'])
+        # floating and sinking are judged by the bottom of its bounds, not its origin (a centred origin sat on the
+        # ground with half the object under it, and check saw nothing)
+        base_ptr = self._base_of(r['ptr'])
+        bounds = self._bounds(base_ptr)
+        bottom = z - self._lift(bounds, pose['scale'], pose['rotation'])
         issues = []
+        foot = None
+        if side is None and g is not None and bounds and self._form_type(base_ptr) not in ACTOR_BASE_TYPES \
+                and not self._ambiguous(g, over, z, side):
+            pts = self._footprint_points(bounds, x, y, pose['rotation'][2], pose['scale'])
+            if pts:
+                foot = self._footprint(bounds, x, y, z, pose['rotation'][2], pose['scale'], ignore=r['ptr'],
+                                       reach=250.0, sink=50.0, points=pts, pose=pose)
+        report = None
         if side == 'buried':
             issues.append('buried %.0f units under the surface over it' % (over - z))
             g = over
         elif self._ambiguous(g, over, z, side):
             issues.append(self._ambiguous_text(g, over, z) + ', and the player\'s eye cannot tell which')
-        elif g is not None and z > g + 10:
-            issues.append('floats %.0f units above the surface under it' % (z - g)
+        elif foot is not None:
+            # judged over the footprint: a corner floating over a dip is a fault; the high side sinking into a slope
+            # is how a building sits on uneven ground, and only a fault past its whole height
+            # Each sample is judged against the bottom face at that point: tilted (after align) that is a sloped
+            # plane, not one height (seen live: an aligned shack was called floating 133 units).
+            height = max(1.0, (bounds[5] - bounds[2]) * float(pose['scale'] or 1.0))
+            under = self._face_heights(bounds, pose, foot['points'])
+            res = [None if gi is None else gi - b for gi, b in zip(foot['grounds'], under)]
+            cut = self._split_overhangs([v for v in res if v is not None], height)
+            judged = {**foot, 'values': res, 'plane': 'bottom',
+                      'overhang': [v is not None and cut is not None and v < cut for v in res]}
+            _, report, _, _ = self._rest_on(judged, 'low', height, bottom=0.0)
+            report.pop('rest', None)
+            report.pop('warning', None)
+            kept = [(v, p, gi) for v, p, gi, o in zip(res, foot['points'], foot['grounds'], judged['overhang'])
+                    if v is not None and not o]
+            report['groundMin'] = round(min(k[2] for k in kept), 2)
+            report['groundMax'] = round(max(k[2] for k in kept), 2)
+            lo, lo_at, _ = min(kept, key=lambda k: k[0])
+            hi = max(k[0] for k in kept)
+            if lo > 5:
+                issues.append('below the surface under it by %.0f units' % lo)
+            if lo < -10:
+                issues.append('floats %.0f units above the surface under it' % -lo
+                              + (' at its lowest point (%.0f, %.0f)' % lo_at if hi - lo > 10 else ''))
+            if hi > height:
+                issues.append('its high side is sunk %.0f units, more than its %.0f-unit height' % (hi, height))
+            if report['overhangs']:
+                issues.append('%d footprint samples overhang a drop (%.0f or more units under the rest)'
+                              % (len(report['overhangs']), min(o['under'] for o in report['overhangs'])))
+        elif g is not None and bottom > g + 10:
+            issues.append('floats %.0f units above the surface under it' % (bottom - g)
                           + (', under a ceiling or shelf %.0f over it' % (over - z) if side == 'open' else ''))
-        if g is not None and z < g - 5 and side != 'buried':
-            issues.append('below the surface under it by %.0f units' % (g - z))
+        if g is not None and bottom < g - 5 and side != 'buried' and foot is None:
+            issues.append('below the surface under it by %.0f units' % (g - bottom))
         if g is None:
             issues.append('no surface found under it')
             if over is not None and over - z <= self.CLOSE_OVER:
@@ -1387,7 +1862,8 @@ class PlaceTools:
         for o in overlaps:
             issues.append('overlaps %s (%s, %.0f units inside its bound)' % (o['ref'], o['how'], o['depth']))
         return {'ref': r['formId'], **pose, 'surface': None if g is None else round(g, 2), 'issues': issues,
-                'overlaps': overlaps,
+                'overlaps': overlaps, 'bottom': round(bottom, 2), 'bounds': list(bounds) if bounds else None,
+                **({'footprint': report} if report else {}),
                 'note': 'Overlap: the world bound spheres of the loaded references are compared (a sphere is '
                         'coarse); a candidate counts when a ray from this object\'s centre to the other\'s hits the '
                         'other inside both bounds ("collision"), or when the centres nearly coincide ("centres").'}
@@ -1484,11 +1960,11 @@ class PlaceTools:
     def run(self, action, **kw):
         if action == 'at':
             return self.at(kw['base'], kw.get('position'), kw.get('near'), kw.get('offset'), kw.get('rotation'),
-                           kw.get('scale'), kw.get('snap', False))
+                           kw.get('scale'), kw.get('snap', False), kw.get('rest'))
         if action == 'array':
             return self.array(kw['base'], kw.get('position'), kw.get('shape') or 'row', kw.get('count') or 5,
                               kw.get('spacing') or 128.0, kw.get('columns'), kw.get('radius'), kw.get('rotation'),
-                              kw.get('snap', False))
+                              kw.get('snap', False), kw.get('rest'))
         if action == 'nudge':
             return self.adjust(kw['ref'], move=kw.get('offset'), local=kw.get('local', False))
         if action == 'rotate':
@@ -1496,7 +1972,7 @@ class PlaceTools:
         if action == 'scale':
             return self.adjust(kw['ref'], scale=kw.get('scale'))
         if action == 'snap':
-            return self.snap(kw['ref'], kw.get('align', False))
+            return self.snap(kw['ref'], kw.get('align', False), kw.get('rest'))
         if action == 'check':
             return self.check(kw['ref'])
         if action == 'list':

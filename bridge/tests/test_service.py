@@ -81,7 +81,7 @@ class FakeTransport:
 
 class ServiceTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)   # per-thread connections close on GC
         root = Path(self.tmp.name)
         self.p = Project(project_id='test', **host_launcher(root),
                          game_root=root/'game', plugin='Fixture.esp', state_dir=root/'state',

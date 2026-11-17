@@ -10,13 +10,13 @@ Entry: {'by': the parameter that picks the action (default 'action'), 'common': 
 
 ACTION_PARAMS = {
     'fnv_place': {'actions': {
-        'at': {'base', 'position', 'near', 'offset', 'rotation', 'scale', 'snap', 'export', 'count', 'distance',
-               'direction'},
-        'array': {'base', 'position', 'shape', 'count', 'spacing', 'columns', 'radius', 'rotation', 'snap'},
+        'at': {'base', 'position', 'near', 'offset', 'rotation', 'scale', 'snap', 'rest', 'export', 'count',
+               'distance', 'direction'},
+        'array': {'base', 'position', 'shape', 'count', 'spacing', 'columns', 'radius', 'rotation', 'snap', 'rest'},
         'nudge': {'ref', 'offset', 'local'},
         'rotate': {'ref', 'rotation'},
         'scale': {'ref', 'scale'},
-        'snap': {'ref', 'align'},
+        'snap': {'ref', 'align', 'rest'},
         'check': {'ref'},
         'list': set(),
         'remove': {'ref'},
@@ -96,9 +96,13 @@ ACTION_PARAMS = {
         'diff': {'before', 'after'},
     }},
     'fnv_game': {'actions': {
-        'launch': {'start', 'timeout_seconds'},
-        'restart': {'start', 'timeout_seconds'},
+        'launch': {'start', 'timeout_seconds', 'via'},
+        'restart': {'start', 'timeout_seconds', 'via'},
         'quit': {'force', 'timeout_seconds'},
+    }},
+    'fnv_companion_install': {'actions': {
+        'install': {'target'},
+        'uninstall': {'target'},
     }},
     'fnv_menu': {'actions': {
         'state': set(),

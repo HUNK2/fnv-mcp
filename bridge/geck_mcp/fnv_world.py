@@ -1043,10 +1043,13 @@ class WorldTools:
                        'INI bBackground Mouse ([Controls], read at input start-up 0x00A22660)']
         return out
 
+    def _layout(self):
+        from . import fnv_layout
+        game = getattr(self.live, 'game', None)
+        return game.layout() if hasattr(game, 'layout') else fnv_layout.configured(self.live.project)
+
     def _ini_path(self):
-        from pathlib import Path
-        fnv = self.live.project.fnv
-        return Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile / 'Fallout.ini'
+        return self._layout().ini
 
     def _read_background_mouse(self):
         try:
@@ -1059,6 +1062,8 @@ class WorldTools:
 
     def _persist_background_mouse(self, on):
         import shutil
+        from . import fnv_layout
+        fnv_layout.guard(self._layout(), 'change your real Fallout.ini')   # LayoutError carries a code
         path = self._ini_path()
         lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
         value = 'bBackground Mouse=%d' % (1 if on else 0)

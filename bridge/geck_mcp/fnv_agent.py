@@ -611,6 +611,7 @@ class AgentTools:
                                                      'bytes': p.stat().st_size} for p in files], 'changed': False}
         if not name or not SAVE_NAME.match(name):
             raise ValueError('name: 1-60 letters, digits, _ or -')
+        self.game.guard_direct('%s a save of your real game' % action)
         full = TEST_SAVE_PREFIX + name
         path = saves / (full + '.fos')
         if action == 'delete':

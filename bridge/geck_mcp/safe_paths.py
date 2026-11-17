@@ -72,6 +72,11 @@ def read_roots(project):
     if fnv is not None:
         roots += [getattr(fnv, 'mo2_root', None), getattr(fnv, 'tests_dir', None), getattr(fnv, 'decomp_root', None)]
         roots += list(getattr(fnv, 'crash_dirs', None) or [])
+        # the direct install's own folders (saves and Fallout.ini; plugins.txt): a game started from Steam uses them
+        # even when the project also names an MO2 profile
+        from .fnv_layout import configured
+        layout = configured(project)
+        roots += [layout.user_dir, layout.appdata_dir]
     if os.environ.get('LOCALAPPDATA'):
         roots.append(Path(os.environ['LOCALAPPDATA']) / 'fnvmcp')
     out = []

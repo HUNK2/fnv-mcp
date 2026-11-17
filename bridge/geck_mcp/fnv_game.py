@@ -1,8 +1,11 @@
-"""Game control for the fnv_* tools: launch Fallout: New Vegas through the MO2 dev profile, wait for the
-engine companion, start at the main menu / a save / a cell, report status, quit and restart, install
-plugins into the dev profile, read logs, and back up saves before tests change anything.
+"""Game control for the fnv_* tools: launch Fallout: New Vegas through the MO2 dev profile or straight from the game
+folder, wait for the engine companion, start at the main menu / a save / a cell, report status, quit and restart,
+install plugins, read logs, and back up saves before tests change anything.
 
-Nothing here touches the user's real saves or INIs: the dev profile keeps its own (profile-local).
+Which install a game is, and where its files are, is fnv_layout's answer. The MO2 dev profile keeps its own saves and
+INIs. The direct install (Steam's Play button, nvse_loader.exe) is the user's real game: everything here that would
+change its files or load its saves goes through guard_direct, which refuses unless
+fnv.allow_direct_install_changes is true.
 """
 import ctypes
 import json
@@ -14,7 +17,7 @@ import time
 from ctypes import wintypes
 from pathlib import Path
 
-from . import fnv_link
+from . import fnv_layout, fnv_link
 from .fnv_link import EngineLink, LinkError
 from .fnv_state import atomic_write, read_json, update_json
 from .safe_paths import no_unc
@@ -269,15 +272,15 @@ def terminate(pid):
 
 # ---------------------------------------------------------------------- the game
 class Game:
-    """One dev-profile game for a project. Holds the companion link and the session record."""
+    """The game of a project (MO2 dev profile or direct install). Holds the companion link and the session record."""
 
     def __init__(self, project):
+        from .config import FnvSettings
         self.project = project
-        fnv = project.fnv
-        if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
-            raise GameError('NOT_CONFIGURED', 'Set fnv.mo2_root and fnv.mo2_profile in the project file')
-        self.mo2_root = Path(fnv.mo2_root)
-        self.profile = fnv.mo2_profile
+        fnv = project.fnv or FnvSettings()
+        # The configured MO2 instance (None without one); which install a running game is comes from layout().
+        self.mo2_root = Path(fnv.mo2_root) if fnv.mo2_root else None
+        self.profile = fnv.mo2_profile or None
         self.executable = getattr(fnv, 'mo2_executable', None) or 'NVSE'
         self.game_root = Path(project.game_root)
         self.state = Path(project.state_dir) / 'fnv'
@@ -298,24 +301,44 @@ class Game:
                             % (self.link.pipe, pid, ', '.join(map(str, running)) or 'none running'),
                             {'serverPid': pid, 'gamePids': running})
 
-    # ------------------------------------------------------------ paths
+    # ------------------------------------------------------------ install kind and paths
+    def layout(self, proc=None):
+        """The install of the running game (MO2 file system loaded or not), else the configured one (fnv_layout)."""
+        if proc is None:
+            try:
+                proc = self.process()
+            except GameError:       # several games: the configured install
+                proc = None
+        return fnv_layout.current(self.project, proc) if proc else fnv_layout.configured(self.project)
+
+    def guard_direct(self, what, layout=None):
+        """Refuse to change the user's real game files on a direct install unless fnv.allow_direct_install_changes
+        is true; the MO2 dev profile always passes."""
+        try:
+            fnv_layout.guard(layout or self.layout(), what)
+        except fnv_layout.LayoutError as e:
+            raise GameError(e.code, str(e), e.evidence) from None
+
     @property
     def profile_dir(self):
-        return self.mo2_root / 'profiles' / self.profile
+        """The MO2 profile folder, or My Games\\FalloutNV for the direct install (Fallout.ini, saves)."""
+        return self.layout().profile_dir
 
     @property
     def saves_dir(self):
-        return self.profile_dir / 'saves'
+        return self.layout().saves_dir
 
     @property
     def console_log(self):
         return Path(os.environ.get('LOCALAPPDATA', '')) / 'fnvmcp/console.log'
 
     def log_paths(self):
-        return {'nvse': self.game_root / 'nvse.log', 'console': self.console_log,
-                'crash': self.game_root / 'CrashLogger.log', 'jip': self.game_root / 'jip_ln_nvse.log',
-                'mo2': self.mo2_root / 'logs/mo_interface.log',
-                'error': self.game_root / 'falloutnv_error.log', 'havok': self.game_root / 'falloutnv_havok.log'}
+        paths = {'nvse': self.game_root / 'nvse.log', 'console': self.console_log,
+                 'crash': self.game_root / 'CrashLogger.log', 'jip': self.game_root / 'jip_ln_nvse.log',
+                 'error': self.game_root / 'falloutnv_error.log', 'havok': self.game_root / 'falloutnv_havok.log'}
+        if self.mo2_root:
+            paths['mo2'] = self.mo2_root / 'logs/mo_interface.log'
+        return paths
 
     # ------------------------------------------------------------ session record
     def session(self):
@@ -436,9 +459,12 @@ class Game:
     def status(self):
         proc = self.process()
         session = self.session()
+        layout = self.layout(proc)
         out = {'running': bool(proc), 'pid': proc[0] if proc else None, 'exiting': bool(getattr(self, 'exiting', False)),
-               'profile': {'mo2': str(self.mo2_root), 'name': self.profile},
+               'install': layout.describe(),
                'session': {k: session.get(k) for k in ('pid', 'launchedAt', 'start', 'ready')}}
+        if layout.kind == fnv_layout.MO2 and self.mo2_root:
+            out['profile'] = {'mo2': str(self.mo2_root), 'name': self.profile}
         from .fnv_suite import restore_markers
         pending = restore_markers(self.project.state_dir)
         if pending:     # a bisect is running, or a server died in one: the next fnv_bisect finishes the restore (R3)
@@ -467,6 +493,8 @@ class Game:
         if phase in ('in_game', 'in_menu', 'paused_menu', 'main_menu'):
             out['plugins'] = self.loaded_plugins()
         out['stale'] = bool(session.get('pid')) and session.get('pid') != proc[0]
+        # A game the user started (Steam, nvse_loader, MO2 by hand) is attached to, not owned: quit needs "full".
+        out['startedByBridge'] = self.owns(proc)
         return out
 
     def loaded_plugins(self):
@@ -510,28 +538,66 @@ class Game:
             return {**found, 'doctorError': str(e)}
 
     # ------------------------------------------------------------ launch / wait
-    def launch(self, start='menu', timeout=180):
+    def route(self, via='auto'):
+        """The layout a launch uses: via 'mo2' (the dev profile), 'direct' (the game folder) or 'auto' (MO2 when the
+        project names an MO2 instance, else direct)."""
+        configured = fnv_layout.configured(self.project)
+        if via == 'auto':
+            return configured
+        if via == 'mo2':
+            if configured.kind != fnv_layout.MO2:
+                raise GameError('NOT_CONFIGURED', 'via=mo2 needs fnv.mo2_root and fnv.mo2_profile in the project file')
+            return configured
+        if via == 'direct':
+            return fnv_layout._make(self.project, fnv_layout.DIRECT, 'launch via=direct')
+        raise ValueError('via must be auto, mo2 or direct')
+
+    def direct_program(self):
+        """nvse_loader.exe in the game folder (xNVSE then loads with the game), else FalloutNV.exe (the Steam exe
+        patched to load xNVSE through nvse_steam_loader.dll loads it too)."""
+        for name in ('nvse_loader.exe', GAME_EXE):
+            path = self.game_root / name
+            if path.is_file():
+                return path
+        raise GameError('GAME_MISSING', 'Neither nvse_loader.exe nor %s is in %s' % (GAME_EXE, self.game_root))
+
+    def launch(self, start='menu', timeout=180, via='auto'):
         proc = self.process()
         if proc:
             raise GameError('ALREADY_RUNNING', 'The game is already running (pid %d); use fnv_game restart or fnv_game quit' % proc[0],
                             {'pid': proc[0]})
-        self.check_companion_installed()
-        mo2 = self.mo2_root / 'ModOrganizer.exe'
-        if not mo2.exists():
-            raise GameError('MO2_MISSING', 'ModOrganizer.exe not found in %s' % self.mo2_root)
-        kind, value = parse_start(start, self.saves_dir)
-        return self._launch(start, timeout, kind, value)
+        layout = self.route(via)
+        kind, value = parse_start(start, layout.saves_dir)
+        if kind == 'save':
+            self.guard_direct('load a save of your real game', layout)
+        self.check_companion_installed(layout)
+        if layout.kind == fnv_layout.MO2:
+            mo2 = self.mo2_root / 'ModOrganizer.exe'
+            if not mo2.exists():
+                raise GameError('MO2_MISSING', 'ModOrganizer.exe not found in %s' % self.mo2_root)
+        else:
+            self.direct_program()
+        return self._launch(start, timeout, kind, value, layout)
 
-    def _launch(self, start, timeout, kind, value):
-        mo2 = self.mo2_root / 'ModOrganizer.exe'
-        leftover = self.close_stale_mo2()
-        stale = self.clear_stale_mo2_state()
+    def _launch(self, start, timeout, kind, value, layout=None):
+        layout = layout or fnv_layout.configured(self.project)
+        direct = layout.kind == fnv_layout.DIRECT
+        leftover = stale = None
+        if not direct:
+            leftover = self.close_stale_mo2()
+            stale = self.clear_stale_mo2_state()
         launched = time.time()
         self.forget_process()
-        method = self.shell_launch(mo2)
-        self.save_session(pid=None, launchedAt=launched, start=start, ready=False)
-        timeline = [{'t': 0, 'event': 'mo2_run', 'method': method,
-                     'command': 'ModOrganizer.exe -p "%s" run -e "%s"' % (self.profile, self.executable)}]
+        if direct:
+            program = self.direct_program()
+            method = self.start_program(program, '', self.game_root)
+            first = {'t': 0, 'event': 'direct_run', 'method': method, 'command': str(program)}
+        else:
+            method = self.shell_launch(self.mo2_root / 'ModOrganizer.exe')
+            first = {'t': 0, 'event': 'mo2_run', 'method': method,
+                     'command': 'ModOrganizer.exe -p "%s" run -e "%s"' % (self.profile, self.executable)}
+        self.save_session(pid=None, launchedAt=launched, start=start, ready=False, via=layout.kind)
+        timeline = [first]
         if stale:
             timeline.insert(0, {'t': 0, 'event': 'stale_mo2_state_moved', 'files': stale})
         if leftover:
@@ -542,6 +608,8 @@ class Game:
             proc = self.process()
             if proc:
                 return proc
+            if direct:
+                return None
             dialogs = mo2_dialogs(self.mo2_root)
             if dialogs:
                 # MO2 waits behind a modal dialog that nobody will click: close it and fail now.
@@ -557,8 +625,21 @@ class Game:
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'process', 'pid': pid})
         self.save_session(pid=pid)
         self.link.close()
-        self._wait(lambda: (self.ping().get('deferredInit') or None), deadline, 'COMPANION_NOT_READY',
-                   'The engine companion did not answer (is it installed and enabled in the dev profile?)', pid)
+        while True:
+            try:
+                self._wait(lambda: (self.ping().get('deferredInit') or None), deadline, 'COMPANION_NOT_READY',
+                           'The engine companion did not answer (is it installed and enabled in the dev profile?)', pid)
+                break
+            except GameError as e:
+                # A direct start can be handed over: Steam's DRM ends the first FalloutNV.exe and starts the game
+                # again through Steam. Follow a new one that appears within HANDOVER_SECONDS.
+                successor = self._successor(pid, deadline) if direct and e.code == 'GAME_EXITED' else None
+                if successor is None:
+                    raise
+                pid = successor[0]
+                timeline.append({'t': round(time.time() - launched, 1), 'event': 'handed_over', 'pid': pid})
+                self.save_session(pid=pid)
+                self.link.close()
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'companion_ready'})
         try:        # which companion build: an older one writes no exit notes (fnv_status uses it; R18)
             self.save_session(companion=self.ping().get('companion'))
@@ -569,9 +650,23 @@ class Game:
         result = self.start_from_menu(kind, value, deadline, pid)
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'ready', 'phase': result['phase']})
         self.save_session(ready=True)
-        return {**result, 'pid': pid, 'timeline': timeline, 'seconds': round(time.time() - launched, 1)}
+        return {**result, 'pid': pid, 'via': layout.kind, 'timeline': timeline,
+                'seconds': round(time.time() - launched, 1)}
 
-    ARRIVAL_CLOSER = 'Begin Function { }\nif GetActiveMenuMode == 1001\nCloseActiveMenu\nendif\nEnd'
+    HANDOVER_SECONDS = 20
+
+    def _successor(self, pid, deadline):
+        """Another FalloutNV.exe that starts within HANDOVER_SECONDS after pid exited, or None."""
+        end = min(deadline, time.monotonic() + self.HANDOVER_SECONDS)
+        while time.monotonic() < end:
+            self.forget_process()
+            proc = self.process(fresh=True)
+            if proc and proc[0] != pid:
+                return proc
+            time.sleep(0.25)
+        return None
+
+    ARRIVAL_CLOSER ='Begin Function { }\nif GetActiveMenuMode == 1001\nCloseActiveMenu\nendif\nEnd'
     UNPAUSER = ('Begin Function { }\nint m\nlet m := GetActiveMenuMode\nif m == 1001 || m == 1013\nCloseActiveMenu\n'
                 'endif\nEnd')
 
@@ -651,15 +746,21 @@ class Game:
         nvse_loader.exe fails with ERROR_ACCESS_DENIED (Claude Code's launcher, libuv, allows breakaway); and a
         game started by Explorer got Discord's overlay injected (DiscordHook) and crashed at startup, 2 of 2,
         while ShellExecute starts never did. So Explorer is only the fallback."""
+        return self.start_program(mo2, '-p "%s" run -e "%s"' % (self.profile, self.executable), self.mo2_root,
+                                  'launch-%s' % self.profile)
+
+    def start_program(self, exe, args, cwd, link_name=None):
+        """Start exe with args in cwd as shell_launch describes: ShellExecute, or a shortcut opened by Explorer when
+        this process's job object forbids breakaway. Returns how it was started."""
         added = complete_environment()
         if not job_forbids_breakaway():
-            os.startfile(str(mo2), 'open', '-p "%s" run -e "%s"' % (self.profile, self.executable), str(self.mo2_root))
+            os.startfile(str(exe), 'open', args, str(cwd))
             return 'shell_execute' + (' (added %d environment variables)' % len(added) if added else '')
-        link = self.state / ('launch-%s.lnk' % re.sub(r'[^A-Za-z0-9_-]', '_', self.profile))
+        link = self.state / ('%s.lnk' % re.sub(r'[^A-Za-z0-9_-]', '_', link_name or 'launch-' + Path(exe).stem))
         quote = lambda s: str(s).replace("'", "''")
         script = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s'); $s.TargetPath='%s'; "
                   "$s.Arguments='%s'; $s.WorkingDirectory='%s'; $s.Save()") % (
-            quote(link), quote(mo2), quote('-p "%s" run -e "%s"' % (self.profile, self.executable)), quote(self.mo2_root))
+            quote(link), quote(exe), quote(args), quote(cwd))
         made = subprocess.run([str(system_exe('powershell.exe')), '-NoProfile', '-NonInteractive', '-Command', script],
                               capture_output=True, text=True, timeout=60)
         if made.returncode != 0 or not link.exists():
@@ -772,9 +873,17 @@ class Game:
             raise GameError('COMPANION_UNREACHABLE', 'The game runs but the engine companion does not answer', ping)
         return {'phase': self.phase(ping)[0], 'pid': proc[0], 'alreadyRunning': True}
 
-    def check_companion_installed(self):
-        modlist = self.profile_dir / 'modlist.txt'
-        dll = self.mo2_root / 'mods' / fnv_link.MOD_NAME / 'NVSE/Plugins' / fnv_link.DLL_NAME
+    def check_companion_installed(self, layout=None):
+        layout = layout or self.layout()
+        if layout.kind == fnv_layout.DIRECT:
+            dll = layout.nvse_plugins_dir / fnv_link.DLL_NAME
+            if not dll.exists():
+                raise GameError('COMPANION_NOT_INSTALLED', 'The engine companion is not in the game folder',
+                                {'dll': str(dll), 'fix': "With the game closed, call fnv_companion_install with "
+                                                         "target='game'."})
+            return
+        modlist = layout.modlist
+        dll = layout.mods_dir / fnv_link.MOD_NAME / 'NVSE/Plugins' / fnv_link.DLL_NAME
         enabled = modlist.exists() and ('+' + fnv_link.MOD_NAME) in modlist.read_text(encoding='utf-8').splitlines()
         if not dll.exists() or not enabled:
             raise GameError('COMPANION_NOT_INSTALLED', 'The engine companion is not installed in the dev profile; '
@@ -874,10 +983,10 @@ class Game:
             time.sleep(0.25)
         return False
 
-    def restart(self, start='menu', timeout=180):
+    def restart(self, start='menu', timeout=180, via='auto'):
         quit_result = self.quit()
         time.sleep(1.0)  # let MO2 unmount its virtual file system
-        return {'quit': quit_result, 'launch': self.launch(start, timeout)}
+        return {'quit': quit_result, 'launch': self.launch(start, timeout, via)}
 
     # ------------------------------------------------------------ install / logs / saves
     def install_plugin(self, plugin_path, mod_name=None):
@@ -891,7 +1000,10 @@ class Game:
             raise GameError('BAD_PLUGIN', 'Not a plugin file: %s' % source)
         if not fnv_link.SAFE_NAME.match(mod):
             raise GameError('BAD_NAME', 'Mod name may use letters, digits, space and _ . \' - only')
-        target = self.mo2_root / 'mods' / mod / source.name
+        layout = self.layout()
+        if layout.kind == fnv_layout.DIRECT:
+            return self._install_plugin_direct(source, layout)
+        target = layout.mods_dir / mod / source.name
         backup = None
         if target.exists():
             if target.read_bytes() == source.read_bytes():
@@ -901,7 +1013,7 @@ class Game:
             shutil.copy2(target, backup)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
-        fnv_link.enable_mod(self.mo2_root, self.profile, mod)
+        fnv_link.enable_mod(layout.mo2_root, layout.profile, mod)
         added = []
         with fnv_link.profile_locked(self.mo2_root, self.profile):
             for name in ('plugins.txt', 'loadorder.txt'):
@@ -913,6 +1025,39 @@ class Game:
                     added.append(name)
         return {'installed': True, 'unchanged': False, 'target': str(target), 'mod': mod, 'backup': str(backup) if backup else None,
                 'addedTo': added}
+
+    def _install_plugin_direct(self, source, layout):
+        """Copy a plugin into the real Data folder and activate it in plugins.txt (fnv.allow_direct_install_changes
+        only). A file it replaces and plugins.txt as it was are kept in the bridge state. The copy gets the current
+        time: without a mod manager the game orders plugins by file time, so a new plugin loads last."""
+        self.guard_direct('install a plugin into your real Data folder', layout)
+        target = layout.data_dir / source.name
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        backup = None
+        if target.exists():
+            if target.read_bytes() == source.read_bytes():
+                return {'installed': True, 'unchanged': True, 'target': str(target), 'install': 'direct'}
+            backup = self.state / 'install-backups' / ('%d-%s' % (time.time(), source.name))
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(target, backup)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        lists_backup = self.state / 'plugin-lists-backups' / stamp
+        added = []
+        from .fnv_state import locked
+        with locked(layout.lock_path(self.project.state_dir), 30.0):
+            path = layout.plugins_txt
+            lines = path.read_text(encoding='utf-8', errors='replace').splitlines() if path.exists() else []
+            lists_backup.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                shutil.copy2(path, lists_backup / path.name)
+            if source.name.lower() not in (line.strip().lstrip('*').lower() for line in lines):
+                lines.append(source.name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write(path, '\n'.join(lines) + '\n')
+                added.append(str(path))
+        return {'installed': True, 'unchanged': False, 'target': str(target), 'install': 'direct',
+                'backup': str(backup) if backup else None, 'addedTo': added, 'listsBackup': str(lists_backup)}
 
     def logs(self, sources=None, since='last', max_lines=200):
         cursor_path = self.state / 'log-cursors.json'

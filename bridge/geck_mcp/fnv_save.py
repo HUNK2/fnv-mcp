@@ -66,6 +66,11 @@ INITIAL_KINDS = {1: 'exterior cell (char)', 2: 'exterior cell (short)', 3: 'inte
 FLT_MAX = struct.unpack("<f", bytes.fromhex("ffff7f7f"))[0]     # the engine's "unset" float
 
 
+class SaveNotFound(FileNotFoundError):
+    """No save by that name in the saves folder (an error with a code for the tool envelope)."""
+    code = 'SAVE_MISSING'
+
+
 class SaveFormatError(ValueError):
     code = 'SAVE_FORMAT'
 
@@ -614,5 +619,5 @@ def resolve_path(name, saves_dir):
         q = Path(saves_dir) / candidate
         if q.exists():
             return q
-    raise FileNotFoundError('No save %r in %s' % (name, saves_dir))
+    raise SaveNotFound('No save %r in %s' % (name, saves_dir))
 

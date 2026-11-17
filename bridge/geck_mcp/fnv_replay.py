@@ -45,6 +45,7 @@ class ReplayTools:
         if not name or not name.replace('_', '').replace('-', '').isalnum():
             raise ConvError('BAD_ARGUMENTS', 'name uses letters, digits, _ and - only.')
         save = 'replay_%s' % name
+        self.live.game.guard_direct('write a save into your real game')
         out = self.live.console('save %s' % save)
         time.sleep(1.0)
         seed = DEFAULT_SEED if seed is None else int(seed)
@@ -84,6 +85,7 @@ class ReplayTools:
             raise ConvError('NO_REPLAY', 'No replay %s (see list).' % name)
         rec = json.loads(path.read_text(encoding='utf-8'))
         if load:
+            self.live.game.guard_direct('load a save of your real game')
             self.live.link.schedule(0, 'load "%s"' % rec['save'])
             time.sleep(1.0)
             self.live.game.wait_in_game(time.monotonic() + timeout, start='replay:%s' % name)

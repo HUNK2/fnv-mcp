@@ -102,7 +102,7 @@ class Authoring:
         loose lives there, not in Data (seen 2026-11-11: a crate mesh in its mod folder failed the build's check)."""
         fnv = getattr(self.project, 'fnv', None)
         if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
-            return []
+            return []           # the direct install: loose files are in Data, which the build checks anyway
         mods = Path(fnv.mo2_root) / 'mods'
         roots = []
         modlist = Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile / 'modlist.txt'

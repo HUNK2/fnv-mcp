@@ -92,9 +92,11 @@ FULL_ONLY_ACTIONS = {
 
 # Every control tool that neither table covers in full, and why it may run under "read".
 READ_LEVEL_CONTROL = {
-    'fnv_game': 'launch starts the dev game through the MO2 dev profile and puts nothing new into it; quit stops '
-                'it, under read only the game fnv_game launch started (Game.owns); restart is quit and launch',
-    'fnv_companion_install': "installs the product's own engine companion, not agent code",
+    'fnv_game': 'launch starts the game (MO2 dev profile or the game folder) and puts nothing new into it, and a save '
+                'start on the direct install needs fnv.allow_direct_install_changes; quit stops it, under read only '
+                'the game fnv_game launch started (Game.owns); restart is quit and launch',
+    'fnv_companion_install': "installs or removes the product's own engine companion (the MO2 mod, or with an "
+                             "explicit target=game the one DLL in Data\\NVSE\\Plugins), not agent code",
     'fnv_scripts_compile': "compiles the project spec's scripts into the bridge's script cache",
     'fnv_name_export': 'writes the runtime evidence the bridge recorded into the fnvsym traces folder',
     'fnv_author': 'export, check, scaffold and package write only into the bridge state folder',
@@ -118,9 +120,9 @@ def needs_full(name, action):
 FNV_LIVE_TOOLS = {
     # milestone 4: game control, tests, logs
     'fnv_status': ('read', 'game running? phase (main menu, loading, in game), cell, loaded plugins, companion'),
-    'fnv_game': ('control', 'start the game through the MO2 dev profile at the menu, a save or a cell and wait until ready (launch); quit it (console qqq, window close, terminate if forced); restart'),
-    'fnv_install': ('control', 'install a built plugin into the dev profile as an MO2 mod and enable it (game closed)'),
-    'fnv_companion_install': ('control', 'build the engine companion with Zig and install it into the dev profile'),
+    'fnv_game': ('control', 'start the game through the MO2 dev profile or straight from the game folder at the menu, a save or a cell and wait until ready (launch); quit it (console qqq, window close, terminate if forced); restart'),
+    'fnv_install': ('control', 'install a built plugin as an MO2 mod in the dev profile, or into the real Data folder on the direct install (setting needed); enable it (game closed)'),
+    'fnv_companion_install': ('control', 'build the engine companion with Zig and install it into the dev profile or the game folder, or remove it'),
     'fnv_logs': ('read', 'new lines of nvse.log, the console log, CrashLogger.log, JIP and MO2 logs, and the engine warning logs'),
     'fnv_test': ('control', 'run one YAML scenario test in the game and report each step (run, default); every scenario in a folder (run_all); test steps given inline, no file (steps): wait for frames, a predicate or an event, press inputs for exact frames, save values with as, repeat the run to show differences'),
     'fnv_snapshot': ('act', 'capture chosen game state under a name; diff two snapshots (or a snapshot with now)'),
@@ -437,13 +439,19 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_game(action: Literal['launch', 'quit', 'restart'],
                        start: Start = 'menu',
                        force: bool = True,
-                       timeout_seconds: Annotated[int, Field(ge=5, le=600)] | None = None) -> result_type:
-        """The game process. launch: start Fallout: New Vegas through the MO2 profile named in fnv.mo2_profile (and its
-        saves) and wait until it is ready: at the main menu, in a save (loaded by the companion, no clicks), or in a
-        cell via coc; refuses when the game already runs; returns a timeline of the startup. quit: the console's qqq
-        first, then closing its window, then (force=true) terminating it. restart: quit (if running) and launch
-        again; use after installing plugins or DLLs. timeout_seconds: launch and restart 20 to 600 (default 240),
-        quit 5 to 120 (default 20). fnv_session start also launches, with a setup check and a journal scope."""
+                       timeout_seconds: Annotated[int, Field(ge=5, le=600)] | None = None,
+                       via: Literal['auto', 'mo2', 'direct'] = 'auto') -> result_type:
+        """The game process. launch: start Fallout: New Vegas and wait until it is ready: at the main menu, in a save
+        (loaded by the companion, no clicks), or in a cell via coc; refuses when the game already runs; returns a
+        timeline of the startup. via: mo2 runs it through the MO2 profile named in fnv.mo2_profile (and its saves);
+        direct runs nvse_loader.exe (else FalloutNV.exe) from the game folder, as Steam's Play button does; auto (the
+        default) is mo2 when the project names an MO2 instance, else direct. A game you started yourself needs no
+        launch: the tools attach to it (fnv_status). On the direct install a save start needs
+        fnv.allow_direct_install_changes. quit: the console's qqq first, then closing its window, then (force=true)
+        terminating it; a game the bridge did not start is quit only with engine_control full. restart: quit (if
+        running) and launch again; use after installing plugins or DLLs. timeout_seconds: launch and restart 20 to
+        600 (default 240), quit 5 to 120 (default 20). fnv_session start also launches, with a setup check and a
+        journal scope."""
         def run():
             if action == 'quit':
                 timeout = 20 if timeout_seconds is None else timeout_seconds
@@ -453,27 +461,51 @@ def register(server, project, annotations, result_type, maintain=False, offline=
             timeout = 240 if timeout_seconds is None else timeout_seconds
             if timeout < 20:
                 raise ValueError('%s takes timeout_seconds 20 to 600' % action)
-            return (live.game.launch if action == 'launch' else live.game.restart)(start, timeout)
+            return (live.game.launch if action == 'launch' else live.game.restart)(start, timeout, via)
         return await invoke('fnv_game', run, 'control', action=action)
 
     @server.tool(annotations=control)
     async def fnv_install(plugin_path: Annotated[str, Field(min_length=5, max_length=1000)],
                           mod_name: Annotated[str, Field(max_length=80)] | None = None) -> result_type:
         """Install a built .esp/.esm into the dev profile as its own MO2 mod (mods/<name>/), enable the mod and the
-        plugin. The game must be closed. A previous copy is backed up."""
+        plugin. On the direct install (no MO2) it goes into the real Data folder and plugins.txt instead, only with
+        fnv.allow_direct_install_changes (mod_name is not used there). The game must be closed. A previous copy (and
+        plugins.txt) is backed up."""
         return await invoke('fnv_install', lambda: live.game.install_plugin(plugin_path, mod_name), 'control')
 
     @server.tool(annotations=control)
-    async def fnv_companion_install() -> result_type:
-        """Build the fnvmcp engine companion (C, Zig 0.14.1 from fnv.zig or FNV_MCP_ZIG) and install it into the dev
-        profile as the MO2 mod "fnvmcp engine companion". The game must be closed; it loads at the next launch."""
-        def action():
+    async def fnv_companion_install(target: Literal['auto', 'mo2', 'game'] = 'auto',
+                                    action: Literal['install', 'uninstall'] = 'install') -> result_type:
+        """Build the fnvmcp engine companion (C, Zig 0.14.1 from fnv.zig or FNV_MCP_ZIG) and install it, or remove it
+        (uninstall). target: mo2 puts it into the dev profile as the MO2 mod "fnvmcp engine companion"; game puts it
+        into the game folder's Data\\NVSE\\Plugins, so it loads however the game starts (Steam's Play button,
+        nvse_loader.exe), with a receipt and a backup of a file it replaces; auto is mo2 when the project names an MO2
+        instance, and otherwise asks for target=game. uninstall disables the MO2 mod, or removes the file from the
+        game folder when it is the one this tool installed. The game must be closed; it loads at the next start."""
+        def run():
             if live.game.process():
                 raise ValueError('Quit the game before installing the companion (fnv_game quit)')
+            fnv = project.fnv
+            has_mo2 = bool(fnv and fnv.mo2_root and fnv.mo2_profile)
+            where = target
+            if where == 'auto':
+                if not has_mo2:
+                    raise ValueError("The project names no MO2 instance: call again with target='game' to put the "
+                                     "companion into the game folder's Data\\NVSE\\Plugins")
+                where = 'mo2'
+            if where == 'mo2' and not has_mo2:
+                raise ValueError('target=mo2 needs fnv.mo2_root and fnv.mo2_profile in the project file')
+            if action == 'uninstall':
+                if where == 'game':
+                    return {'uninstall': fnv_link.uninstall_game(project.game_root, project.state_dir)}
+                return {'uninstall': {'disabled': fnv_link.disable_mod(fnv.mo2_root, fnv.mo2_profile, fnv_link.MOD_NAME),
+                                      'mod': fnv_link.MOD_NAME, 'note': 'the mod folder is kept; it is off in the profile'}}
             receipt = fnv_link.build(project.state_dir, fnv_link.find_zig(project))
-            return {'build': receipt, 'install': fnv_link.install(project.fnv.mo2_root, project.fnv.mo2_profile, receipt,
+            if where == 'game':
+                return {'build': receipt, 'install': fnv_link.install_game(project.game_root, receipt, project.state_dir)}
+            return {'build': receipt, 'install': fnv_link.install(fnv.mo2_root, fnv.mo2_profile, receipt,
                                                                   project.state_dir)}
-        return await invoke('fnv_companion_install', action, 'control')
+        return await invoke('fnv_companion_install', run, 'control')
 
     @server.tool(annotations=read)
     async def fnv_logs(sources: list[Literal['nvse', 'console', 'crash', 'jip', 'mo2', 'error', 'havok']] | None = None,
@@ -2353,14 +2385,20 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                         columns: Annotated[int, Field(ge=1, le=50)] | None = None,
                         radius: Annotated[float, Field(gt=0, le=10000)] | None = None,
                         snap: bool = False, local: bool = False, align: bool = False,
+                        rest: Literal['low', 'centre', 'high'] | None = None,
                         export: bool = True,
                         distance: Annotated[int, Field(ge=0, le=10000)] | None = None,
                         direction: Annotated[int, Field(ge=0, le=3)] | None = None) -> result_type:
         """Place things in the running game; every placement is journaled for fnv_author export. at base: at position,
         or near a ref (+ offset), or 150 units in front of the player; rotation in degrees, scale, snap=true drops it
-        on the surface below. array base: shape row, grid (columns) or circle (radius), count, spacing, from position
-        or the player. nudge ref offset=[dx,dy,dz] (local=true in its own axes), rotate ref rotation=[dx,dy,dz]
-        degrees added, scale ref scale. snap ref [align]: onto the surface below (align=true also tilts it to the slope at its heading). check ref: floating or sinking. list: what
+        on the surface below. Snap rests the bottom of its bounds on the ground under its whole footprint: rest=low
+        (default) on the lowest ground, so no corner floats and the uphill side sinks; centre (the ground under its
+        origin) or high. The result's footprint says how much sank or floats, overhangs and a warning; steep ground
+        suggests a heading, and ground rising more than its height is refused (TOO_STEEP). array base: shape row,
+        grid (columns) or circle (radius), count, spacing, from position or the player. nudge ref offset=[dx,dy,dz]
+        (local=true in its own axes), rotate ref rotation=[dx,dy,dz] degrees added, scale ref scale. snap ref [align]
+        [rest]: onto the surface below (align=true also tilts it to the slope at its heading, fitted over its
+        footprint). check ref: floating or sinking, over its footprint. list: what
         this session placed. remove: one placed ref, or all of them. at with export=false: a test placement left out
         of fnv_author export (an enemy for a test): base near a ref (default the player) with PlaceAtMe, count
         copies, distance and direction (0 front, 1 back, 2 left, 3 right); fnv_undo disables and deletes them.
@@ -2368,7 +2406,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         is_read = action in ('list', 'check')
         args = {'base': base, 'ref': ref, 'position': position, 'near': near, 'offset': offset, 'rotation': rotation,
                 'scale': scale, 'shape': shape, 'count': count, 'spacing': spacing, 'columns': columns,
-                'radius': radius, 'snap': snap, 'local': local, 'align': align}
+                'radius': radius, 'snap': snap, 'local': local, 'align': align, 'rest': rest}
 
         def run():
             if export:

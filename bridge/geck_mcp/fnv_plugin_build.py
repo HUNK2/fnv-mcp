@@ -16,6 +16,7 @@ import os
 import re
 import struct
 import subprocess
+import time
 from pathlib import Path
 
 from .fnv_conv import ConvError, verdict
@@ -172,11 +173,27 @@ class PluginTools:
         dll = self._folder(name) / ('%s.dll' % ident)
         if not dll.is_file():
             raise ConvError('NOT_BUILT', 'Build it first (fnv_plugin_build build).')
+        layout = game.layout() if hasattr(game, 'layout') else None
+        if layout is not None and layout.kind == 'direct':
+            game.guard_direct('install a plugin DLL into your real Data folder', layout)
+            target = layout.nvse_plugins_dir / dll.name
+            backup = None
+            if target.exists() and target.read_bytes() != dll.read_bytes():
+                backup = Path(self.live.project.state_dir) / 'fnv' / 'install-backups' / ('%d-%s' % (time.time(), dll.name))
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                backup.write_bytes(target.read_bytes())
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(dll.read_bytes())
+            self.live.journal.add({'kind': 'plugin_install', 'plugin': ident, 'target': str(target), 'undo': None})
+            return verdict('Installed %s into the game folder' % dll.name,
+                           'It loads at the next start of the game. Remove the file to uninstall it.',
+                           target=str(target), backup=str(backup) if backup else None, note=SHARING_NOTE)
         fnv = self.live.project.fnv
-        target = Path(fnv.mo2_root) / 'mods' / mod_name(ident) / 'NVSE' / 'Plugins' / dll.name
+        mo2_root, profile = (layout.mo2_root, layout.profile) if layout is not None else (fnv.mo2_root, fnv.mo2_profile)
+        target = Path(mo2_root) / 'mods' / mod_name(ident) / 'NVSE' / 'Plugins' / dll.name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(dll.read_bytes())
-        enabled = enable_mod(fnv.mo2_root, fnv.mo2_profile, mod_name(ident))
+        enabled = enable_mod(mo2_root, profile, mod_name(ident))
         self.live.journal.add({'kind': 'plugin_install', 'plugin': ident, 'target': str(target), 'undo': None})
         return verdict('Installed %s as the MO2 mod "%s"' % (dll.name, mod_name(ident)),
                        'It loads at the next start: fnv_game restart (or fnv_game launch).', target=str(target),
@@ -185,8 +202,13 @@ class PluginTools:
     def log(self, name):
         ident = c_name(name)
         fnv = self.live.project.fnv
-        candidates = [Path(fnv.mo2_root) / 'overwrite' / 'NVSE' / 'Plugins' / ('%s.log' % ident),
-                      Path(fnv.mo2_root) / 'mods' / mod_name(ident) / 'NVSE' / 'Plugins' / ('%s.log' % ident)]
+        game_root = getattr(self.live.project, 'game_root', None)
+        candidates = [Path(game_root) / 'Data' / 'NVSE' / 'Plugins' / ('%s.log' % ident),
+                      Path(game_root) / ('%s.log' % ident)] if game_root else []
+        if fnv and fnv.mo2_root:
+            candidates = [Path(fnv.mo2_root) / 'overwrite' / 'NVSE' / 'Plugins' / ('%s.log' % ident),
+                          Path(fnv.mo2_root) / 'mods' / mod_name(ident) / 'NVSE' / 'Plugins' / ('%s.log' % ident)] \
+                + candidates
         for p in candidates:
             if p.is_file():
                 lines = p.read_text(encoding='utf-8', errors='replace').splitlines()

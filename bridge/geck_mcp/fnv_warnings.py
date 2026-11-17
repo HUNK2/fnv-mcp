@@ -281,9 +281,16 @@ class Warnings:
         self.profile = profile
         self.state = Path(state_dir)
 
+    guard = None        # (what) -> None or raises: the direct install's protection (Game.guard_direct)
+
     @classmethod
     def from_game(cls, game, capture=None):
-        return cls(game.game_root, game.mo2_root, game.profile, game.state, capture)
+        layout = game.layout()
+        mo2 = layout.kind == 'mo2' and layout.configured      # a game started from Steam reads the real Data folder
+        out = cls(game.game_root, layout.mo2_root if mo2 else None, layout.profile if mo2 else None, game.state,
+                  capture)
+        out.guard = game.guard_direct
+        return out
 
     # ------------------------------------------------------------ the config file
     def enabled_mods(self):
@@ -436,6 +443,8 @@ class Warnings:
                           config=str(target))
             out['changed'] = False
             return out
+        if target == self.real_config() and self.guard is not None:
+            self.guard("change xNVSE's config file in your real Data folder")
         backup = None
         if target.exists():
             backup = self.state / 'warnings-backups' / ('%s-%s' % (time.strftime('%Y%m%d-%H%M%S'), CONFIG_NAME))

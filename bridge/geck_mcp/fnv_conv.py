@@ -60,13 +60,17 @@ NEXT_STEPS = {
     'COMPANION_DISCONNECTED': 'The engine companion is gone: call fnv_status, then fnv_game launch if the game is not running.',
     'COMPANION_UNREACHABLE': 'The engine companion does not answer: call fnv_status; if it is not installed, quit the game, '
                              'call fnv_companion_install, then fnv_game launch.',
-    'COMPANION_NOT_INSTALLED': 'The engine companion is not installed: quit the game, call fnv_companion_install, '
-                               'then fnv_game launch.',
+    'COMPANION_NOT_INSTALLED': 'The engine companion is not installed: quit the game, call fnv_companion_install '
+                               "(target='game' without MO2), then fnv_game launch.",
+    'DIRECT_INSTALL_PROTECTED': 'This would change your real game (no MO2 dev profile): set '
+                                'fnv.allow_direct_install_changes to true in the project file if you want that, or '
+                                'start at the menu or with coc: instead of a save.',
     'ZIG_MISSING': 'Zig is not installed: call fnv_setup_check and follow the fix for Zig.',
     'CONTROL_DISABLED': 'This call needs fnv.engine_control = "full": it changes the running game, or puts code or '
                         'files into the game or its mod profile. Set it in the project file.',
     'ENGINE_MAP_UNAVAILABLE': 'The engine map is missing: call fnv_setup_check and follow the fix for the engine map.',
-    'NOT_CONFIGURED': 'Set fnv.mo2_root and fnv.mo2_profile in the project file; fnv_setup_check lists what else is missing.',
+    'NOT_CONFIGURED': 'Set fnv.mo2_root and fnv.mo2_profile in the project file (or start the game without MO2); '
+                      'fnv_setup_check lists what else is missing.',
     'REF_NOT_FOUND': 'No such reference: check the spelling, or find it with fnv_record action=find or fnv_refs_near.',
     'UNKNOWN_ACTION': 'Call the tool again with one of the valid actions.',
 }

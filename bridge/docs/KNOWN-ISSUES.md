@@ -47,6 +47,18 @@ damaged file. Most are tracked as GitHub issues.
 - When the bridge disconnects, the companion releases a held frame gate and a running step at once (checked in the
   game); releasing a thread stopped at a breakpoint is tested against a fake host only.
 
+## Direct install (no MO2)
+
+- On a direct install, `fnv_console` and `fnv_run_script` with `engine_control = "full"` can still run `save` and
+  `load` console lines: `fnv.allow_direct_install_changes` guards the tools, not every console command.
+- `fnv_crawl cells` and other `coc` moves change where your character is in the running game; nothing is saved
+  unless the game autosaves (its own setting).
+- The direct install's load order is computed as the game orders it without a mod manager (master files first, then
+  file time); a load order tool that writes `loadorder.txt` or changes file times is not followed until the game
+  runs, when `fnv_loadorder` uses the running game's own list.
+- A game started by another mod manager that does not use MO2's file system (Vortex deploys into `Data`) counts as
+  the direct install.
+
 ## Game control
 
 - After a launch in which no game started, `fnv_status` says the game was terminated from outside.

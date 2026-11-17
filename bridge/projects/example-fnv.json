@@ -10,6 +10,7 @@
     "tests_dir": "../state/tests",
     "mo2_root": null,
     "mo2_profile": null,
+    "allow_direct_install_changes": false,
     "clean_exe": null
   }
 }

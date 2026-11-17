@@ -204,8 +204,15 @@ missing. In short:
    For `fnv_patch_map`, add `"clean_exe"`: your own unpacked FalloutNV.exe 1.4.0.525 (the Steam exe keeps its
    code encrypted on disk; Steamless unpacks it). It is read locally and never copied.
 3. With the game closed, `fnv_companion_install` builds the DLL with Zig and installs it as the MO2 mod
-   `fnvmcp engine companion` (it never writes into the game folder).
+   `fnvmcp engine companion` (it writes into the game folder only when asked with `target=game`).
 4. `fnv_game launch start=continue` starts the game and loads the newest dev-profile save.
+
+Without MO2 (the direct install: the game started by Steam or `nvse_loader.exe`), `fnv_companion_install
+target=game` puts the companion into `Data\NVSE\Plugins` and the tools attach to the game however it was started;
+`fnv_status` names the install in `install.kind` (`mo2` or `direct`). Changes to the direct install's files (plugins
+into `Data`, `plugins.txt`, `Fallout.ini`, xNVSE's config, saves) refuse with `DIRECT_INSTALL_PROTECTED` unless
+`fnv.allow_direct_install_changes` is true. [FNV-MCP-SETUP.md](FNV-MCP-SETUP.md), "Without Mod Organizer 2", has
+the details.
 
 ## Tools
 
@@ -216,10 +223,10 @@ Every answer is an envelope: `ok`, `outcome`, `data`, `error`. For an `fnv_*` ca
 
 | Tool | Kind | What it does |
 | --- | --- | --- |
-| `fnv_status` | read | Running? Phase (main_menu, loading, in_game, in_menu, paused_menu), cell, loaded plugins, companion ping |
-| `fnv_game launch` / `fnv_game quit` / `fnv_game restart` | control | Start at `menu`, `continue`, `save:<name>` or `coc:<cell>`; quit via `qqq`, then window close, then terminate |
-| `fnv_install` | control | A built plugin into the dev profile as its own MO2 mod, enabled (game closed) |
-| `fnv_companion_install` | control | Build and install the engine companion |
+| `fnv_status` | read | Running? Phase (main_menu, loading, in_game, in_menu, paused_menu), cell, loaded plugins, companion ping; `install` (MO2 dev profile or direct install, how it was told, the folders in use); `startedByBridge` |
+| `fnv_game launch` / `fnv_game quit` / `fnv_game restart` | control | Start at `menu`, `continue`, `save:<name>` or `coc:<cell>`, `via` `mo2`, `direct` (nvse_loader.exe from the game folder) or `auto`; quit via `qqq`, then window close, then terminate |
+| `fnv_install` | control | A built plugin into the dev profile as its own MO2 mod, enabled; on the direct install into `Data` and `plugins.txt` (needs `fnv.allow_direct_install_changes`) (game closed) |
+| `fnv_companion_install` | control | Build and install the engine companion: `target` `mo2`, `game` (`Data\NVSE\Plugins`) or `auto`; `action=uninstall` removes it |
 | `fnv_logs` | read | New lines of nvse.log, the console log, CrashLogger.log, JIP and MO2 logs |
 | `fnv_test` / `fnv_test run_all` | control | Run YAML scenarios (below) |
 | `fnv_snapshot` / `fnv_snapshot diff` | act | Capture chosen state and compare |
@@ -652,7 +659,34 @@ How:
   present in this setup.
 - Placement uses `PlaceAtMe`, `SetPos`, `SetAngle`, `SetScale`; every placement and change is journaled, and
   `remove` disables and marks for deletion. `snap` and `check` cast rays down and pass through the object's own
-  collision.
+  collision. A snap (`snap`, and `at`/`array` with `snap=true`) rests the bottom of the base form's bounds on the
+  surface, not its origin: the bounds (the record's OBND) are read from the engine at +0x24 of the base form, times
+  the scale and tilted by the X/Y angles; `check` judges floating and sinking by that bottom and returns it with
+  the bounds. Objects with the origin at their centre, such as `WoodShack01`, no longer sink half into the ground.
+- The snap rests on the ground under the whole footprint, not one ray under the origin (2026-11-18: a shack
+  snapped by its centre floated on the downhill side of a slope and sat on a boulder under its middle). Rays are
+  cast over the bounds' X/Y rectangle, scaled, turned to the heading and pulled 4 units in: a grid at most 128
+  apart, at most 64 points with the origin, all in one batched cast per step down. Each point follows the ground
+  rules of the centre ray (the curb and hill rules) plus two found at a boulder in Goodsprings: the landscape (a
+  pick hit naming no reference) ends the way down, as a boulder's buried underside under it was taken for ground
+  and sank a shack 150 units under the ground around it; and for `snap` and `check`, where the object stands, the
+  ground at a point is the first surface at or below the object's top there (own collision passed through, a
+  surface over the top is overhead), as on a sunk side the ground is met before the object's own collision and the
+  centre's own-collision rule called it a ceiling and lost 9 of 49 points. `rest`: `low` (default) puts the
+  bottom on the lowest ground, so nothing floats and the uphill side sinks; `centre` is the old seat under the
+  origin; `high` the highest ground. A group of the lowest points (fewer than half) further under the rest than
+  64 units, a quarter of the object's height and three times the rest's spread is an overhang (a cliff edge, a
+  gully): reported, not rested on. The result's `footprint` gives samples, groundMin/Max, spread, sunk, floats,
+  overhangs and a `warning` when the spread passes a quarter of the height, with `suggestHeading` (of 0/45/90/135,
+  the least spread). Ground rising more than the object's height is refused with `rest=low` (`TOO_STEEP`; `array`
+  lists such points under `skipped`). `snap align=true` fits a plane through the footprint instead of five rays
+  24 apart, and lifts by -minZ / (cos X cos Y): the origin over a plane it is laid on (the old align used the
+  bottom centre's height, cos X cos Y, and sank about 8 units on a 10 degree slope). `check` judges the footprint
+  against the bottom face at each point (a sloped plane once aligned):
+  a low point floating more than 10 units, the whole bottom under the ground, the high side sunk past the
+  object's height and overhangs are issues; moderate sinking into a slope is reported, not an issue. Actors
+  (NPC_, CREA, LVLN, LVLC bases, type byte at +4) and objects under 48 units both ways keep one ray. Limits: dips
+  narrower than the grid; clutter counts as ground (resting low passes over it); the footprint ignores X/Y tilt.
 - `export` writes `state/fnv/author/<name>.spec-part.json`: created forms as records (template + FULL), placed
   references as cell objects with `@EditorID` bases where the record index knows them.
 - `package` copies only the plugin and the files it names that are loose in its own mod folder, never files of
