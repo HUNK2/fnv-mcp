@@ -296,6 +296,24 @@ class SymbolizeTests(SymdbBase):
         self.assertEqual(s['source'], 'include/inline.h:3')
         self.assertNotIn('sourceLine', s)
 
+    def test_without_source_opens_no_database(self):
+        engine = fnv_engine.load(*fnv_engine.default_paths(self.project))
+        with mock.patch.object(fnv_symdb, 'load', wraps=fnv_symdb.load) as load:
+            s = engine.symbolize(0x401012, source=False)
+        self.assertEqual((s['name'], s['offset']), ('Actor::ApplyDamage', '0x12'))
+        self.assertNotIn('source', s)
+        self.assertEqual(load.call_count, 0)
+
+    def test_patch_map_names_patched_functions_without_source_lines(self):
+        """fnv_patch_map names ~400 patched spots; a source line each (a database session and a decomp file read)
+        was 0.4 s of its 0.5 s, and the tool never shows them."""
+        engine = fnv_engine.load(*fnv_engine.default_paths(self.project))
+        nops = SimpleNamespace(read=lambda address, n: b'\x90' * n)
+        with mock.patch.object(fnv_symdb, 'load', wraps=fnv_symdb.load) as load:
+            out = fnv_deep.DeepTools._classify(SimpleNamespace(), nops, nops, [], engine, 0x401012, 0x401014, {}, False)
+        self.assertEqual(out['function']['name'], 'Actor::ApplyDamage')
+        self.assertEqual(load.call_count, 0)
+
     def test_service(self):
         r = FnvService(self.project).symbolize(['0x00401012', '0x00401105'])
         self.assertEqual(r['data']['results'][0]['source'], 'src/actor.cpp:9')

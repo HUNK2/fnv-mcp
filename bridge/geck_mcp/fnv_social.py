@@ -211,17 +211,17 @@ class SocialTools:
                 else:
                     pending.append((entry, handler, run or 0, p1, item['param2'], compare))
             out.append(entries)
-        # 250 handler calls per frame: write 0, call, read the double back.
+        # 250 handler calls per frame: clear the result slots, call each, read its double back. One write clears all
+        # 250 slots: a write costs the game about half a millisecond, so one per call was 130 ms of every frame.
         for chunk in _chunks(pending, 250):
-            ops = []
+            ops = [('wr', word(scratch), '00' * 8 * len(chunk))]
             for k, (entry, handler, run, p1, p2, _) in enumerate(chunk):
                 slot = scratch + 8 * k
-                ops += [('wr', word(slot), '0000000000000000'),
-                        ('call', word(handler), 'i', '0', '0', word(run), word(p1), word(p2), word(slot)),
+                ops += [('call', word(handler), 'i', '0', '0', word(run), word(p1), word(p2), word(slot)),
                         ('rd', word(slot), '8')]
             results = self.link.batch(ops)
             for k, (entry, _, _, _, _, compare) in enumerate(chunk):
-                call, read = results[3 * k + 1], results[3 * k + 2]
+                call, read = results[1 + 2 * k], results[2 + 2 * k]
                 handled = call.get('ok') and bool(int(call.get('eax', '0'), 16) & 0xFF)
                 entry['evaluated'] = bool(handled)
                 if not handled or not read.get('ok'):

@@ -80,9 +80,24 @@ bridge decides what to do with them:
 | `events` | xNVSE messages seen: loads, saves, new game, exit to menu, script errors with text |
 | `hook` `unhook` `hookctl` `hookfilter` `hooks` | Watch hooks on engine functions (below) |
 | `compile` | Compile script text with xNVSE's CompileScript into a new Script object (not run, not cached) |
+| `linger` | Read or set the same-frame wait and the frame budget in microseconds (below); `0 0` turns it off |
 
-All ops of one request run in the same frame, in order. Reads and writes go through
-`ReadProcessMemory`/`WriteProcessMemory` on the game's own process, so a bad address fails cleanly.
+All ops of one request run in the same frame, in order. The companion serves one request per frame, with one
+exception that makes read tools fast. A tool that reads the game in 200 small requests would wait 200 frames
+(3.3 s at 60 fps). So the bridge marks the requests of a read-only tool call whose ops only read (`rd` `rs` `rp`
+`ls` `info`) or evaluate or call for a value (`eval` `call`): their id starts with `r`. After a marked request the
+main thread waits up to 2 ms for the next request and serves it in the same frame, for at most 8 ms per frame.
+A request that is not marked (a write, a console line, a hook, the frame gate, any request of an act tool) is the
+last one of its frame, so a frame still passes after every request that may change the game. `info` reports the
+setting as `linger`; a setting made with the `linger` op ends when the bridge disconnects.
+`FNV_MCP_SAME_FRAME=0` makes the bridge mark nothing: every request then waits for its own frame.
+
+Reads and writes go through
+`ReadProcessMemory`/`WriteProcessMemory` on the game's own process, so a bad address fails cleanly. A write into
+plain data (every page resident, writable and not executable, told by `QueryWorkingSetEx`) goes straight to
+`NtWriteVirtualMemory`: `VirtualQuery`, which the other way calls three times, also measures the page's whole
+region, and the game's heap is one region of 80 MB and more (about 0.2 ms a call there). Code and every other
+page go the old way, with the page protection opened and put back.
 Engine calls are not guarded: a wrong call can crash the game, and the crash doctor explains it.
 
 The companion refuses to load except on FalloutNV 1.4.0.525 with xNVSE 6.x. Only the current Windows user

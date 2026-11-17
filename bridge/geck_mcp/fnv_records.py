@@ -273,8 +273,7 @@ class RecordsTools:
                 continue
             key = next((k for k, u in users.items() if u['formId'] == x['formId']), None)
             fid = latest.get(key)
-            row = fid and self.db.execute('select offset from records where file = ? and owner = ? and local = ?',
-                                          (fid, key[0], key[1])).fetchone()
+            row = fid and self._version_at(fid, key[0], key[1])
             if row:
                 try:
                     record = read_record(by_file[fid]['path'], row[0])
@@ -300,6 +299,13 @@ class RecordsTools:
     def _global(self, entries, owner, local):
         return self.data._global(entries, owner, local)
 
+    def _version_at(self, fid, owner, local):
+        """(file offset,) of one plugin's version of a record, or None. The unary plus keeps SQLite off the
+        per-file index: with it the planner walked every record of the plugin (465,016 in FalloutNV.esm) for
+        each lookup; the (owner, local) index finds the few versions of one record directly."""
+        return self.db.execute('select offset from records where +file = ? and owner = ? and local = ?',
+                               (fid, owner, local)).fetchone()
+
     # ------------------------------------------------------------------ fnv_conflicts
     def conflicts(self, plugin=None, record_type=None, limit=50, offset=0, include_identical=False, scan_cap=20000):
         entries, built = self.data._active()
@@ -309,14 +315,21 @@ class RecordsTools:
         if record_type:
             clauses.append('type = ?')
             args.append(record_type.upper())
-        sql = ('select owner, local, type, group_concat(file), count(*) from records where %s group by owner, local '
-               'having count(*) > 1' % ' and '.join(clauses))
-        groups = self.db.execute(sql, args).fetchall()
         target = None
         if plugin:
             target = next((e for e in entries if e['name'].lower() == plugin.lower()), None)
             if not target:
                 raise DataError('PLUGIN_NOT_ACTIVE', '%s is not in the active load order' % plugin)
+            # Only the records this plugin has, then their other versions through the owner index: grouping the whole
+            # load order to keep a plugin's few groups took 370 ms.
+            sql = ('select r.owner, r.local, r.type, group_concat(r.file), count(*) from (select distinct owner, local '
+                   'from records where file = ?) t join records r on r.owner = t.owner and r.local = t.local where %s '
+                   'group by r.owner, r.local having count(*) > 1' % ' and '.join('r.' + c for c in clauses))
+            args.insert(0, target['fileId'])
+        else:
+            sql = ('select owner, local, type, group_concat(file), count(*) from records where %s group by owner, '
+                   'local having count(*) > 1' % ' and '.join(clauses))
+        groups = self.db.execute(sql, args).fetchall()
         rows = []
         for owner, local, rtype, file_list, count in groups:
             fids = sorted({int(f) for f in file_list.split(',')}, key=lambda f: by_file[f]['index'])
@@ -365,8 +378,7 @@ class RecordsTools:
     def _compare(self, fids, owner, local, by_file, target):
         versions = []
         for fid in fids:
-            row = self.db.execute('select offset from records where file = ? and owner = ? and local = ?',
-                                  (fid, owner, local)).fetchone()
+            row = self._version_at(fid, owner, local)
             try:
                 versions.append((by_file[fid]['name'], _fields(read_record(by_file[fid]['path'], row[0]))))
             except Exception as e:  # unreadable record: report, keep going

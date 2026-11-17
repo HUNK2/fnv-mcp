@@ -38,11 +38,13 @@ class FakeLive:
 class FakeLink:
     def __init__(self, live, handler_results):
         self.live, self.results, self.slots = live, handler_results, {}
+        self.batches = []
 
     def one(self, *op):
         return self.batch([op])[0]
 
     def batch(self, ops):
+        self.batches.append(list(ops))
         out = []
         for op in ops:
             if op[0] == 'call' and op[1] == '%X' % fnv_social.FORM_HEAP_ALLOCATE:
@@ -50,9 +52,13 @@ class FakeLink:
             elif op[0] == 'call':
                 handler, slot = int(op[1], 16), int(op[-1], 16)
                 ok, value = self.results[handler]
-                self.slots[slot] = value
+                if value is not None:              # None: a handler that writes no result
+                    self.slots[slot] = value
                 out.append({'ok': True, 'eax': '1' if ok else '0'})
             elif op[0] == 'wr':
+                data, at = bytes.fromhex(op[2]), int(op[1], 16)
+                for k in range(0, len(data) - 7, 8):
+                    self.slots[at + k] = struct.unpack_from('<d', data, k)[0]
                 out.append({'ok': True})
             elif op[0] == 'rd':
                 out.append({'ok': True, 'hex': struct.pack('<d', self.slots.get(int(op[1], 16), 0.0)).hex()})
@@ -136,6 +142,41 @@ class SocialOfflineTests(unittest.TestCase):
         result = tools.evaluate_conditions(0x50, 0x60000000, 0)
         self.assertFalse(result['result'])
         self.assertIn('needs a reference', result['conditions'][0]['why'])
+
+    def _many(self, count, value):
+        commands = [{'name': 'GetStage', 'opcode': '0x103A', 'table': 'script', 'record': '0x01000000',
+                     'params': [{'label': 'Quest', 'typeId': 14}]}]
+        memory = {0x01000000: b'\0' * 0x20 + struct.pack('<I', 0x00500000)}
+        items = []
+        for n in range(count):
+            memory[0x30000000 + 0x20 * n] = condition(0x60, 1.0, 0x3A, p1=0x40000000)   # >= 1
+            items.append(0x30000000 + 0x20 * n)
+        handlers = {0x00500000: (True, value)}
+        return SocialTools(FakeLive(memory, {0x50000000: items}, commands, handlers)), handlers
+
+    def test_each_chunk_of_handler_calls_clears_its_result_slots_in_one_write(self):
+        """In the game a write costs about half a millisecond (each changes page protection twice): 250 of them per
+        request were 130 ms of every frame fnv_dialogue tree held."""
+        tools, _ = self._many(300, 2.0)
+        items = tools.read_conditions(0x50000000, limit=400)
+        result = tools.evaluate_jobs([(items, 0x60000000, 0)])[0]
+        self.assertEqual([c['passed'] for c in result['conditions']], [True] * 300)
+        calls = [ops for ops in tools.link.batches if any(o[0] == 'call' and o[-1] != '800' for o in ops)]
+        self.assertEqual(len(calls), 2)                                   # 250 + 50
+        for ops in calls:
+            writes = [o for o in ops if o[0] == 'wr']
+            handled = sum(1 for o in ops if o[0] == 'call')
+            self.assertEqual(len(writes), 1, 'one write clears the slots of the whole chunk')
+            self.assertEqual(writes[0][2], '00' * 8 * handled)
+            self.assertLess(ops.index(writes[0]), min(k for k, o in enumerate(ops) if o[0] == 'call'))
+
+    def test_a_handler_that_writes_no_result_reads_zero_not_the_last_one(self):
+        tools, handlers = self._many(3, 5.0)
+        self.assertEqual([c['value'] for c in tools.evaluate_conditions(0x50000000, 0x60000000, 0)['conditions']],
+                         [5.0] * 3)
+        handlers[0x00500000] = (True, None)
+        self.assertEqual([c['value'] for c in tools.evaluate_conditions(0x50000000, 0x60000000, 0)['conditions']],
+                         [0.0] * 3)
 
 
 if __name__ == '__main__':

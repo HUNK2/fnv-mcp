@@ -14,7 +14,9 @@ The record index is a SQLite cache in state/fnv/records.sqlite, rebuilt per plug
 time changes. Plugins are read with geck-mcp-nv's codec (esp/codec.py) for decoding single records; the index
 scan reads record headers and the first subrecords only.
 """
+import copy
 import json
+import os
 import re
 import sqlite3
 import struct
@@ -59,14 +61,42 @@ class DataError(Exception):
 
 
 # ===================================================================================== load order
+# Working the load order out looks for each plugin in every enabled mod folder and reads its header: about 160 file
+# checks and 11 ms. Record lookups need it each time (fnv_save_inspect makes 200 for one save), so the answer is kept
+# until something it was made from changes: a profile file, an enabled mod folder or the Data folder (a folder's
+# time changes when a plugin is put in, removed or renamed), or a plugin file found (its size or time: its masters).
+_LOAD_ORDERS = {}
+PROFILE_FILES = ('modlist.txt', 'plugins.txt', 'loadorder.txt')
+
+
+def _stamp(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
+
+
 def load_order(project, live_plugins=None):
-    """[{index, name, path, mod, active, masters}] from the MO2 dev profile (or the running game's list)."""
+    """[{index, name, path, mod, active, masters}] from the MO2 dev profile (or the running game's list). The caller
+    owns the list it gets: it may change it."""
     fnv = project.fnv
     if not fnv or not fnv.mo2_root or not fnv.mo2_profile:
         raise DataError('NO_MO2_PROFILE', 'Set fnv.mo2_root and fnv.mo2_profile in the project file')
     root, profile = Path(fnv.mo2_root), Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile
     data_dir = Path(project.game_root) / 'Data'
+    key = (str(root), str(profile), str(data_dir), tuple(sorted(live_plugins.items())) if live_plugins else None)
+    profile_stamps = [_stamp(profile / name) for name in PROFILE_FILES]
+    kept = _LOAD_ORDERS.get(key)
+    if kept and kept[0] == profile_stamps and all(_stamp(path) == stamp for path, stamp in kept[1]):
+        return copy.deepcopy(kept[2])
+    stamps = []         # taken before each thing is read, so a change while it is read shows up next time
+    entries = _load_order(root, profile, data_dir, live_plugins, stamps)
+    _LOAD_ORDERS[key] = (profile_stamps, stamps, copy.deepcopy(entries))
+    return entries
 
+
+def _load_order(root, profile, data_dir, live_plugins, stamps):
     def lines(name):
         path = profile / name
         if not path.exists():
@@ -79,6 +109,8 @@ def load_order(project, live_plugins=None):
     dlc = {m[1:].split(':', 1)[1].strip().lower() for m in mods if m[:1] == '*' and ':' in m}
     active = {p.lstrip('*').lower() for p in lines('plugins.txt')}
     order = lines('loadorder.txt') or [p.lstrip('*') for p in lines('plugins.txt')]
+    for folder in [root / 'mods' / mod for mod in enabled] + [data_dir]:
+        stamps.append((folder, _stamp(folder)))
 
     def locate(name):
         for mod in enabled:
@@ -101,6 +133,7 @@ def load_order(project, live_plugins=None):
             entry['prefix'] = '%02X' % entry['index']
             index += 1
         if path:
+            stamps.append((path, _stamp(path)))
             try:
                 entry['masters'] = plugin_masters(path)
             except (OSError, codec.FormatError) as e:
@@ -299,14 +332,25 @@ class DataTools:
         return self._index
 
     def _live_plugins(self):
+        """{plugin: load-order index} of the running game, or None. A game's plugins are fixed once it has loaded
+        them, so the list is asked once per game process (it was a ping and two requests on every record lookup)."""
         if not self.live:
             return None
         try:
             game = self.live.game
-            if not game.process() or game.ping().get('error'):
+            proc = game.process()
+            if not proc:
+                return None
+            kept = getattr(self, '_live_list', None)
+            if kept and kept[0] == proc:
+                return dict(kept[1])
+            if game.ping().get('error'):
                 return None
             plugins = game.loaded_plugins() or []
-            return {p['name']: int(p['index'], 16) for p in plugins if p.get('name') and p.get('index')} or None
+            found = {p['name']: int(p['index'], 16) for p in plugins if p.get('name') and p.get('index')} or None
+            if found:
+                self._live_list = (proc, dict(found))
+            return found
         except Exception:
             return None
 

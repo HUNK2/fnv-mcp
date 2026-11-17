@@ -20,6 +20,8 @@
  *   request:  <id> TAB <op> SP <arg>... [TAB <op> SP <arg>...]... LF   (text arguments are hex)
  *   response: {"id":"<id>","frame":N,"results":[{...},...]} LF
  * "ping" alone is answered by the pipe thread, so it works while the main loop is stalled.
+ * One request is served per frame, except after a request whose id starts with "r" (the bridge's mark for a read):
+ * the next request is then served in the same frame if it comes at once (serve_more, the linger op).
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -40,6 +42,7 @@ __declspec(dllexport) volatile LONG fnvmcp_seam = 0;
 #define SEAM(n) do { while (fnvmcp_seam == (n)) SwitchToThread(); } while (0)
 __declspec(dllexport) volatile LONG fnvmcp_hook_reuse_ms = 60000;
 #define HOOK_REUSE_MS ((ULONGLONG)fnvmcp_hook_reuse_ms)
+__declspec(dllexport) volatile LONG fnvmcp_slow_writes = 0; /* tests: writes that took VirtualQuery's way */
 #else
 #define SEAM(n) ((void)0)
 #endif /* FNVMCP_TEST_SEAM */
@@ -135,6 +138,14 @@ static HANDLE done_event;
 static char *request, *response;
 static size_t response_len;
 static bool response_overflow;
+/* Same-frame reads (serve_more): after a request the bridge marked as a read, the main thread waits this long for
+ * the next request, and one frame goes on serving requests for at most this long. Either at 0 turns it off. */
+#define LINGER_WAIT_US 2000
+#define LINGER_FRAME_US 8000
+#define LINGER_WAIT_MAX 100000
+#define LINGER_FRAME_MAX 1000000
+static volatile LONG linger_wait_us = LINGER_WAIT_US, linger_frame_us = LINGER_FRAME_US;
+static bool request_marked; /* main thread: the id of the request being served starts with "r" */
 
 /* ------------------------------------------------------------------------------------ output */
 static void emit(const char *format, ...) {
@@ -201,7 +212,52 @@ static bool read_bytes(uint32_t address, void *out, size_t length) {
            done == length;
 }
 static bool read_u32(uint32_t address, uint32_t *value) { return read_bytes(address, value, 4); }
+/* Page facts without VirtualQuery. VirtualQuery also sizes the page's region, and the game's heap is one region of
+ * 80 MB and more: about 0.2 ms a call there, three or four of them per write (one inside WriteProcessMemory). The
+ * working-set query costs per page. NtWriteVirtualMemory checks nothing first and fails, without a fault, on a page
+ * that is not writable after all. */
+typedef struct { void *va; ULONG_PTR flags; } WsExPage; /* PSAPI_WORKING_SET_EX_INFORMATION */
+typedef BOOL(WINAPI *WsExFn)(HANDLE, void *, DWORD);
+typedef LONG(NTAPI *NtWriteFn)(HANDLE, void *, const void *, SIZE_T, SIZE_T *);
+static WsExFn ws_ex;
+static NtWriteFn nt_write;
+static bool fast_write_looked;
+#define PLAIN_PAGES_MAX (READ_MAX / 0x1000 + 1)
+/* Every page of the range resident, writable and not executable (no code bookkeeping applies to it)? */
+static bool plain_data(uint32_t address, size_t length) {
+    if (!fast_write_looked) {
+        HMODULE k = GetModuleHandleA("kernel32.dll"), n = GetModuleHandleA("ntdll.dll");
+        ws_ex = k ? (WsExFn)(void *)GetProcAddress(k, "K32QueryWorkingSetEx") : NULL;
+        nt_write = n ? (NtWriteFn)(void *)GetProcAddress(n, "NtWriteVirtualMemory") : NULL;
+        fast_write_looked = true;
+    }
+    if (!ws_ex || !nt_write || address < 0x10000 || !length || length > READ_MAX || address + length - 1 < address)
+        return false;
+    uint32_t first = address & ~0xFFFu, count = (((uint32_t)(address + length - 1) & ~0xFFFu) - first) / 0x1000 + 1;
+    WsExPage pages[PLAIN_PAGES_MAX];
+    if (count > PLAIN_PAGES_MAX) return false;
+    for (uint32_t i = 0; i < count; i++) {
+        pages[i].va = (void *)(uintptr_t)(first + i * 0x1000);
+        pages[i].flags = 0;
+    }
+    if (!ws_ex(GetCurrentProcess(), pages, count * sizeof(WsExPage))) return false;
+    for (uint32_t i = 0; i < count; i++) {
+        DWORD flags = (DWORD)pages[i].flags, protect = (flags >> 4) & 0x7FF; /* Valid:1 ShareCount:3 Win32Protection:11 */
+        if (!(flags & 1) || (protect & (PAGE_GUARD | PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                                        PAGE_EXECUTE_WRITECOPY)) || !(protect & (PAGE_READWRITE | PAGE_WRITECOPY)))
+            return false;
+    }
+    return true;
+}
 static bool write_bytes(uint32_t address, const void *data, size_t length) {
+    if (plain_data(address, length)) {
+        SIZE_T done = 0;
+        if (nt_write(GetCurrentProcess(), (void *)(uintptr_t)address, data, length, &done) >= 0 && done == length)
+            return true;
+    }
+#ifdef FNVMCP_TEST_SEAM
+    InterlockedIncrement(&fnvmcp_slow_writes);
+#endif /* FNVMCP_TEST_SEAM */
     MEMORY_BASIC_INFORMATION info;
     if (address < 0x10000 || !VirtualQuery((LPCVOID)(uintptr_t)address, &info, sizeof(info)) || info.State != MEM_COMMIT)
         return false;
@@ -2025,7 +2081,19 @@ static void op_info(void) {
          console_routed ? "true" : "false", GetCurrentThreadId() == main_thread ? "true" : "false",
          (unsigned long)main_thread);
     emit_text(context_dir, strlen(context_dir));
-    emit("}");
+    emit(",\"linger\":{\"waitUs\":%ld,\"frameUs\":%ld}}", (long)linger_wait_us, (long)linger_frame_us);
+}
+/* linger [<wait_us> <frame_us>]: read or set the same-frame wait and the frame budget (serve_more). 0 0 is off. */
+static void op_linger(int argc, char **argv) {
+    uint32_t wait, budget;
+    if (argc == 3) {
+        if (!parse_u32(argv[1], &wait) || !parse_u32(argv[2], &budget) || wait > LINGER_WAIT_MAX ||
+            budget > LINGER_FRAME_MAX)
+            return fail("bad_arguments");
+        InterlockedExchange(&linger_wait_us, (LONG)wait);
+        InterlockedExchange(&linger_frame_us, (LONG)budget);
+    } else if (argc != 1) return fail("bad_arguments");
+    emit("{\"ok\":true,\"waitUs\":%ld,\"frameUs\":%ld}", (long)linger_wait_us, (long)linger_frame_us);
 }
 static void op_read(int argc, char **argv) {
     uint32_t address, length;
@@ -2098,7 +2166,8 @@ static void op_write(int argc, char **argv) {
     /* Into code (fnv_patch, fnv_mem_write and their undos): never over a live int3, a hook's or a probe's bytes,
      * and the change is kept as a code site so no int3 or coverage byte lands inside it later (round-4 review I2). */
     MEMORY_BASIC_INFORMATION info;
-    bool code = VirtualQuery((LPCVOID)(uintptr_t)address, &info, sizeof(info)) && info.State == MEM_COMMIT &&
+    bool code = !plain_data(address, (size_t)length) && VirtualQuery((LPCVOID)(uintptr_t)address, &info, sizeof(info)) &&
+                info.State == MEM_COMMIT &&
                 (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
     if (code && (isite_in(address, (uint32_t)length) || hook_range(address, (uint32_t)length) ||
                  probe_range(address, (uint32_t)length)))
@@ -2382,6 +2451,7 @@ static void serve_op(char *op) {
     else if (!strcmp(argv[0], "hooknative")) op_hooknative(argc, argv);
     else if (!strcmp(argv[0], "code")) op_code(argc, argv);
     else if (!strcmp(argv[0], "cov")) op_cov(argc, argv);
+    else if (!strcmp(argv[0], "linger")) op_linger(argc, argv);
     else fail("unknown_op");
 }
 /* A request runs on the main thread. step and until can stop it in the middle: the ops after them are
@@ -2428,6 +2498,7 @@ static void serve_ops(char *ops, bool first) {
 static void serve_request(char *line) {
     last_contact = GetTickCount64(); /* a served request is contact (K2) */
     InterlockedExchange(&request_dropped, 0);
+    request_marked = line[0] == 'r'; /* a read: more are likely to follow at once (serve_more) */
     char *ops = strchr(line, '\t');
     if (ops) *ops++ = 0;
     if (strlen(line) > 64) line[64] = 0;
@@ -2602,8 +2673,41 @@ static DWORD WINAPI pipe_thread(void *unused) {
 }
 
 /* ------------------------------------------------------------------------------------ xNVSE */
+/* One request per frame made a tool of 200 small reads take 200 frames (3.3 s at 60 fps) for 30 ms of work: the
+ * bridge sends the next read 0.05 ms after a reply, and it then waited for the next frame. So after a request the
+ * bridge marked as a read (its id starts with "r"), the main thread waits here a moment for the next request and
+ * serves it in this frame. It goes on until a request comes that is not marked, no request comes within the wait,
+ * or this frame has served requests for its whole budget.
+ *
+ * What stays as it was: a request that is not marked is the last one of its frame, so a frame still passes after
+ * every request that may change the game, and frames keep running under a client that never stops reading. A held
+ * gate and a running step or until are not touched: gate_park and the frame tick serve those.
+ *
+ * The wait spins on the performance counter. A timed wait on the request event can take a whole timer tick
+ * (15.6 ms) to give up, which is the frame this saves. */
+static void serve_more(void) {
+    LONG wait = linger_wait_us, budget = linger_frame_us;
+    if (wait <= 0 || budget <= 0 || qpc_frequency.QuadPart <= 0) return;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    LONGLONG frame_end = now.QuadPart + qpc_frequency.QuadPart * budget / 1000000;
+    while (request_marked && !gate_held && suspend_kind == SUSP_NONE && !client_left && !exiting) {
+        if (now.QuadPart >= frame_end) return;
+        LONGLONG wait_end = now.QuadPart + qpc_frequency.QuadPart * wait / 1000000;
+        if (wait_end > frame_end) wait_end = frame_end;
+        while (InterlockedCompareExchange(&pending, 2, 1) != 1) {
+            QueryPerformanceCounter(&now);
+            if (now.QuadPart >= wait_end) return;
+            SwitchToThread();
+        }
+        serve_request(request);
+        QueryPerformanceCounter(&now);
+    }
+}
+
 /* Runs once per frame on the main thread. A step or until counts this frame; then a request waiting for the
- * main thread is served; then, if the gate is held, the thread parks here until the gate opens. */
+ * main thread is served, and the reads that follow it at once (serve_more); then, if the gate is held, the thread
+ * parks here until the gate opens. */
 static void main_loop(void) {
     if (!main_thread) main_thread = GetCurrentThreadId();
     InterlockedIncrement(&frame);
@@ -2617,7 +2721,10 @@ static void main_loop(void) {
     if (scripts && scripts->CallFunction) run_periodic();
     SEAM(6); /* tests: the main thread is busy elsewhere and takes no request (K2) */
     gate_let_go();
-    if (InterlockedCompareExchange(&pending, 2, 1) == 1) serve_request(request);
+    if (InterlockedCompareExchange(&pending, 2, 1) == 1) {
+        serve_request(request);
+        serve_more();
+    }
     gate_park();
 }
 

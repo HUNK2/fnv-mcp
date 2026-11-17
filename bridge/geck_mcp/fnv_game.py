@@ -43,12 +43,54 @@ def system_exe(name):
     return system32 / name
 
 
+class _ProcessEntry(ctypes.Structure):          # PROCESSENTRY32W
+    _fields_ = [('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD), ('th32ProcessID', wintypes.DWORD),
+                ('th32DefaultHeapID', ctypes.c_size_t), ('th32ModuleID', wintypes.DWORD),
+                ('cntThreads', wintypes.DWORD), ('th32ParentProcessID', wintypes.DWORD),
+                ('pcPriClassBase', wintypes.LONG), ('dwFlags', wintypes.DWORD), ('szExeFile', wintypes.WCHAR * 260)]
+
+
+_toolhelp = None
+
+
+def _toolhelp_api():
+    """kernel32 with the process-snapshot calls typed. Its own library object: typing the shared ctypes.windll one
+    would change those functions for every other user in the process."""
+    global _toolhelp
+    if _toolhelp is None:
+        api = ctypes.WinDLL('kernel32', use_last_error=True)
+        api.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        api.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        api.Process32FirstW.argtypes = api.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ProcessEntry)]
+        api.CloseHandle.argtypes = [wintypes.HANDLE]
+        _toolhelp = api
+    return _toolhelp
+
+
+def image_pids(name):
+    """pids of the running processes whose program file is called `name` (case ignored). One process snapshot
+    (about 5 ms); the tasklist.exe run it replaces took about 70 ms on every "is the game running"."""
+    api = _toolhelp_api()
+    snapshot = api.CreateToolhelp32Snapshot(0x2, 0)          # TH32CS_SNAPPROCESS
+    if snapshot is None or snapshot == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        entry = _ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        wanted, pids = name.lower(), []
+        more = api.Process32FirstW(snapshot, ctypes.byref(entry))
+        while more:
+            if entry.szExeFile.lower() == wanted:
+                pids.append(entry.th32ProcessID)
+            more = api.Process32NextW(snapshot, ctypes.byref(entry))
+        return pids
+    finally:
+        api.CloseHandle(snapshot)
+
+
 def game_processes():
     """[(pid, start time as FILETIME int)] of running FalloutNV.exe processes."""
-    out = subprocess.run([str(system_exe('tasklist.exe')), '/FI', 'IMAGENAME eq %s' % GAME_EXE, '/FO', 'CSV', '/NH'],
-                         capture_output=True, text=True, timeout=15).stdout
-    pids = [int(row.split('","')[1]) for row in out.splitlines() if row.lower().startswith('"%s"' % GAME_EXE.lower())]
-    return [(pid, process_started(pid)) for pid in pids]
+    return [(pid, process_started(pid)) for pid in image_pids(GAME_EXE)]
 
 
 def process_started(pid):
@@ -242,8 +284,9 @@ class Game:
         self.state.mkdir(parents=True, exist_ok=True)
         self.link = EngineLink(getattr(fnv, 'engine_pipe', None))
         self.link.server_check = self._pipe_server_is_the_game
+        self.link.server_exists = lambda: bool(game_processes())    # no game process: no wait for its pipe
         self._session = None
-        self._proc_cache = None    # (monotonic time, process()) - tasklist costs ~100 ms and tools ask often (N11)
+        self._proc_cache = None    # (monotonic time, process()) - tools ask often (N11)
 
     def _pipe_server_is_the_game(self, pid):
         """Refuse a companion pipe served by anything but the running FalloutNV.exe (release audit L3): another

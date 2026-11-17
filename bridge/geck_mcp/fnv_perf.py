@@ -82,7 +82,7 @@ def sample_threads(proc, tids, rate, seconds, sleep=time.sleep, clock=time.perf_
                     out[tid].append(chain)
                 finally:
                     kernel32.ResumeThread(h)
-            left = period - (clock() - started)
+            left = min(period - (clock() - started), end - clock())    # never sleep past the end
             if left > 0:
                 sleep(left)
     finally:

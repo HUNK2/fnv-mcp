@@ -88,6 +88,8 @@ static void gate_client_gone(void) {
         snprintf(text, sizeof(text), "the bridge disconnected: %u stop(s) released", released);
         record_event(EVENT_LEFT, text);
     }
+    InterlockedExchange(&linger_wait_us, LINGER_WAIT_US); /* a setting the bridge made leaves with it */
+    InterlockedExchange(&linger_frame_us, LINGER_FRAME_US);
     InterlockedExchange(&client_left, 1);
     SetEvent(request_event);
 }

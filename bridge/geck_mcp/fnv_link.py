@@ -2,7 +2,8 @@
 
 The companion serves one request line at a time over a named pipe; every request runs on the game's
 main thread in the same frame. This module encodes requests, decodes the JSON replies, applies
-timeouts with overlapped pipe I/O, and reconnects when the game restarts.
+timeouts with overlapped pipe I/O, and reconnects when the game restarts. The requests of a read-only
+tool call are marked so that the companion serves them in one frame (SAME_FRAME_OPS below).
 """
 import hashlib
 import json
@@ -65,6 +66,31 @@ def word(value):
     return '%x' % (value & 0xFFFFFFFF)
 
 
+# Same-frame reads. The companion serves one request per game frame, so a tool that reads the game in 200 small
+# requests waited 200 frames (3.3 s at 60 fps). After a request whose id starts with "r" the companion waits a
+# moment for the next request and serves it in the same frame (serve_more in fnvmcp_engine.c). The bridge puts that
+# mark on a request only when both hold:
+#   - a read-only tool call is running on this thread (read_call, entered by LiveService for kind 'read'), and
+#   - every op in the request is one of SAME_FRAME_OPS: it reads memory or companion state, or evaluates or calls
+#     for a value.
+# Anything else keeps its own frame: a frame still passes after every request that may change the game, and the
+# requests of act tools (a sampler that reads once per frame, say) are paced by frames as before. Read tools already
+# had to work with no frame between their requests: that is what a held frame gate does.
+SAME_FRAME_OPS = frozenset(('rd', 'rs', 'rp', 'ls', 'info', 'eval', 'call'))
+_scope = threading.local()
+
+
+@contextmanager
+def read_call():
+    """The requests this thread sends inside the block belong to a read-only tool call."""
+    depth = getattr(_scope, 'reads', 0)
+    _scope.reads = depth + 1
+    try:
+        yield
+    finally:
+        _scope.reads = depth
+
+
 def pipe_server_pid(handle):
     """The id of the process serving a connected pipe (GetNamedPipeServerProcessId), or None."""
     import ctypes
@@ -98,16 +124,36 @@ class EngineLink:
         self._hold_timeout = 120.0  # its dead-man time: with no request for this long it lets go by itself
         self._idle_thread = None
         self.server_check = None    # called with the pid serving the pipe on each connect; raises LinkError to refuse
+        self.server_exists = None   # () -> bool: does a process that could serve the pipe run at all?
+        # FNV_MCP_SAME_FRAME=0: mark nothing, so every request waits for its own frame again
+        self.same_frame = envvars.get('FNV_MCP_SAME_FRAME') != '0'
+
+    def _nothing_to_wait_for(self):
+        """The pipe is missing and no process exists that could create it: waiting for it is half a second lost on
+        every call made with the game closed. A check that fails counts as a running server."""
+        if self.server_exists is None:
+            return False
+        try:
+            return not self.server_exists()
+        except Exception:  # noqa: BLE001 - no process list: keep the wait
+            return False
 
     # ------------------------------------------------------------------ connection
     def connect(self, wait=0.0):
         import _winapi
         deadline = time.monotonic() + wait
+        asked = False
         while True:
             try:
                 self.handle = _winapi.CreateFile(self.pipe, GENERIC_READ_WRITE, 0, 0, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0)
                 break
             except OSError as e:
+                if getattr(e, 'winerror', None) == ERROR_FILE_NOT_FOUND and not asked:
+                    # The companion closes and recreates its pipe between clients, so a missing pipe is retried
+                    # until the deadline, but only while a game runs.
+                    asked = True
+                    if self._nothing_to_wait_for():
+                        deadline = time.monotonic()
                 if getattr(e, 'winerror', None) not in (ERROR_PIPE_BUSY, ERROR_FILE_NOT_FOUND) or time.monotonic() >= deadline:
                     self.hello = None  # the game this hello came from is gone (or not answering): never report it
                     raise LinkError('COMPANION_UNREACHABLE', 'Engine companion pipe %s is not available (%s)' % (self.pipe, e))
@@ -281,6 +327,8 @@ class EngineLink:
                 raise ValueError('op text may not contain tabs or newlines')
             parts.append(text)
         request_id = uuid.uuid4().hex[:12]
+        if self.same_frame and getattr(_scope, 'reads', 0) and all(str(op[0]) in SAME_FRAME_OPS for op in ops):
+            request_id = 'r' + request_id[1:]      # a read: the companion may serve the next request in this frame
         reply = self._exchange(request_id + '\t' + '\t'.join(parts), timeout or self.timeout)
         if reply.get('id') != request_id:
             self.close()

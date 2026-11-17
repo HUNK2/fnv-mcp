@@ -169,6 +169,7 @@ Paths in the project file may be relative to the project file. `fnv_*` keys go i
 | `FNV_ENGINE_MAP`, `FNV_DECOMP`, `FNV_SYMDB`, `FNV_CRASH_DIRS`, `FNV_RESEARCH_DIR` | none | The same as the `fnv` keys above; the project file wins |
 | `FNV_CLEAN_EXE` | none | The same as `fnv.clean_exe`; `fnv_plugin_build` then falls back to `%USERPROFILE%\.fnvdecomp\FalloutNV.exe` |
 | `FNV_MCP_PIPE` | none | The same as `fnv.engine_pipe` |
+| `FNV_MCP_SAME_FRAME` | on | `0` makes every request to the game wait for its own frame again (read tools get slower); see "How it works" in `FNV-LIVE-TOOLS.md` |
 | `FNVSYM_ROOT` | none | The fnvsym checkout the `fnv_name_*` tools need; without it they answer `NO_PROOF_FOLDER` |
 | `FNV_MCP_ZIG` | none | Zig, when `fnv.zig` is not set |
 | `FNV_MCP_RELOAD` | off | `1` starts the reloading supervisor, for development (same as `run_mcp.py --reload`) |

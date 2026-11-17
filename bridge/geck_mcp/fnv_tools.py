@@ -613,9 +613,8 @@ class FnvService:
     def string_xrefs(self, text, limit=25, offset=0):
         def action():
             e = self.engine()
-            total, results = e.find_in_code('"' + text, regex=False, limit=limit, offset=offset)
-            if not total:
-                total, results = e.find_in_code(text, regex=False, limit=limit, offset=offset)
+            # inside a string literal first, anywhere in the code otherwise: both looked for in one pass over the files
+            _, total, results = e.find_first_in_code(['"' + text, text], regex=False, limit=limit, offset=offset)
             return {'query': text, 'total': total, 'results': results,
                     'note': 'Searches the decomp source text, so strings the decomp spells as data symbols are missed.',
                     'identity': e.identity()}
@@ -746,6 +745,39 @@ def _command_summary(item):
         parts.append('%s %s%s' % (role, h.get('name') or h.get('address'),
                                   (' -> ' + ', '.join(calls)) if calls else ''))
     return '; '.join(parts)
+
+
+WARM_UP_DELAY = 1.0     # seconds after the server starts: after the client's first requests
+
+
+def warm_up(project, delay=WARM_UP_DELAY):
+    """Load the engine map and its name-search keys on a background thread, so the first engine lookup of a session
+    takes milliseconds instead of 1.1 s. It starts `delay` seconds after the call: parsing the 42 MB map holds the
+    interpreter for about 0.3 s, which would slow the client's first requests (initialize, tools/list). Returns the
+    thread (a daemon timer), or None when there is nothing to load: no engine map file yet, or a server that only
+    has the editor tools. A map that does not load is left for the first tool call to report."""
+    import logging
+    import threading
+    if not {'game', 'naming'} & set(project.active_toolsets()):
+        return None
+    try:
+        paths = fnv_engine.default_paths(project)
+        if not paths[0].exists():
+            return None
+    except Exception:  # noqa: BLE001 - no usable path: nothing to warm
+        return None
+
+    def work():
+        try:
+            fnv_engine.load(*paths).name_keys()
+        except Exception as e:  # noqa: BLE001 - the first tool call reports it with its own next step
+            logging.getLogger(__name__).info('engine map warm-up skipped: %s', e)
+
+    thread = threading.Timer(delay, work)
+    thread.name = 'fnv-engine-warm-up'
+    thread.daemon = True
+    thread.start()
+    return thread
 
 
 def register(server, project, observe, result_type):

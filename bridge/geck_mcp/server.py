@@ -747,6 +747,7 @@ def main(argv=None):
     if args.toolsets is not None:
         project = project.model_copy(update={'toolsets': args.toolsets})
     service = Service(project)
+    fnv_tools.warm_up(project)      # the engine map, on a background thread a moment after start
     try:
         make_server(project, service).run(transport='stdio')
     finally:

@@ -991,7 +991,7 @@ class DeepTools:
         live = proc.read(start - 1, end - start + 6) or b''
         clean = image.read(start - 1, end - start + 6)
         out = {'address': '0x%08X' % start, 'length': end - start}
-        sym = engine.symbolize(start)
+        sym = engine.symbolize(start, source=False)      # the source line is not shown: no database session each
         if sym.get('kind') == 'function':
             out['function'] = {'functionAddress': sym['functionAddress'], 'name': sym.get('name'),
                                'status': sym.get('status'), 'offset': sym.get('offset')}

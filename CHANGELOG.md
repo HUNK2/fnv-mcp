@@ -57,6 +57,28 @@ The first version of the fork. The entries below this one are geck-mcp-nv's own 
   (ok, operation, data, error, outcome) is emitted in full on `fnv_status` and `geck_status` only; the other tools'
   outputSchema is a short object schema that names them (the listing shrinks by about another 27%). Results are
   unchanged and still checked against the full schema.
+- **Speed:** a read tool on the running game no longer waits one game frame for each of its requests. The bridge
+  marks the requests of a read-only tool call, and the companion serves the next marked request in the same frame
+  when it comes within 2 ms, for at most 8 ms a frame (the game stays at 60 frames a second under a continuous
+  stream of reads). Measured in a live game at 60 frames a second, with the same answers: 32 read tools together
+  7.1 s to 1.1 s; `fnv_scene_graph` 1,083 ms to 35 ms, `fnv_render lights` 929 ms to 23 ms,
+  `fnv_script_instances` 1,281 ms to 139 ms, `fnv_look` 1,030 ms to 103 ms, `fnv_quest` 262 ms to 21 ms,
+  `fnv_player` 196 ms to 20 ms. Tools that change the game, the console and ray casts keep one request a frame.
+  It needs this version's companion (`fnv_companion_install`);
+  `FNV_MCP_SAME_FRAME=0` turns it off. Without the game: `fnv_conflicts` 43 s to 0.6 s and `fnv_record users`
+  4.9 s to 18 ms (two index lookups that scanned), `fnv_func` name search 560 ms to 30 ms and `strings` 1.2 s to
+  0.3 s; the engine map loads in the background at server start instead of in the first `fnv_func` call
+  (1.2 s); with the game closed a live tool says `GAME_NOT_RUNNING` in 10 ms instead of 570 ms.
+  A write to the game took about 0.6 ms: each `VirtualQuery` of the companion's write measured the game heap's whole
+  region (80 MB and more). Writes into plain data now skip it (250 writes in one request 150 ms to 17 ms, as fast as
+  reads), and condition evaluation clears its result slots with one write per 250 calls instead of one each:
+  `fnv_dialogue tree` 7.9 s to 1.4 s. `fnv_threads list` 1,073 ms to 80 ms (its single stack sample no longer
+  sleeps out a 1 s sampling period), `fnv_patch_map` 496 ms to 80 ms (no source line looked up per patched spot,
+  which it never showed). Without the game: the load order is kept until a profile file, a mod folder or a plugin
+  changes, the archive file lists until an archive changes, and the game's plugin list once per game process:
+  `fnv_save_inspect` 1,594 ms to 392 ms, `fnv_asset_check` 134 ms to 4 ms, `fnv_asset nif` and `dds` 135 ms to
+  6 ms; the conflicts of one plugin (`fnv_conflicts plugin=`) join from that plugin's records instead of grouping
+  the whole load order: `fnv_author check` 549 ms to 12 ms.
 - **Hardening:** `fnv_run_script` refuses a quit anywhere in the script; the bridge checks that the companion
   pipe belongs to the game (`PIPE_NOT_GAME`); decompression is capped at 256 MiB; `fnv_func` regex searches
   refuse nested repeats and stop after 20 seconds; Windows tools are run from the system folder; a cached engine

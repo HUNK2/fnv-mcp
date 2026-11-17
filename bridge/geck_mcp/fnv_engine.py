@@ -52,6 +52,57 @@ def nested_repeat(pattern):
         return False
 
 
+REQUIRED_MIN = 3     # one or two characters are in nearly every file: no file would be skipped
+
+
+def required_text(pattern, regex):
+    """Lowercase ASCII bytes that every match of a code search holds (case ignored), or None when nothing is certain.
+
+    A plain ASCII file without them cannot match, so the search skips it with one bytes search instead of a
+    case-insensitive regex over its text (about 20 times the work, over 118 MB of decomp source). Plain text is its
+    own requirement. For a regex it is the longest run of literal characters at the top level of the pattern: inside
+    groups, alternatives and repeats nothing is certain. Line breaks split a run, because matches are per line.
+    Characters outside ASCII give None: re.I pairs some ASCII letters with letters outside ASCII (s with the long
+    s), which a bytes comparison cannot follow."""
+    if regex:
+        import re._constants as C
+        import re._parser as parser
+        try:
+            items = list(parser.parse(pattern))
+        except Exception:  # noqa: BLE001 - an unknown pattern shape: search every file, as before
+            return None
+        runs, run = [], []
+        for op, arg in items:
+            if op is C.LITERAL:
+                run.append(chr(arg))
+            else:
+                runs.append(''.join(run))
+                run = []
+        runs.append(''.join(run))
+    else:
+        runs = [pattern]
+    best = max((piece for run in runs for piece in re.split(r'[\r\n]', run)), key=len, default='')
+    if len(best) < REQUIRED_MIN or not best.isascii():
+        return None
+    return best.lower().encode('ascii')
+
+
+def read_whole(path):
+    """A file's bytes through the OS calls alone. A code search reads every decomp source file (2,824), and this is
+    100 ms less for them than Path.read_bytes (no file object, no buffer, no path object)."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
+    try:
+        want = os.fstat(fd).st_size + 1         # one byte more than its size: a shorter read is the end of the file
+        parts = []
+        while True:
+            part = os.read(fd, want)
+            parts.append(part)
+            if len(part) < want:
+                return part if len(parts) == 1 else b''.join(parts)
+    finally:
+        os.close(fd)
+
+
 class EngineMapError(Exception):
     def __init__(self, code, message, evidence=None):
         super().__init__(message)
@@ -138,6 +189,8 @@ class EngineMap:
         self.vtable_starts = sorted(self.vtables)
         self._files = OrderedDict()
         self._lock = threading.Lock()
+        self._name_keys = None
+        self._name_keys_lock = threading.Lock()
         self.symdb_path = self.path.parent / 'symdb.sqlite'
 
     @property
@@ -267,18 +320,33 @@ class EngineMap:
                 'exactExtent': exact, 'truncated': truncated, 'code': body, 'resolvedNames': names}
 
     # ----------------------------------------------------------------------------- search
+    def name_keys(self):
+        """{address: the words of the function's name, decomp name and proven name, lowercase and run together}.
+        Built once per map: splitting all its names into words on every name search took 0.57 s of a 0.59 s call."""
+        with self._name_keys_lock:      # a search that arrives while the start-up warm-up builds them waits for it
+            if self._name_keys is None:
+                # Words run together are the name's letters and digits in lowercase (_words lowercases, then splits
+                # at everything else), so no splitting is needed: one lower() and one substitution over all names
+                # at once, a line per function.
+                names = [''.join((f['name'], f.get('decompName') or '', (f.get('proof') or {}).get('name') or ''))
+                         for f in self.functions.values()]
+                flat = re.sub(r'[^a-z0-9\n]+', '', '\n'.join(names).lower()).split('\n')
+                if len(flat) != len(names):     # a name with a line break in it: one at a time
+                    flat = [re.sub(r'[^a-z0-9]+', '', name.lower()) for name in names]
+                self._name_keys = dict(zip(self.functions, flat))
+            return self._name_keys
+
     def find_by_name(self, query, statuses=None, limit=25, offset=0):
         words = _words(query)
         if not words:
             raise ValueError('query has no letters or digits')
         joined = ''.join(words)
+        keys = self.name_keys()
         hits = []
         for address, f in self.functions.items():
             if statuses and f['status'] not in statuses:
                 continue
-            proof_name = (f.get('proof') or {}).get('name') or ''
-            hay = ' '.join(_words(f['name']) + _words(f.get('decompName') or '') + _words(proof_name))
-            flat = hay.replace(' ', '')
+            flat = keys[address]
             if not all(w in flat for w in words):
                 continue
             leaf = f['name'].split('::')[-1].lower()
@@ -293,51 +361,78 @@ class EngineMap:
                      timeout=None):
         """Functions whose decomp code matches. With `timeout` (seconds) the search stops with SEARCH_TIMEOUT once it
         runs longer; a regex with a quantified part inside a quantified part is refused first (release audit L4)."""
+        return self.find_first_in_code([pattern], regex, statuses, limit, offset, max_matches_per_function,
+                                       timeout)[1:]
+
+    def find_first_in_code(self, patterns, regex=False, statuses=None, limit=25, offset=0,
+                           max_matches_per_function=3, timeout=None):
+        """find_in_code for several patterns in one pass over the files: (index, total, results) of the first
+        pattern with a match anywhere, or of the last pattern (no matches) when none has one."""
         if self.decomp_root is None:
             raise EngineMapError('DECOMP_UNAVAILABLE', 'No decomp checkout configured (fnv.decomp_root)')
-        try:
-            rx = re.compile(pattern if regex else re.escape(pattern), re.I)
-        except re.error as e:
-            raise EngineMapError('BAD_REGEX', 'The pattern is not a valid regular expression: %s' % e) from None
-        if regex and nested_repeat(pattern):
-            raise EngineMapError('REGEX_TOO_COSTLY', 'The pattern repeats a part that itself repeats (like (a+)+), '
-                                 'which can take minutes on a long file. Write it without the nested repeat.')
+        searches = []
+        for pattern in patterns:
+            try:
+                rx = re.compile(pattern if regex else re.escape(pattern), re.I)
+            except re.error as e:
+                raise EngineMapError('BAD_REGEX', 'The pattern is not a valid regular expression: %s' % e) from None
+            if regex and nested_repeat(pattern):
+                raise EngineMapError('REGEX_TOO_COSTLY', 'The pattern repeats a part that itself repeats (like '
+                                     '(a+)+), which can take minutes on a long file. Write it without the nested '
+                                     'repeat.')
+            needle = required_text(pattern, regex)
+            # plain text that is its own requirement: finding the bytes is the whole answer for an ASCII file
+            searches.append((rx, needle, needle is not None and not regex and len(needle) == len(pattern)))
         deadline = None if timeout is None else time.monotonic() + timeout
         by_file = {}
         for address, f in self.functions.items():
             if f.get('file') and f.get('lines') and (not statuses or f['status'] in statuses):
                 by_file.setdefault(f['file'], []).append(address)
-        hits = []
+        found = [[] for _ in searches]
         files = sorted(by_file)
+        root = str(self.decomp_root)
         for done, rel in enumerate(files):
             if deadline is not None and time.monotonic() >= deadline:
                 raise EngineMapError('SEARCH_TIMEOUT', 'The search ran over %s s and was stopped after %d of %d '
                                      'files. Narrow the pattern, or pass statuses.' % (timeout, done, len(files)))
-            path = self.decomp_root / rel
             try:
-                text = path.read_text(encoding='utf-8', errors='replace')
+                data = read_whole(os.path.join(root, rel))
             except OSError:
                 continue
-            if not rx.search(text):
-                continue
-            lines = text.split('\n')
-            for address in by_file[rel]:
-                start, end = self.functions[address]['lines']
-                matches = []
-                for n in range(start, end + 1):
-                    if rx.search(lines[n - 1]):
-                        matches.append({'line': n, 'text': lines[n - 1].strip()[:200]})
-                        if len(matches) >= max_matches_per_function:
-                            break
-                if matches:
-                    hits.append((STATUS_RANK.get(self.functions[address]['status'], 9), address, matches))
-        hits.sort(key=lambda h: (h[0], h[1]))
+            ascii_only = data.isascii()
+            lowered = text = lines = None
+            for hits, (rx, needle, needle_is_all) in zip(found, searches):
+                held = False
+                if needle is not None and ascii_only:
+                    if lowered is None:
+                        lowered = data.lower()
+                    if needle not in lowered:
+                        continue        # most files end here: no decoding, no regex
+                    held = needle_is_all
+                if text is None:        # what read_text gave before: UTF-8 with replacement, any line end as \n
+                    text = data.decode('utf-8', errors='replace').replace('\r\n', '\n').replace('\r', '\n')
+                if not held and not rx.search(text):
+                    continue
+                if lines is None:
+                    lines = text.split('\n')
+                for address in by_file[rel]:
+                    start, end = self.functions[address]['lines']
+                    matches = []
+                    for n in range(start, end + 1):
+                        if rx.search(lines[n - 1]):
+                            matches.append({'line': n, 'text': lines[n - 1].strip()[:200]})
+                            if len(matches) >= max_matches_per_function:
+                                break
+                    if matches:
+                        hits.append((STATUS_RANK.get(self.functions[address]['status'], 9), address, matches))
+        index = next((i for i, hits in enumerate(found) if hits), len(found) - 1)
+        hits = sorted(found[index], key=lambda h: (h[0], h[1]))
         out = []
         for _, address, matches in hits[offset:offset + limit]:
             s = self.summary(address)
             s['matches'] = matches
             out.append(s)
-        return len(hits), out
+        return index, len(hits), out
 
     # ----------------------------------------------------------------------------- graph
     def walk(self, address, direction, depth=1, limit=200):
@@ -366,11 +461,12 @@ class EngineMap:
         return out, capped
 
     # ----------------------------------------------------------------------------- symbolize
-    def symbolize(self, address, modules=None, return_address=False):
+    def symbolize(self, address, modules=None, return_address=False, source=True):
         """Function + offset inside the game exe, a known static object, or a module + offset.
 
         return_address=True: the address is the instruction after a call, so the function and the source line are
-        looked up for address - 1 (the call itself). The reported address and offset stay the real ones."""
+        looked up for address - 1 (the call itself). The reported address and offset stay the real ones.
+        source=False: no source line (no symbol database session, no decomp file read), for callers that only name."""
         vt = self.vtable_at(address)
         if vt:
             return vt
@@ -393,7 +489,8 @@ class EngineMap:
             out.update(self.summary(start))
             out['functionAddress'] = out.pop('address')
             out['address'] = hx(address)
-            self._add_source(out, probe)
+            if source:
+                self._add_source(out, probe)
             return out
         if EXE_RANGE[0] <= address < EXE_RANGE[1]:
             i = bisect_right(self.addresses, address) - 1
@@ -493,6 +590,7 @@ class EngineMap:
 
 _cache = {}
 _cache_lock = threading.Lock()
+_load_lock = threading.Lock()      # one parse at a time: a call that arrives during the start-up warm-up waits for it
 
 
 def load(path, decomp_root=None, symdb=None):
@@ -505,18 +603,29 @@ def load(path, decomp_root=None, symdb=None):
                                       '[--verified fnvsym/proofs/verified.csv] [--exe unpacked FalloutNV.exe] '
                                       '--out %s' % path})
     stamp = (str(path.resolve()), path.stat().st_mtime_ns, str(decomp_root or ''))
-    with _cache_lock:
-        cached = _cache.get('map')
-        if cached and cached[0] == stamp:
-            engine = cached[1]
-            engine.symdb_path = Path(symdb) if symdb else engine.path.parent / 'symdb.sqlite'
+
+    def cached():
+        with _cache_lock:
+            held = _cache.get('map')
+            if held and held[0] == stamp:
+                engine = held[1]
+                engine.symdb_path = Path(symdb) if symdb else engine.path.parent / 'symdb.sqlite'
+                return engine
+        return None
+
+    engine = cached()
+    if engine is not None:
+        return engine
+    with _load_lock:
+        engine = cached()           # parsed by another thread while this one waited (0.6 s and 200 MB, once)
+        if engine is not None:
             return engine
-    engine = EngineMap(path, decomp_root)
-    if symdb:
-        engine.symdb_path = Path(symdb)
-    with _cache_lock:
-        _cache['map'] = (stamp, engine)
-    return engine
+        engine = EngineMap(path, decomp_root)
+        if symdb:
+            engine.symdb_path = Path(symdb)
+        with _cache_lock:
+            _cache['map'] = (stamp, engine)
+        return engine
 
 
 def default_paths(project):

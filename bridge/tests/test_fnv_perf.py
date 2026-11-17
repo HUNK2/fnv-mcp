@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from geck_mcp.fnv_coverage import CoverageTools  # noqa: E402
 from geck_mcp.fnv_inspect import FORMULAS, SystemsTools, _decode_group  # noqa: E402
-from geck_mcp.fnv_perf import ProfileTools, block_offsets, block_start  # noqa: E402
+from geck_mcp.fnv_perf import ProfileTools, block_offsets, block_start, sample_threads  # noqa: E402
 
 
 class BlockTests(unittest.TestCase):
@@ -32,6 +32,28 @@ def namer(address, return_address=False):
         if base <= address < base + 0x1000:
             return {'function': fn, 'start': start, 'line': line}
     return {'function': '0x%08X' % address, 'start': None, 'line': None}
+
+
+class SamplingClockTests(unittest.TestCase):
+    """fnv_threads list takes one sample (rate 1, 1 ms) and then slept out the rest of a 1 s period: 1 s per call."""
+
+    def run_sampler(self, rate, seconds):
+        now, slept = [0.0], []
+
+        def sleep(s):
+            slept.append(s)
+            now[0] += s
+        sample_threads(None, [], rate, seconds, sleep=sleep, clock=lambda: now[0])
+        return now[0], slept
+
+    def test_no_sleep_runs_past_the_end(self):
+        took, slept = self.run_sampler(1, 0.001)
+        self.assertLessEqual(took, 0.001 + 1e-9, slept)
+
+    def test_samples_keep_their_rate_inside_the_window(self):
+        took, slept = self.run_sampler(10, 0.35)
+        self.assertEqual([round(s, 6) for s in slept], [0.1, 0.1, 0.1, 0.05])
+        self.assertAlmostEqual(took, 0.35)
 
 
 class ProfileReportTests(unittest.TestCase):

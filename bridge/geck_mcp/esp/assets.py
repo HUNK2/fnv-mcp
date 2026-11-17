@@ -125,18 +125,39 @@ def bsa_names(path):
     return out
 
 
+# The names of a set of archives, kept until one of them changes (its size or time): reading every name table of
+# the load order took about 120 ms, and each asset call makes a new index.
+_ARCHIVE_NAMES = {}
+
+
+def archive_names(bsas):
+    """frozenset of the lower-case 'folder\\file' paths in all these archives."""
+    stamps = []
+    for bsa in bsas:
+        st = os.stat(bsa)
+        stamps.append((os.path.normcase(os.path.abspath(bsa)), st.st_size, st.st_mtime_ns))
+    key = tuple(stamps)
+    names = _ARCHIVE_NAMES.get(key)
+    if names is None:
+        found = set()
+        for bsa in bsas:
+            found |= bsa_names(bsa)
+        names = frozenset(found)
+        if len(_ARCHIVE_NAMES) > 8:            # load orders seen by this process: keep the last few
+            _ARCHIVE_NAMES.clear()
+        _ARCHIVE_NAMES[key] = names
+    return names
+
+
 class AssetIndex:
     """Answers 'does Data\\<path> exist?' across loose files, extra roots and BSAs."""
 
     def __init__(self, data_dir=None, extra_roots=(), bsas=None):
         self.roots = [Path(p) for p in ([data_dir] if data_dir else []) + list(extra_roots)]
-        self.archived = set()
-        self.archives = []
         if bsas is None and data_dir:
             bsas = sorted(Path(data_dir).glob('*.bsa'))
-        for bsa in bsas or []:
-            self.archived |= bsa_names(bsa)
-            self.archives.append(Path(bsa).name)
+        self.archived = archive_names(list(bsas or []))
+        self.archives = [Path(bsa).name for bsa in bsas or []]
         self._lower = {}
 
     def _loose(self, root, rel):

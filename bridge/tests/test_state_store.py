@@ -144,16 +144,17 @@ class GameIdentityTests(unittest.TestCase):
         from geck_mcp import fnv_game
         calls = []
 
-        def run(*a, **k):
-            calls.append(a)
-            return mock.Mock(returncode=0, stdout='"FalloutNV.exe","4242","Console","1","100 K"\n')
+        def image_pids(name):       # the process list: a snapshot since the speed work, tasklist.exe before
+            calls.append(name)
+            return [4242]
         game = fnv_game.Game.__new__(fnv_game.Game)
-        with mock.patch.object(fnv_game.subprocess, 'run', run), \
+        with mock.patch.object(fnv_game, 'image_pids', image_pids), \
                 mock.patch.object(fnv_game, 'process_started', lambda pid: 99):
             first = game.process()
             second = game.process()
+        self.assertEqual(first, (4242, 99))
         self.assertEqual(first, second)
-        self.assertEqual(len([c for c in calls if 'tasklist' in str(c)]), 1)
+        self.assertEqual(calls, ['FalloutNV.exe'])
 
 
 class ProcStateTests(unittest.TestCase):

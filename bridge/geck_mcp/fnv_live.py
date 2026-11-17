@@ -314,7 +314,11 @@ class LiveService:
         try:
             if (kind == 'act' or needs_full) and getattr(self.project.fnv, 'engine_control', 'read') != 'full':
                 raise LiveError('CONTROL_DISABLED', self.CONTROL_DISABLED_SENTENCE)
-            data = action()
+            if kind == 'read':
+                with fnv_link.read_call():      # its reads may share a game frame (fnv_link.SAME_FRAME_OPS)
+                    data = action()
+            else:
+                data = action()
             changed = kind != 'read' and not (isinstance(data, dict) and data.get('changed') is False)
             return {'ok': True, 'operationId': operation_id, 'operation': name, 'projectId': self.project.project_id,
                     'outcome': 'acknowledged' if changed else 'unchanged', 'data': data, 'error': None,
