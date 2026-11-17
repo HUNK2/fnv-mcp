@@ -39,6 +39,13 @@ def edid(name):
     return sub('EDID', name.encode() + b'\0')
 
 
+def age(path, seconds=60):
+    """Set a file's time back: a file written in the last two seconds is read again by the caches that go by size and
+    time (a rewrite in the same tick of the file clock keeps both)."""
+    st = Path(path).stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns - seconds * 1_000_000_000))
+
+
 def sqlite_steps(db, fn):
     """SQLite virtual machine steps `fn` makes this connection run, to the nearest 100."""
     ticks = [0]
@@ -144,6 +151,67 @@ class RecordLookupSpeed(unittest.TestCase):
         passes = used / self.one_pass()
         self.assertLess(passes, self.FEW / 2, 'users read the record table %.0f times over for %d dialogue lines'
                         % (passes, self.FEW))
+
+
+class RecordIndexFreshness(unittest.TestCase):
+    """The record index keeps a plugin's rows until its size or time changes. A rewrite at the same size in the tick
+    of the file clock the plugin was read in keeps both: a plugin indexed less than two seconds after it was written
+    is checked by its bytes too, until it is older than that (git's racily clean files)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.data = DataTools(SimpleNamespace(state_dir=str(self.root / 'state')))
+        self.addCleanup(lambda: self.data.index.db.close())
+        self.index = self.data.index
+        self.plugin = self.root / 'Mod.esp'
+
+    def edids(self, file_id):
+        return [r[0] for r in self.index.db.execute('select edid from records where file = ?', (file_id,))]
+
+    def plugin_reads(self, fn):
+        """(result, times the plugin file was opened) of one call."""
+        import builtins
+        real_open, opened = builtins.open, []
+
+        def counting(path, *args, **kwargs):
+            if Path(path) == self.plugin:
+                opened.append(path)
+            return real_open(path, *args, **kwargs)
+        with mock.patch.object(builtins, 'open', counting):
+            out = fn()
+        return out, len(opened)
+
+    def test_a_plugin_rewritten_in_the_same_clock_tick_gives_its_new_records(self):
+        write_plugin(self.plugin, [record('STAT', 0x800, edid('RockA'))])
+        self.assertEqual(self.edids(self.index.ensure(self.plugin)), ['RockA'])
+        st = self.plugin.stat()
+        write_plugin(self.plugin, [record('STAT', 0x800, edid('RockB'))])
+        os.utime(self.plugin, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual(self.plugin.stat().st_size, st.st_size)
+        self.assertEqual(self.edids(self.index.ensure(self.plugin)), ['RockB'])
+
+    def test_an_unchanged_new_plugin_keeps_its_file_id(self):
+        write_plugin(self.plugin, [record('STAT', 0x800, edid('RockA'))])
+        first = self.index.ensure(self.plugin)
+        self.assertEqual(self.index.ensure(self.plugin), first)      # not rebuilt: its reference rows stay
+
+    def test_a_settled_plugin_is_not_read_again(self):
+        write_plugin(self.plugin, [record('STAT', 0x800, edid('RockA'))])
+        first = self.index.ensure(self.plugin)
+        later = time.time() + 60
+        with mock.patch('geck_mcp.fnv_data.time.time', return_value=later):
+            self.assertEqual(self.index.ensure(self.plugin), first)  # checked by its bytes once more, then trusted
+            again, reads = self.plugin_reads(lambda: self.index.ensure(self.plugin))
+        self.assertEqual((again, reads), (first, 0))
+
+    def test_an_old_plugin_is_not_read_again(self):
+        write_plugin(self.plugin, [record('STAT', 0x800, edid('RockA'))])
+        age(self.plugin)
+        first = self.index.ensure(self.plugin)
+        again, reads = self.plugin_reads(lambda: self.index.ensure(self.plugin))
+        self.assertEqual((again, reads), (first, 0))
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'Windows processes')
@@ -589,6 +657,7 @@ class ArchiveNameSpeed(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.bsa = Path(tmp.name) / 'Test - Meshes.bsa'
         make_bsa(self.bsa, {'meshes\\a\\b.nif': b'1', 'textures\\t.dds': b'2'})
+        age(self.bsa)
 
     def opened(self, fn):
         """(result, BSA files opened) of one call."""
@@ -622,6 +691,20 @@ class ArchiveNameSpeed(unittest.TestCase):
         os.utime(self.bsa, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         index = AssetIndex(None, [], [self.bsa])
         self.assertIsNotNone(index.find('meshes\\new.nif'))
+        self.assertIsNone(index.find('textures\\t.dds'))
+
+    def test_an_archive_rewritten_in_the_same_clock_tick_gives_its_new_names(self):
+        """An archive rewritten at the same size in the tick of the file clock it was read in keeps its size and time.
+        Names read from an archive written less than two seconds before are not kept (git's racily clean files)."""
+        from geck_mcp.esp.assets import AssetIndex
+        self.make_bsa(self.bsa, {'meshes\\a\\b.nif': b'1', 'textures\\t.dds': b'2'})     # written just now
+        self.assertIsNotNone(AssetIndex(None, [], [self.bsa]).find('textures\\t.dds'))
+        st = self.bsa.stat()
+        self.make_bsa(self.bsa, {'meshes\\a\\b.nif': b'1', 'textures\\u.dds': b'2'})
+        os.utime(self.bsa, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual(self.bsa.stat().st_size, st.st_size)
+        index = AssetIndex(None, [], [self.bsa])
+        self.assertIsNotNone(index.find('textures\\u.dds'))
         self.assertIsNone(index.find('textures\\t.dds'))
 
 

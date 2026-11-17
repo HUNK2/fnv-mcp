@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import struct
+import time
 from . import codec as _codec  # noqa: F401 - registers the cp1252-bytes error handler (R16)
 
 
@@ -126,12 +127,17 @@ def bsa_names(path):
 
 
 # The names of a set of archives, kept until one of them changes (its size or time): reading every name table of
-# the load order took about 120 ms, and each asset call makes a new index.
+# the load order took about 120 ms, and each asset call makes a new index. A rewrite at the same size in the tick of
+# the file clock (about 16 ms on Windows) keeps both, so names are kept only when every archive was written more than
+# RACY_SECONDS before it was read: any later rewrite then gets a new time (git's racily clean files). A new archive is
+# read again on each call until then.
 _ARCHIVE_NAMES = {}
+RACY_SECONDS = 2.0
 
 
 def archive_names(bsas):
     """frozenset of the lower-case 'folder\\file' paths in all these archives."""
+    started = time.time()
     stamps = []
     for bsa in bsas:
         st = os.stat(bsa)
@@ -143,9 +149,10 @@ def archive_names(bsas):
         for bsa in bsas:
             found |= bsa_names(bsa)
         names = frozenset(found)
-        if len(_ARCHIVE_NAMES) > 8:            # load orders seen by this process: keep the last few
-            _ARCHIVE_NAMES.clear()
-        _ARCHIVE_NAMES[key] = names
+        if all(mtime_ns / 1e9 < started - RACY_SECONDS for _, _, mtime_ns in stamps):
+            if len(_ARCHIVE_NAMES) > 8:        # load orders seen by this process: keep the last few
+                _ARCHIVE_NAMES.clear()
+            _ARCHIVE_NAMES[key] = names
     return names
 
 

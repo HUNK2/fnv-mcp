@@ -178,7 +178,8 @@ original function (or skips it). Follow how the existing `hookact` actions (`ski
 - A hit that passes its predicate parks the thread in `on_trap` with the live `CONTEXT` (kind `bp`, `id` = bp id).
 - On resume from a hardware hit set EFLAGS bit 16 (resume flag). From an int3 hit: `eip` back to the breakpoint,
   restore the old byte, set the trap flag, and write `CC` again on the following single-step exception (so the
-  breakpoint stays armed). Tell a single step (DR6 bit 14) from a watchpoint (DR6 bits 0-3).
+  breakpoint stays armed). The `CC` stays while the thread is parked, so another thread reaching the breakpoint
+  meanwhile parks as its own stop. Tell a single step (DR6 bit 14) from a watchpoint (DR6 bits 0-3).
 - `resume step` sets the trap flag; the next single-step exception becomes a stop of kind `step` (`id` = the bp id
   it came from, or 255).
 - Existing int3 probes and `dbg` watchpoints keep working; breakpoints must not take their exceptions.

@@ -77,12 +77,17 @@ The first version of the fork. The entries below this one are geck-mcp-nv's own 
   sleeps out a 1 s sampling period), `fnv_patch_map` 496 ms to 80 ms (no source line looked up per patched spot,
   which it never showed). Without the game: the load order is kept until a profile file's text, the plugin names in
   a mod folder or a plugin's header record changes (not by size and time, which a rewrite in the same tick of the
-  file clock keeps), the archive file lists until an archive changes, and the game's plugin list once per game process:
+  file clock keeps), the archive file lists until an archive changes, and the game's plugin list once per game process
+  (an archive or plugin written less than 2 s before it was read is checked again by its bytes, for the same reason):
   `fnv_save_inspect` 1,594 ms to 392 ms, `fnv_asset_check` 134 ms to 4 ms, `fnv_asset nif` and `dds` 135 ms to
   6 ms; the conflicts of one plugin (`fnv_conflicts plugin=`) join from that plugin's records instead of grouping
   the whole load order: `fnv_author check` 549 ms to 12 ms. `fnv_asset users` kept the file paths each plugin
   names in memory only, so the first call of every server read the whole load order (7 to 8 s); they are now kept
   in the record index per plugin file and dropped with it when the file changes: 35 ms on a new server.
+- **Breakpoints and threads:** a thread stopped on an int3 breakpoint (`fnv_debug`) used to put the original byte
+  back before it parked, so every other thread ran past the breakpoint for as long as the stop lasted. The byte now
+  stays while the thread is parked: another thread that reaches the breakpoint stops too, as its own stop. A
+  breakpoint's hit count no longer loses hits of threads that trap at the same moment.
 - **Hardening:** `fnv_run_script` refuses a quit anywhere in the script; the bridge checks that the companion
   pipe belongs to the game (`PIPE_NOT_GAME`); decompression is capped at 256 MiB; `fnv_func` regex searches
   refuse nested repeats and stop after 20 seconds; Windows tools are run from the system folder; a cached engine

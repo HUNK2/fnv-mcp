@@ -260,6 +260,56 @@ class BreakHookRaceTests(StopTestCase):
         self.assertEqual(self.read32('raceBad'), 0)
         self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
 
+    def test_a_thread_that_reaches_a_breakpoint_while_another_is_stopped_there_stops_too(self):
+        # The stopped thread put the original byte back before it parked, so every other thread ran over the
+        # breakpoint for as long as the stop lasted. The int3 now stays while it is parked.
+        link = self.host.link
+        self.assertTrue(link.one('bp', 'set', hexint(1), hexint(self.t['bpTarget']), 'int3', 'ff', '0').get('ok'))
+        self.start_race(1, 1)
+        poke(self.host.process, self.t['raceGo'], 1)
+        first = self.wait_stops(1)
+        self.assertEqual(len(first), 1, first)
+        self.start_race(1, 1)                             # a second thread, started while the first is stopped
+        poke(self.host.process, self.t['raceGo'], 1)
+        end = time.monotonic() + 6
+        while self.read32('raceDone') == 0 and len(link.one('stops')['stops']) < 2 and time.monotonic() < end:
+            time.sleep(0.02)
+        stops = link.one('stops')['stops']
+        self.assertEqual(self.read32('raceDone'), 0, 'the second thread ran past the breakpoint')
+        self.assertEqual(len([s for s in stops if s.get('kind') == 'bp']), 2, stops)
+        self.assertEqual(len({s['thread'] for s in stops}), 2, stops)
+        self.assertEqual(link.one('bp', 'clear', hexint(1)).get('cleared'), 1)
+        link.one('resume', 'ff', 'run')
+        self.wait_done(2)
+        self.assertIsNone(self.host.process.poll(), self.alive())
+        self.assertEqual(self.read32('raceDone'), 2)
+        self.assertEqual(self.read32('raceBad'), 0)
+        self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
+
+    def test_a_breakpoint_resumed_with_step_goes_on_past_its_int3(self):
+        # The int3 stays while the thread is parked: a step from the breakpoint runs the original instruction.
+        link = self.host.link
+        self.assertTrue(link.one('bp', 'set', hexint(1), hexint(self.t['bpTarget']), 'int3', 'ff', '0').get('ok'))
+        self.start_race(1, 1)
+        poke(self.host.process, self.t['raceGo'], 1)
+        stop = self.wait_stops(1)[0]
+        self.assertEqual(int(stop['eip'], 16), self.t['bpTarget'])
+        link.one('resume', hexint(stop['seq']), 'step')
+        end = time.monotonic() + 6
+        while time.monotonic() < end:
+            stops = link.one('stops')['stops']
+            if stops and stops[0]['seq'] != stop['seq']:
+                break
+            time.sleep(0.02)
+        self.assertEqual(len(stops), 1, stops)
+        self.assertNotEqual(stops[0]['seq'], stop['seq'])
+        self.assertGreater(int(stops[0]['eip'], 16), self.t['bpTarget'])   # one instruction on, not the int3 again
+        self.assertEqual(link.one('bp', 'clear', hexint(1)).get('cleared'), 1)
+        link.one('resume', 'ff', 'run')
+        self.wait_done(1)
+        self.assertEqual((self.read32('raceDone'), self.read32('raceBad')), (1, 0))
+        self.assertEqual(link.one('rd', hexint(self.t['bpTarget']), '6')['hex'], self.original)
+
     def test_hook_from_8_threads_during_unhook(self):
         link = self.host.link
         args = (hexint(self.t['bpTarget']), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0), hexint(1),

@@ -6,8 +6,10 @@
  * CC again (reinstall). A hw hit sets the resume flag instead, so the same instruction does not trap again.
  * Steps, to and the trace run in the single-step exception of the stopped thread (bp_on_single_step). A `to` address
  * and the return address of a traced call are int3 sites owned by one thread.
- * Known limits: during the one instruction after an int3 hit the byte is restored, so another thread can run past
- * the breakpoint then; a fault resumed with step or to retries the faulting instruction; a probe is never added to a
+ * A thread stopped on an int3 leaves the CC in place while it is parked (another thread reaching it stops too) and
+ * steps over it when it goes on.
+ * Known limits: during the one instruction a thread steps over an int3 the byte is restored, so another thread can run
+ * past the breakpoint then; a fault resumed with step or to retries the faulting instruction; a probe is never added to a
  * breakpoint address. Everything is static: nothing here allocates. */
 #define BPS 64u
 #define ISITES 96u
@@ -231,26 +233,42 @@ static void bp_after(CONTEXT *c, const StopOutcome *out, uint32_t id, DWORD tid)
         break;
     }
 }
-/* Parks the thread as a stop and applies its resume. Returns the stop's seq (0 when the stop was not taken). */
-static uint32_t bp_park(CONTEXT *c, EXCEPTION_RECORD *rec, uint32_t kind, uint32_t id, DWORD tid) {
-    StopOutcome out = {0, 0, 0, false};
-    if (exiting || in_served_call()) return 0;
-    int slot = stop_park(kind, id, (uint32_t)c->Eip, 0, (uint32_t)(uintptr_t)c, rec ? (uint32_t)(uintptr_t)rec : 0, 0,
-                         true, &out);
-    if (slot < 0) return 0;
-    uint32_t seq = stops_table[slot].seq;
-    stop_free(slot);
-    dbg_fill(c, tid); /* breakpoints set or cleared while parked: the CONTEXT is what the thread resumes with */
-    bp_after(c, &out, id, tid);
-    return seq;
-}
-
 /* Steps over a live int3 at addr: the original byte goes back, eip stays at addr, and the next single step writes CC
  * again (reinstall). The trap flag is set by tf_fix. */
 static void bp_pass(CONTEXT *c, DWORD tid, uint32_t addr, unsigned char orig) {
     byte_set(addr, orig);
     c->Eip = addr;
     tb_get(tid)->reinstall = addr;
+}
+/* A thread that goes on at addr steps over the int3 there, if a site is still live at addr (one may have been cleared
+ * or set while it was parked). */
+static void bp_pass_live(CONTEXT *c, DWORD tid, uint32_t addr) {
+    if (!addr || (uint32_t)c->Eip != addr) return;
+    for (int i = 0; i < (int)ISITES; i++) {
+        if (isites[i].live && isites[i].addr == addr) {
+            bp_pass(c, tid, addr, isites[i].orig);
+            return;
+        }
+    }
+}
+/* Parks the thread as a stop and applies its resume. Returns the stop's seq (0 when the stop was not taken).
+ * pass: the address of the int3 the thread trapped on, left in place while it is parked so other threads reaching it
+ * stop too; the thread steps over it when it goes on there (0 for a stop that is not on an int3). */
+static uint32_t bp_park(CONTEXT *c, EXCEPTION_RECORD *rec, uint32_t kind, uint32_t id, DWORD tid, uint32_t pass) {
+    StopOutcome out = {0, 0, 0, false};
+    int slot = exiting || in_served_call() ? -1
+             : stop_park(kind, id, (uint32_t)c->Eip, 0, (uint32_t)(uintptr_t)c, rec ? (uint32_t)(uintptr_t)rec : 0, 0,
+                         true, &out);
+    if (slot < 0) {
+        bp_pass_live(c, tid, pass);
+        return 0;
+    }
+    uint32_t seq = stops_table[slot].seq;
+    stop_free(slot);
+    dbg_fill(c, tid); /* breakpoints set or cleared while parked: the CONTEXT is what the thread resumes with */
+    bp_pass_live(c, tid, pass); /* before the resume: a step or trace starts on the original instruction */
+    bp_after(c, &out, id, tid);
+    return seq;
 }
 
 /* ---------------------------------------------------------------------------------------------- trace */
@@ -297,7 +315,7 @@ static void tr_end(CONTEXT *c, DWORD tid, uint32_t reason) {
         if (isites[i].live && isites[i].purpose == SITE_TRACE && isites[i].owner == tid) isite_remove(i);
     /* trace read takes the seq while the thread is parked, so it is set before the park: the seq the stop will get */
     tr.stop_seq = (uint32_t)stop_seq + 1;
-    seq = bp_park(c, NULL, STOP_STEP, BP_STEP_ID, tid);
+    seq = bp_park(c, NULL, STOP_STEP, BP_STEP_ID, tid, 0);
     if (seq) tr.stop_seq = seq;
 }
 /* Starts the trace prepared by resume trace, from the stop's context. */
@@ -356,21 +374,24 @@ static void tr_return(CONTEXT *c, DWORD tid, int site) {
 }
 
 /* ---------------------------------------------------------------------------------------------- traps */
-/* An int3 hit of a breakpoint (site bp). Passing hits go on (bp_pass); a hit that passes the predicate parks. */
+/* An int3 hit of a breakpoint (site bp). Passing hits go on (bp_pass); a hit that passes the predicate parks with the
+ * int3 left in place, so another thread reaching it meanwhile stops too, and steps over it when it goes on. */
 static void bp_hit(CONTEXT *c, EXCEPTION_RECORD *rec, int site, DWORD tid) {
     uint32_t id = (uint32_t)isites[site].bp, addr = isites[site].addr;
     unsigned char orig = isites[site].orig;
     Bp *b = &bps[id];
-    bool hit;
-    b->hits++;
+    bool hit, once, park;
+    InterlockedIncrement((volatile LONG *)&b->hits); /* several threads trap here at once */
     SEAM(8); /* tests: the trap is taken, the int3 still in place */
     hit = bp_passes(b, c);
-    if (hit && (b->flags & BP_FLAG_ONCE)) {
+    once = hit && (b->flags & BP_FLAG_ONCE);
+    park = hit && !(b->flags & BP_FLAG_LOG) && !tr_on(tid) && !in_served_call() && !exiting;
+    if (once) {
         isite_remove(site);
         b->used = false;
         b->site_on = false;
         c->Eip = addr;
-    } else {
+    } else if (!park) {
         bp_pass(c, tid, addr, orig);
     }
     if (!hit) return;
@@ -378,14 +399,14 @@ static void bp_hit(CONTEXT *c, EXCEPTION_RECORD *rec, int site, DWORD tid) {
         bp_log_push(id, c, b);
         return;
     }
-    if (tr_on(tid) || in_served_call() || exiting) return;
-    SEAM(3); /* tests: the trap is passed, the stop not registered yet */
-    bp_park(c, rec, STOP_BP, id, tid);
+    if (!park) return;
+    SEAM(3); /* tests: the stop not registered yet */
+    bp_park(c, rec, STOP_BP, id, tid, once ? 0 : addr);
 }
 /* A debug-register hit of breakpoint id. The resume flag is set in every case, so the instruction does not trap again. */
 static bool bp_hw_hit(CONTEXT *c, EXCEPTION_RECORD *rec, uint32_t id, DWORD tid) {
     Bp *b = &bps[id];
-    b->hits++;
+    InterlockedIncrement((volatile LONG *)&b->hits);
     if (!bp_passes(b, c)) return false;
     if (b->flags & BP_FLAG_ONCE) b->used = false;
     if (b->flags & BP_FLAG_LOG) {
@@ -393,7 +414,7 @@ static bool bp_hw_hit(CONTEXT *c, EXCEPTION_RECORD *rec, uint32_t id, DWORD tid)
         return false;
     }
     if (tr_on(tid) || in_served_call() || exiting) return false;
-    bp_park(c, rec, STOP_BP, id, tid);
+    bp_park(c, rec, STOP_BP, id, tid, 0);
     return true;
 }
 
@@ -418,7 +439,7 @@ static bool bp_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result) {
         if (to >= 0 && isites[to].live) isite_remove(to); /* a breakpoint hit ends a pending to at this address */
     } else if (to >= 0) {
         isite_remove(to);
-        bp_park(c, NULL, STOP_STEP, BP_STEP_ID, tid);
+        bp_park(c, NULL, STOP_STEP, BP_STEP_ID, tid, 0);
     } else if (ret_site >= 0 && tr.active && tr.tid == tid && tr.phase == 1) {
         tr_return(c, tid, ret_site);
     } else {
@@ -471,7 +492,7 @@ static bool bp_on_single_step(EXCEPTION_POINTERS *e, LONG *result) {
             if (tr.phase == 0) tr_step(c, tid);
         } else if (t->step) {
             t->step = false;
-            bp_park(c, NULL, STOP_STEP, t->step_id, tid);
+            bp_park(c, NULL, STOP_STEP, t->step_id, tid, 0);
         }
     }
     tf_fix(c, tid);

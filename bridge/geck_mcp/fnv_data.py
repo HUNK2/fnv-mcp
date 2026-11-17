@@ -11,7 +11,7 @@ Live (engine companion):
   fnv_script_hot_swap replace a running script's code with a new compile, keeping its variables (undoable)
 
 The record index is a SQLite cache in state/fnv/records.sqlite, rebuilt per plugin file when its size or
-time changes. Plugins are read with geck-mcp-nv's codec (esp/codec.py) for decoding single records; the index
+time changes (or its bytes, for a plugin indexed right after it was written: see RecordIndex.ensure). Plugins are read with geck-mcp-nv's codec (esp/codec.py) for decoding single records; the index
 scan reads record headers and the first subrecords only.
 """
 import copy
@@ -35,6 +35,21 @@ VARIADIC_COMMANDS = {'showmessage'}   # the message's %g values follow it (ShowM
 BLOCK_ALIASES = {'onpackageend'}  # short names in g_scriptBlocks (OnPackageDone = OnPackageEnd)
 
 INDEX_VERSION = 3   # 2: EditorIDs of PGRE, PMIS and NAVM are indexed (P7); 3: one copy per plugin name (X3)
+# A file written less than this before it was read may be rewritten in the same tick of the file clock (about 16 ms on
+# Windows) and keep its size and time: its bytes are checked too, until a check finds it older than this.
+RACY_SECONDS = 2.0
+
+
+def _crc(path):
+    """CRC-32 of a file's bytes; None when it cannot be read."""
+    crc = 0
+    try:
+        with open(path, 'rb') as f:
+            while chunk := f.read(1 << 20):
+                crc = zlib.crc32(chunk, crc)
+    except OSError:
+        return None
+    return crc
 SKIP_EDID = {b'LAND', b'NAVI'}  # no EditorIDs, many of them (PGRE/PMIS/NAVM can be named and scripts use them; P7)
 # Forms the engine makes itself, with no record in any plugin (P7: lint warned on PlayerREF).
 HARDCODED_EDIDS = {'playerref': 'ACHR'}
@@ -212,6 +227,15 @@ class RecordIndex:
             create index if not exists records_edid on records(edid collate nocase);
             create index if not exists records_file on records(file);
         ''')
+        # digest: the CRC-32 of a plugin indexed less than RACY_SECONDS after it was written, else null (column added
+        # after INDEX_VERSION 3; an index without it is kept)
+        if 'digest' not in [c[1] for c in self.db.execute('pragma table_info(files)')]:
+            try:
+                self.db.execute('alter table files add column digest integer')
+                self.db.commit()
+            except sqlite3.OperationalError as e:     # another server process added it first
+                if 'duplicate column' not in str(e):
+                    raise
 
     @property
     def db(self):
@@ -224,10 +248,20 @@ class RecordIndex:
         return db
 
     def _fresh(self, path, st):
-        row = self.db.execute('select id, size, mtime, version from files where path = ?', (str(path),)).fetchone()
-        if row and row[1] == st.st_size and abs(row[2] - st.st_mtime) < 1e-3 and row[3] >= INDEX_VERSION:
+        db = self.db
+        row = db.execute('select id, size, mtime, version, digest from files where path = ?', (str(path),)).fetchone()
+        if not (row and row[1] == st.st_size and abs(row[2] - st.st_mtime) < 1e-3 and row[3] >= INDEX_VERSION):
+            return None, row
+        if row[4] is None:
             return row[0], row
-        return None, row
+        checked = time.time()                        # before the read: a rewrite after it is what the check may miss
+        if _crc(path) != row[4]:
+            return None, row
+        if row[2] < checked - RACY_SECONDS and not db.in_transaction:
+            # its bytes are the indexed ones and any rewrite from now on gets a new time: trust its size and time
+            with write_txn(db):
+                db.execute('update files set digest = null where id = ? and digest = ?', (row[0], row[4]))
+        return row[0], row
 
     def ensure(self, path):
         """Index a plugin file unless the cached index matches its size and time. Returns its file id.
@@ -242,10 +276,14 @@ class RecordIndex:
         if file_id is not None:
             return file_id
         with _ensure_lock(path):
+            started = time.time()
             st = path.stat()
             file_id, row = self._fresh(path, st)
             if file_id is not None:
                 return file_id
+            # Written less than RACY_SECONDS before this read: a rewrite in the same tick of the file clock would keep
+            # its size and time, so its bytes are kept too (read before the scan: a change during the scan is caught).
+            digest = _crc(path) if st.st_mtime >= started - RACY_SECONDS else None
             masters, rows = scan_plugin(path)
             db = self.db
             if db.in_transaction:  # never build on top of a transaction an earlier failure left open
@@ -265,10 +303,10 @@ class RecordIndex:
                     self._drop_refs(db, old)
                 next_id = max(db.execute('select coalesce(max(id), 0) from files').fetchone()[0],
                               self._last_id(db)) + 1
-                db.execute('insert into files(id, path, name, size, mtime, version, masters, records, built) '
-                           'values (?, ?, ?, ?, ?, ?, ?, ?, ?)', (next_id, str(path), path.name, st.st_size,
-                                                                  st.st_mtime, INDEX_VERSION, json.dumps(masters),
-                                                                  len(rows), time.time()))
+                db.execute('insert into files(id, path, name, size, mtime, version, masters, records, built, digest) '
+                           'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (next_id, str(path), path.name, st.st_size,
+                                                                     st.st_mtime, INDEX_VERSION, json.dumps(masters),
+                                                                     len(rows), time.time(), digest))
                 self._set_last_id(db, next_id)
                 own = masters + [path.name]
                 db.executemany('insert into records values (?, ?, ?, ?, ?, ?, ?, ?)',
