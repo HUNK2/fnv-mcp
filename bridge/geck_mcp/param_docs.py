@@ -599,24 +599,13 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_anim': {'action': 'What to do: sta
                     'strength': 'For action=imagespace: strength of the modifier. Default 1.',
                     'distance': 'For action=duplicate: distance in game units for placing the copy. Default 0.',
                     'count': 'For action=duplicate: how many copies to place, 1 to 20.'},
- 'geck_plugin_load': {'expected_editor_title': 'The GECK window title you expect, used as a guard so the load only '
-                                               'runs against the intended editor.',
-                      'expected_plugin_hash': 'SHA-256 hex hash of the plugin file you expect to load, as a guard '
-                                              'against changed content.',
-                      'request_key': 'Caller-chosen key for this operation. Reuse it only for an identical retry.',
-                      'reload': 'If true, force reloading a plugin that is already active and clean. Default false.'},
- 'geck_plugin_save': {'expected_models': 'Map of STAT EditorID to the expected model path, checked independently '
-                                         'after saving.',
-                      'expected_plugin_hash': 'SHA-256 hex hash of the plugin file you expect before saving, as a '
-                                              'guard.',
-                      'request_key': 'Caller-chosen key for this operation. Reuse it only for an identical retry.',
-                      'save_entire_active_plugin': 'Must be true. Confirms you accept saving all pending edits of '
-                                                   'the whole active plugin, including manual ones.'},
- 'geck_record_set_model': {'editor_id': 'EditorID of the existing STAT record whose model to change.',
-                           'model_path': 'New model path, relative to Data\\meshes.',
-                           'expected_model': 'The model path the record currently has, checked before the change as '
-                                             'a guard.',
-                           'expected_plugin_hash': 'SHA-256 hex hash of the plugin file you expect before the '
-                                                   'change, as a guard.',
-                           'request_key': 'Caller-chosen key for this operation. Reuse it only for an identical '
-                                          'retry.'}}
+ 'fnv_spec': {'action': 'What to do: validate (dry run, writes nothing), build (write the plugin and receipt), inspect '
+                        '(summarise a plugin on disk), lookup (find records by EditorID for the spec).',
+              'spec': 'For action=validate: an inline spec object to check instead of the project spec file. '
+                      'Omitted checks the project spec.',
+              'which': 'For action=inspect: build (default) is the last build; installed is the copy fnv_install '
+                       'put in the MO2 dev profile, else the one in Data.',
+              'query': 'For action=lookup: part of an EditorID (2 to 100 characters) to find in the spec and the '
+                       'indexed masters.',
+              'record_type': 'For action=lookup: keep only records of this four-letter type, such as STAT or MISC.',
+              'limit': 'For action=lookup: maximum master records returned. Default 25.'}}

@@ -731,7 +731,7 @@ class DataTools:
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(path, (json.dumps(cache, indent=1, sort_keys=True) + '\n').encode())
         return {'scripts': results, 'cache': str(esp_scripts.cache_path(self.project.state_dir, spec['project_id'])),
-                'next': 'Rebuild (geck_plugin_build) to include the compiled scripts, then fnv_install and restart.'
+                'next': 'Rebuild (fnv_spec build) to include the compiled scripts, then fnv_install and restart.'
                 if changed else None}
 
     def _compile_result_scripts(self, spec, receipt, relative, context, only=None):
@@ -843,7 +843,7 @@ class DataTools:
         if not result.get('ok') and re.search(r'\b[A-Za-z_]\w*\.[A-Za-z_]\w*', source) and \
                 any('Unknown variable' in e for e in info['errors']):
             info['hint'] = ('The running game keeps no quest EditorIDs, so its compiler cannot resolve Quest.variable '
-                            'references (GECK and the plugin builder can). Compile in game only scripts without them, '
+                            'references (the GECK compiler can). Compile in game only scripts without them, '
                             'or read such variables through a reference variable set at runtime.')
         if not result.get('ok'):
             info['lint'] = self.script_lint(source, check_forms=False)

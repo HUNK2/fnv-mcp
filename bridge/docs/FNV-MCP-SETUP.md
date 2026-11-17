@@ -23,7 +23,6 @@ tested end to end: [examples/hello-quest](../examples/hello-quest/README.md).
 | Zig 0.14.1 (builds the engine companion) | ziglang.org (you download it) |
 | A checkout of [fnv_decomp](https://github.com/momusdigital/fnv_decomp), for the engine map | its repository |
 | Optional: your own unpacked FalloutNV.exe (Steamless), for `fnv_patch_map` and planning hooks offline | you make it locally |
-| Optional, for the `geck_*` tools only: the GECK and the helper `build_helper.py` builds | [bridge/README.md](../README.md) |
 
 Nothing here downloads files or ships game files, the decompilation or anything generated from them.
 
@@ -166,7 +165,7 @@ play with. On the direct install (no MO2) they act on your real game, and change
 | Live tools: `fnv_status`, `fnv_player`, `fnv_ref`, `fnv_photo`, tests, profiling, debugging... | a running game with the engine companion |
 | Act tools and actions (they change the game or the mod profile) | a running game and `fnv.engine_control = "full"` |
 | `fnv_patch_map`; hook plans while the game is closed | your unpacked FalloutNV.exe (`fnv.clean_exe`) |
-| `geck_*` | the GECK, the helper and the GECK settings (`plugin`, `helper`, `records` or `spec`); without them they answer `NOT_CONFIGURED` |
+| `fnv_spec` (plugins built from a JSON spec) | the `plugin` and `spec` settings and the master index ([bridge/README.md](../README.md)); without them it answers `NO_SPEC` |
 
 ## Settings
 
@@ -177,16 +176,9 @@ Paths in the project file may be relative to the project file. `fnv_*` keys go i
 | `project_id` | (required) | Lower-case name of the project; used in state file names |
 | `game_root` | (required) | The game folder (with `FalloutNV.exe` and `Data`) |
 | `state_dir` | (required) | Where the tools keep their state, logs, builds and journals |
-| `launcher` | `native` | The only launcher (Windows) |
-| `legacy_tools` | `false` | Registers the legacy `geck_runtime_*` and `geck_console_*` tools (or `run_mcp.py --legacy`) |
-| `toolsets` | all but `legacy` | Which tool families the server registers: `game` (fnv_*), `editor` (geck_*), `naming` (fnv_name_*, fnv_probe, fnv_atlas), `legacy`. For example `["game"]` for a game session. `run_mcp.py --toolsets game,naming` overrides it; `fnv_guide` is always on and its find names hidden tools. Reconnect the server after a change |
-| `plugin` | none | GECK: the `.esp` the `geck_*` tools work on |
-| `helper` | none | GECK: the 32-bit helper `build_helper.py` builds |
-| `records` | `[]` | GECK: the STAT records the record tools may edit |
-| `spec` | none | GECK: the JSON spec the plugin is built from |
-| `source_roots` | `[]` | GECK: extra folders the spec's sources are read from |
-| `helper_timeout_seconds` | `45` | GECK: how long one helper call may take (5 to 90) |
-| `transport` | `auto` | GECK: `persistent`, `oneshot` or `auto` (persistent when the helper supports it) |
+| `toolsets` | both | Which tool families the server registers: `game` (fnv_*, fnv_spec) and `naming` (fnv_name_*, fnv_probe, fnv_atlas). For example `["game"]` for a game session. `run_mcp.py --toolsets game,naming` overrides it; `fnv_guide` is always on and its find names hidden tools. Reconnect the server after a change |
+| `plugin` | none | The `.esp` `fnv_spec` builds |
+| `spec` | none | The JSON spec `fnv_spec` builds the plugin from |
 | `fnv.engine_control` | `read` | `read` or `full` (see "Safety levels") |
 | `fnv.engine_map` | `<state_dir>/engine_map.json` | The engine map from `engine_map.generate` |
 | `fnv.decomp_root` | the path in the map | Your fnv_decomp checkout |
@@ -211,14 +203,15 @@ Paths in the project file may be relative to the project file. `fnv_*` keys go i
 | `FNV_MCP_ZIG` | none | Zig, when `fnv.zig` is not set |
 | `FNV_MCP_RELOAD` | off | `1` starts the reloading supervisor, for development (same as `run_mcp.py --reload`) |
 | `FNV_MCP_SUPERVISOR_LOG` | `<state_dir>/supervisor.log` | The supervisor's log file; empty for none |
-| `FNV_MCP_TRANSPORT` | none | `oneshot` forces one helper launch per call (GECK) |
 
 The `FNV_MCP_*` variables had other names before 0.5 (`GECK_MCP_ZIG`, `FNVMCP_PIPE`, `GECK_MCP_RELOAD`,
-`GECK_SUPERVISOR_LOG`, `GECK_MCP_TRANSPORT`); the old names still work, and the new name wins when both are set.
+`GECK_SUPERVISOR_LOG`); the old names still work, and the new name wins when both are set. The keys of the removed
+GECK editor and legacy tools (`launcher`, `helper`, `records`, `source_roots`, `helper_timeout_seconds`, `transport`,
+`legacy_tools`, and `editor` or `legacy` in `toolsets`) are ignored, so an older project file still loads.
 
 ## Uninstall
 
-Nothing here runs by itself; there is no uninstall tool. Close the game, the GECK and the MCP client first.
+Nothing here runs by itself; there is no uninstall tool. Close the game and the MCP client first.
 
 1. **The MCP registration.** With Claude Code: `claude mcp remove fnv-mcp`. For a client with a JSON file, delete
    the `"fnv-mcp"` entry.
@@ -262,5 +255,5 @@ The open problems are listed in [KNOWN-ISSUES.md](KNOWN-ISSUES.md). The ones met
   closes the pause menu and message boxes during a run; `allow_menus: true` opts out).
 - MCP clients that put their server in a job object without breakaway stop MO2 from starting the game; the
   bridge then opens a launch shortcut through Explorer. Claude Code's launcher allows breakaway.
-- The running game keeps no quest EditorIDs, so scripts with `Quest.variable` references compile only in GECK
-  (not with `fnv_compile_ingame` / `fnv_scripts_compile`).
+- The running game keeps no quest EditorIDs, so scripts with `Quest.variable` references cannot be compiled
+  (`fnv_compile_ingame`, `fnv_scripts_compile`); `fnv_spec` leaves them uncompiled.

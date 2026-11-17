@@ -18,7 +18,7 @@ from geck_mcp.config import FnvSettings  # noqa: E402
 from geck_mcp.fnv_live_tools import (FNV_LIVE_TOOLS, FULL_ONLY_ACTIONS, MUTATING_ACTIONS,  # noqa: E402
                                      READ_LEVEL_CONTROL, needs_full)
 from geck_mcp.server import make_server  # noqa: E402
-import test_service  # noqa: E402
+import project_fixture  # noqa: E402
 
 STEPS = [{'wait': 1}]
 # (tool, action label) -> minimal valid arguments. The label is what MUTATING_ACTIONS lists ('*' = every call).
@@ -140,7 +140,7 @@ class GateFixture:
     """The in-process server with engine_control = "read" and no pipe. Mix into IsolatedAsyncioTestCase."""
 
     async def asyncSetUp(self):
-        self.fixture = test_service.ServiceTests()
+        self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
         root = Path(self.fixture.tmp.name)
         (root / 'mo2/profiles/Dev').mkdir(parents=True)
@@ -173,7 +173,7 @@ class GateTests(GateFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_every_mutating_action_is_refused_when_read(self):
         wrong = []
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             for (tool, label), args in sorted(MUTATING_CASES.items()):
                 self.pipe_ops.clear()
                 code, result = await self.call(client, tool, args)
@@ -184,7 +184,7 @@ class GateTests(GateFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_read_actions_still_work_when_read(self):
         wrong = []
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             for tool, args in sorted(READ_CASES.items()):
                 code, _ = await self.call(client, tool, args)
                 if code == 'CONTROL_DISABLED':
@@ -192,7 +192,7 @@ class GateTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wrong, [])
 
     async def test_annotations_match_kinds(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             listing = await client.list_tools()
             tools = {t.name: t for t in (listing.tools if hasattr(listing, 'tools') else listing)}
         for tool in MUTATING_ACTIONS:
@@ -208,7 +208,7 @@ class FullOnlyTests(GateFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_every_full_only_action_is_refused_when_read(self):
         wrong = []
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             for (tool, label), args in sorted(FULL_ONLY_CASES.items()):
                 self.pipe_ops.clear()
                 code, result = await self.call(client, tool, args)
@@ -218,7 +218,7 @@ class FullOnlyTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wrong, [])
 
     async def test_refusal_says_what_to_set(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             _, result = await self.call(client, 'fnv_install', FULL_ONLY_CASES[('fnv_install', '*')])
         message = result.structured_content['error']['message']
         self.assertIn('fnv.engine_control = "full"', message)
@@ -226,7 +226,7 @@ class FullOnlyTests(GateFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_read_level_calls_are_not_refused(self):
         wrong = []
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             for (tool, label), args in sorted(READ_LEVEL_CASES.items()):
                 code, _ = await self.call(client, tool, args)
                 if code == 'CONTROL_DISABLED':
@@ -250,7 +250,7 @@ class FullOnlyTests(GateFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_no_fnv_block_means_read(self):
         self.project = self.project.model_copy(update={'fnv': None})
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             code, _ = await self.call(client, 'fnv_install', FULL_ONLY_CASES[('fnv_install', '*')])
         self.assertEqual(code, 'CONTROL_DISABLED')
 

@@ -263,31 +263,17 @@ class AssetCheckTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'BAD_ASSET')
 
 
-class CompileOperationTests(unittest.TestCase):
-    """T9: geck_compile_status and geck_compile_resume gave different codes for an unknown operation."""
-
-    def test_compile_status_and_resume_same_code(self):
-        from test_compilation import CompileTests
-        fixture = CompileTests('setUp')
-        fixture.setUp()
-        self.addCleanup(fixture.doCleanups)
-        status = fixture.service.compile_status('no-such-operation')
-        resume = fixture.service.compile_resume('no-such-operation')
-        codes = {(status.get('error') or {}).get('code'), (resume.get('error') or {}).get('code')}
-        self.assertEqual(codes, {'OPERATION_NOT_FOUND'})
-
-
 class IgnoredParameterTests(unittest.TestCase):
     """T8: a tool parameter that the tool never reads (an agent cannot tell its argument had no effect)."""
 
     # Parameters that are read by the schema alone, on purpose: an explicit confirmation the caller must give.
-    CONFIRMATIONS = {('geck_plugin_save', 'save_entire_active_plugin')}
+    CONFIRMATIONS = set()
 
     def test_ignored_params_rejected(self):
         import ast
         root = Path(__file__).resolve().parents[1] / 'geck_mcp'
         wrong = []
-        for name in ('fnv_live_tools.py', 'fnv_tools.py', 'server.py'):
+        for name in ('fnv_live_tools.py', 'fnv_tools.py', 'fnv_spec.py'):
             source = (root / name).read_text(encoding='utf-8')
             for node in ast.walk(ast.parse(source)):
                 if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) or not any(

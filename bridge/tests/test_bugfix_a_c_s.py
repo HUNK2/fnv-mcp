@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_live, fnv_save, supervisor, service  # noqa: E402
+from geck_mcp import fnv_live, fnv_save, supervisor  # noqa: E402
 from geck_mcp.esp import codec, formids  # noqa: E402
 from geck_mcp.fnv_data import RecordIndex  # noqa: E402
 from geck_mcp.fnv_state import GameIdentity  # noqa: E402
@@ -191,35 +191,6 @@ class SupervisorTests(unittest.TestCase):
                     supervisor.os.environ['GECK_SUPERVISOR_LOG'] = saved
 
 
-class ServiceLockTests(unittest.TestCase):
-    """A4: threads of one process queue for the editor lock instead of failing at once."""
-
-    def test_second_thread_waits_for_the_first(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            order = []
-
-            def hold():
-                with service.process_lock(tmp):
-                    order.append('a in')
-                    time.sleep(0.2)
-                    order.append('a out')
-            t = threading.Thread(target=hold)
-            t.start()
-            time.sleep(0.05)
-            with service.process_lock(tmp, wait=5):
-                order.append('b in')
-            t.join()
-            self.assertEqual(order, ['a in', 'a out', 'b in'])
-
-    def test_busy_is_retry_safe(self):
-        svc = service.Service.__new__(service.Service)
-        svc.project = SimpleNamespace(project_id='p')
-        result = svc.failure(RuntimeError('EDITOR_BUSY: another bridge operation holds the bottle lock'), 'op', 'x', True)
-        self.assertEqual(result['error']['code'], 'EDITOR_BUSY')
-        self.assertTrue(result['error']['retrySafe'])
-        self.assertEqual(result['outcome'], 'failed_before_change')
-
-
 class RecordIndexTests(unittest.TestCase):
     """C1, C2, C3."""
 
@@ -364,7 +335,7 @@ class SmallDataTests(unittest.TestCase):
     def test_project_file_with_bom(self):  # A13
         from geck_mcp.config import Project
         with tempfile.TemporaryDirectory() as tmp:
-            src = ROOT / 'projects' / 'example-windows.json'
+            src = ROOT / 'projects' / 'example-plugin.json'
             text = src.read_text(encoding='utf-8')
             dst = Path(tmp) / 'p.json'
             dst.write_bytes(b'\xef\xbb\xbf' + text.encode('utf-8'))

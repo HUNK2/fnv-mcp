@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-import test_service  # noqa: E402
+import project_fixture  # noqa: E402
 from geck_mcp import fnv_live_tools  # noqa: E402
 from geck_mcp.server import make_server  # noqa: E402
 
@@ -30,14 +30,14 @@ class XyzTests(unittest.TestCase):
 
 class PositionSchemaTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.fixture = test_service.ServiceTests()
+        self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
 
     async def asyncTearDown(self):
         self.fixture.tearDown()
 
     async def test_every_position_is_an_array_first(self):
-        async with Client(make_server(self.fixture.p, self.fixture.service)) as client:
+        async with Client(make_server(self.fixture.p)) as client:
             tools = {t.name: t for t in (await client.list_tools()).tools}
             for tool in tools.values():
                 props = tool.input_schema.get('properties', {})

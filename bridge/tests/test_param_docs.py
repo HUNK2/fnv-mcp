@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-import test_service  # noqa: E402
+import project_fixture  # noqa: E402
 from geck_mcp.param_docs import PARAM_DOCS  # noqa: E402
 from geck_mcp.server import make_server  # noqa: E402
 
@@ -19,14 +19,14 @@ def own_description(schema):
 
 class ParamDocTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.fixture = test_service.ServiceTests()
+        self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
 
     async def asyncTearDown(self):
         self.fixture.tearDown()
 
     async def listing(self):
-        async with Client(make_server(self.fixture.p, self.fixture.service)) as client:
+        async with Client(make_server(self.fixture.p)) as client:
             return {t.name: t for t in (await client.list_tools()).tools}
 
     async def test_tools_with_six_or_more_parameters_are_described(self):
@@ -41,7 +41,7 @@ class ParamDocTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_every_entry_is_real_and_needed(self):
         from geck_mcp.fnv_live_tools import register  # noqa: F401 - the listing below is the truth
-        server = make_server(self.fixture.p, self.fixture.service)
+        server = make_server(self.fixture.p)
         raw = {t.name: t.parameters.get('properties', {}) for t in server._tool_manager.list_tools()}
         problems = []
         for tool, params in PARAM_DOCS.items():

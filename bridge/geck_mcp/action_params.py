@@ -9,6 +9,12 @@ Entry: {'by': the parameter that picks the action (default 'action'), 'common': 
 'actions': {action: parameters it takes}}."""
 
 ACTION_PARAMS = {
+    'fnv_spec': {'actions': {
+        'validate': {'spec'},
+        'build': set(),
+        'inspect': {'which'},
+        'lookup': {'query', 'record_type', 'limit'},
+    }},
     'fnv_place': {'actions': {
         'at': {'base', 'position', 'near', 'offset', 'rotation', 'scale', 'snap', 'rest', 'export', 'count',
                'distance', 'direction'},

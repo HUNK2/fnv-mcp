@@ -1,21 +1,35 @@
-"""Native Windows capture of GECK's Render Window (geck_render_capture on Windows).
+"""Native Windows capture of a window's client area (the game window, for fnv_agent and fnv_scenario screenshots).
 
-Finds the one visible top-level `MonitorClass` window owned by GECK.exe and copies its client area with
-PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT), which also works when other windows cover it. If that
-yields a flat image, it falls back to copying the window's screen area, but only when no other window covers
-the Render Window (a screen copy of a covered window shows the covering window). No clicks, no focus change.
-Standard library ctypes only; Pillow + NumPy write and check the PNG.
+Copies the client area with PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT), which also works when other windows
+cover it. If that yields a flat image, it falls back to copying the window's screen area, but only when no other
+window covers it (a screen copy of a covered window shows the covering window). No clicks, no focus change.
+Standard library ctypes only; Pillow + NumPy write and check the PNG. (Written for GECK's Render Window; the GECK
+tools were removed on 2026-11-18.)
 """
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
 import time
 
-from .imaging import ImagingError, _np
+
+
+class ImagingError(RuntimeError):
+    def __init__(self, code, message, evidence=None):
+        super().__init__(message)
+        self.code, self.evidence = code, evidence
+
+
+def _np():
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError as e:
+        raise ImagingError('MISSING_DEPENDENCY', 'Install pillow and numpy into the bridge venv') from e
+    return np, Image
+
 
 PW_CLIENTONLY, PW_RENDERFULLCONTENT = 0x1, 0x2
 SRCCOPY, CAPTUREBLT = 0x00CC0020, 0x40000000
-PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -72,60 +86,6 @@ def _api():
     return user32, gdi32, kernel32
 
 
-def _process_image(kernel32, pid):
-    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return None
-    try:
-        size = wintypes.DWORD(1024)
-        buf = ctypes.create_unicode_buffer(size.value)
-        return buf.value if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)) else None
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def geck_windows(class_name=None):
-    """Top-level windows of GECK.exe processes: [{hwnd, pid, class, title, visible}]."""
-    user32, _, kernel32 = _api()
-    rows, images = [], {}
-
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    def visit(hwnd, _):
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if pid.value not in images:
-            images[pid.value] = _process_image(kernel32, pid.value)
-        image = images[pid.value] or ''
-        if Path(image).name.lower() != 'geck.exe':
-            return True
-        cls = ctypes.create_unicode_buffer(256)
-        user32.GetClassNameW(hwnd, cls, 256)
-        if class_name and cls.value != class_name:
-            return True
-        title = ctypes.create_unicode_buffer(512)
-        user32.GetWindowTextW(hwnd, title, 512)
-        rows.append({'hwnd': hwnd, 'pid': pid.value, 'class': cls.value, 'title': title.value,
-                     'visible': bool(user32.IsWindowVisible(hwnd))})
-        return True
-
-    user32.EnumWindows(ctypes.cast(visit, ctypes.c_void_p), 0)
-    return rows
-
-
-def render_window():
-    rows = geck_windows('MonitorClass')
-    pids = {r['pid'] for r in rows}
-    if len(pids) > 1:
-        raise ImagingError('RENDER_WINDOW_NOT_UNIQUE', 'More than one GECK process is running')
-    visible = [r for r in rows if r['visible']]
-    if len(visible) != 1:
-        raise ImagingError('RENDER_WINDOW_NOT_UNIQUE' if visible else 'RENDER_WINDOW_HIDDEN',
-                           'Expected one visible Render Window, found %d (%d hidden); try geck_show_windows'
-                           % (len(visible), len(rows) - len(visible)),
-                           {'windows': [{k: r[k] for k in ('class', 'title', 'visible')} for r in rows]})
-    return visible[0]
-
-
 def _visible_bounds(user32, h):
     rect = wintypes.RECT()
     if user32.DwmGetWindowAttribute(h, 9, ctypes.byref(rect), ctypes.sizeof(rect)) != 0:   # EXTENDED_FRAME_BOUNDS
@@ -134,8 +94,8 @@ def _visible_bounds(user32, h):
 
 
 def covering_windows(user32, hwnd, width, height):
-    """Visible, uncloaked windows above the Render Window in z-order that overlap its client area (toasts,
-    other apps, GECK dialogs). WindowFromPoint alone misses windows that do not take mouse input."""
+    """Visible, uncloaked windows above the window in z-order that overlap its client area (toasts,
+    other apps, dialogs). WindowFromPoint alone misses windows that do not take mouse input."""
     origin = wintypes.POINT(0, 0)
     user32.ClientToScreen(hwnd, ctypes.byref(origin))
     left, top, right, bottom = origin.x, origin.y, origin.x + width, origin.y + height
@@ -201,11 +161,11 @@ def _dpi_context(user32, context):
 def capture(window, out_path, repaint=False):
     """PNG of the window's client area. Returns {path, size, client, method, stats, blank, attempts}.
 
-    1. PrintWindow in the Render Window's own DPI context: GECK is DPI-unaware, so this gives the image at the
-       size GECK renders it (the client size GECK reports), even when other windows cover it.
+    1. PrintWindow in the window's own DPI context: for a DPI-unaware program this gives the image at the size
+       it renders (the client size it reports), even when other windows cover it.
     2. If that is blank: a screen copy in per-monitor-aware context (physical pixels, so on a scaled display it
-       is larger), only when nothing covers the Render Window. A DPI-unaware screen copy on a scaled display
-       copies the wrong area (job 052 got GECK's toolbar).
+       is larger), only when nothing covers the window. A DPI-unaware screen copy on a scaled display
+       copies the wrong area (job 052 got the wrong toolbar).
     """
     _, Image = _np()
     user32, _, _ = _api()
@@ -218,8 +178,8 @@ def capture(window, out_path, repaint=False):
         own = None
     attempts, image, stats, used = [], None, None, None
     if repaint:
-        # PrintWindow can return only the window background (flat grey) for GECK's Direct3D view (jobs 054/055);
-        # ask GECK to repaint and give it time to draw before the next try.
+        # PrintWindow can return only the window background (flat grey) for a Direct3D view (jobs 054/055);
+        # ask the window to repaint and give it time to draw before the next try.
         user32.RedrawWindow(hwnd, None, None, 0x0001 | 0x0100 | 0x0080)    # INVALIDATE | UPDATENOW | ALLCHILDREN
         time.sleep(1.5)
     for method, context in (('PrintWindow', own), ('screen', -4)):      # -4: PER_MONITOR_AWARE_V2
@@ -252,13 +212,13 @@ def _grab(hwnd, method):
         raise ImagingError('CAPTURE_FAILED', 'GetClientRect failed')
     width, height = rect.right - rect.left, rect.bottom - rect.top
     if width < 8 or height < 8:
-        raise ImagingError('RENDER_WINDOW_EMPTY', 'Render Window client area is %dx%d' % (width, height))
+        raise ImagingError('RENDER_WINDOW_EMPTY', 'Window client area is %dx%d' % (width, height))
     attempt = {'method': method, 'client': [width, height]}
     if method == 'screen':
         covered = covering_windows(user32, hwnd, width, height)
         if covered or not unobscured(user32, hwnd, width, height):
-            # A screen copy would show whatever covers the Render Window (seen: the Claude app, a toast).
-            attempt.update(ok=False, skipped='Render Window is covered', coveredBy=covered[:5])
+            # A screen copy would show whatever covers the window (seen: the Claude app, a toast).
+            attempt.update(ok=False, skipped='window is covered', coveredBy=covered[:5])
             return {'image': None, 'client': [width, height], 'attempt': attempt}
     screen = user32.GetDC(None)
     memdc = gdi32.CreateCompatibleDC(screen)

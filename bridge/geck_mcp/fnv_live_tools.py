@@ -990,8 +990,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
 
     @server.tool(annotations=control)
     async def fnv_scripts_compile(only: list[Annotated[str, Field(max_length=128)]] | None = None) -> result_type:
-        """Compile the project spec's scripts with the running game's compiler and store them in geck-mcp-nv's
-        compiled-script cache, so geck_plugin_build emits compiled scripts without GECK. The last build must be
+        """Compile the project spec's scripts with the running game's compiler and store them in the builder's
+        compiled-script cache, so fnv_spec build emits compiled scripts without GECK. The last build must be
         installed and loaded (its forms must exist). Each entry is checked with the builder's verification and
         records an in-game provenance. Scripts with Quest.variable references cannot be compiled in game."""
         return await invoke('fnv_scripts_compile', lambda: data.compile_spec_scripts(only), 'control')

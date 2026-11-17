@@ -1,8 +1,6 @@
 """Generic (template-cloned) records: ALCH support and where record templates are looked up (fix 4)."""
 import json
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -11,7 +9,6 @@ from geck_mcp.config import Project
 from geck_mcp.esp import build as builder, codec, generic
 from geck_mcp.esp.formids import FormIdMap
 from geck_mcp.esp.records import SpecError
-from tests.test_service import host_launcher
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -97,8 +94,8 @@ class TemplateLookup(unittest.TestCase):
         spec_path = self.root / 'workshop' / 'alch.spec.json'
         spec_path.write_text(json.dumps(SPEC))
         (self.root / 'game' / 'Data').mkdir(parents=True)
-        project = Project(project_id='alchtest', **host_launcher(self.root), game_root=self.root / 'game',
-                          plugin='AlchTest.esp', state_dir=state, helper=self.root / 'helper', spec=spec_path)
+        project = Project(project_id='alchtest', game_root=self.root / 'game', plugin='AlchTest.esp',
+                          state_dir=state, spec=spec_path)
         auth = Authoring(project)
         receipt, data = auth.build(write=True)
         self.assertTrue(receipt['validation']['ok'], receipt['validation'])
@@ -117,23 +114,6 @@ class TemplateLookup(unittest.TestCase):
         files = index_files(state, ['Own.esm', 'NotIndexedAnywhere.esm'])
         self.assertEqual(files, [own])
 
-    def test_build_plugin_cli_uses_state_for_templates_and_output(self):
-        state = self.root / 'mod' / 'state'
-        write_template(state)
-        spec_path = self.root / 'alch.spec.json'
-        spec_path.write_text(json.dumps(SPEC))
-        dry = subprocess.run([sys.executable, str(ROOT / 'build_plugin.py'), str(spec_path), '--state', str(state),
-                              '--dry-run', '--no-assets'], capture_output=True, text=True, cwd=str(ROOT))
-        summary = json.loads(dry.stdout.strip().splitlines()[-1])
-        self.assertTrue(summary['ok'], dry.stdout + dry.stderr)
-        self.assertFalse((self.root / 'mod' / 'build').exists())
-        real = subprocess.run([sys.executable, str(ROOT / 'build_plugin.py'), str(spec_path), '--state', str(state),
-                               '--no-assets'], capture_output=True, text=True, cwd=str(ROOT))
-        summary2 = json.loads(real.stdout.strip().splitlines()[-1])
-        self.assertEqual(summary2['sha256'], summary['sha256'])
-        self.assertEqual(Path(summary2['out']), self.root / 'mod' / 'build')
-        self.assertTrue((self.root / 'mod' / 'build' / 'AlchTest.esp').exists())
-        self.assertTrue((self.root / 'mod' / 'build' / 'AlchTest.receipt.json').exists())
 
 
 if __name__ == '__main__':

@@ -20,13 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-import test_service  # noqa: E402
+import project_fixture  # noqa: E402
 from geck_mcp import fnv_game  # noqa: E402
 from geck_mcp.server import make_server  # noqa: E402
 
 PER_CALL_SECONDS = 60
 UNCODED = ('FNV_ERROR', 'BRIDGE_ERROR', 'INTERNAL_ERROR', 'TOOL_ERROR')
-NOT_AN_OPERATION = {'geck_capabilities'}   # describes the server; answers a plain report, not an envelope
+NOT_AN_OPERATION = set()   # a tool that describes the server and answers a plain report, not an envelope
 
 
 def minimal(schema, root=None):
@@ -52,7 +52,7 @@ def minimal(schema, root=None):
 
 class EveryToolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.fixture = test_service.ServiceTests()
+        self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
         patch = mock.patch.object(fnv_game, 'game_processes', lambda: [])
         patch.start()
@@ -63,10 +63,10 @@ class EveryToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_every_tool_answers_an_envelope(self):
         bad, timings = {}, {}
-        async with Client(make_server(self.fixture.p, self.fixture.service)) as client:
+        async with Client(make_server(self.fixture.p)) as client:
             listing = await client.list_tools()
             tools = listing.tools if hasattr(listing, 'tools') else listing
-            self.assertGreater(len(tools), 150)
+            self.assertGreater(len(tools), 130)
             for tool in sorted(tools, key=lambda t: t.name):
                 arguments = minimal(tool.input_schema)
                 started = time.monotonic()
@@ -107,17 +107,17 @@ class TitleTests(unittest.IsolatedAsyncioTestCase):
     """Release plan Phase 7 (L6): every tool has a display title, and no two share one."""
 
     async def test_every_tool_has_a_title(self):
-        fixture = test_service.ServiceTests()
+        fixture = project_fixture.ProjectFixture()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
-        async with Client(make_server(fixture.p, fixture.service)) as client:
+        async with Client(make_server(fixture.p)) as client:
             listing = await client.list_tools()
         tools = listing.tools if hasattr(listing, 'tools') else listing
         titles = {tool.name: tool.title for tool in tools}
         self.assertEqual([name for name, title in titles.items() if not title], [])
         self.assertEqual(len(set(titles.values())), len(titles))
         self.assertEqual(titles['fnv_dialogue_choose'], 'FNV: dialogue choose')
-        self.assertEqual(titles['geck_plugin_save'], 'GECK: plugin save')
+        self.assertEqual(titles['fnv_spec'], 'FNV: spec')
 
 
 class EscapedErrorTests(unittest.IsolatedAsyncioTestCase):
@@ -125,7 +125,11 @@ class EscapedErrorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_codes(self):
         from geck_mcp.server import BridgeServer
-        from geck_mcp.transport import BridgeError
+
+        class BridgeError(Exception):
+            def __init__(self, code, message, uncertain=False):
+                super().__init__(message)
+                self.code, self.uncertain = code, uncertain
         server = BridgeServer('t')
 
         @server.tool()

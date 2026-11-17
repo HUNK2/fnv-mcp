@@ -42,22 +42,16 @@ def load_guides(folder=GUIDES_DIR):
 
 
 def tool_table(toolsets=None):
-    """{name: {kind, toolset, description}} for every offline and live fnv_* tool and the legacy tools, and the
-    geck_* tools when the editor toolset is off. A tool whose toolset is not in `toolsets` (default: every one but
-    legacy) is not registered, so its description says how to turn it on (TOOL-MERGE step 1)."""
+    """{name: {kind, toolset, description}} for every offline and live fnv_* tool. A tool whose toolset is not in
+    `toolsets` (default: all) is not registered, so its description says how to turn it on (TOOL-MERGE step 1)."""
     from .fnv_live_tools import FNV_LIVE_TOOLS
+    from .fnv_spec import FNV_SPEC_TOOLS
     from .fnv_tools import FNV_TOOLS
-    from .server import LEGACY_TOOLS
-    from .service import CAPABILITIES
     from .toolsets import ALWAYS, DEFAULT_TOOLSETS, hidden_note, toolset_of
     active = set(DEFAULT_TOOLSETS if toolsets is None else toolsets)
     table = {n: {'kind': 'read', 'description': d} for n, d in FNV_TOOLS.items()}
     table.update({n: {'kind': k, 'description': d} for n, (k, d) in FNV_LIVE_TOOLS.items()})
-    effects = CAPABILITIES.get('tools') or {}
-    geck = [n for n in effects if n.startswith('geck_') and n not in LEGACY_TOOLS] if 'editor' not in active else []
-    for name in [*LEGACY_TOOLS, *geck]:
-        effect = (effects.get(name) or {}).get('effect') or name.replace('_', ' ')
-        table[name] = {'kind': 'control', 'description': effect}
+    table.update({n: {'kind': k, 'description': d} for n, (k, d) in FNV_SPEC_TOOLS.items()})
     for name, row in table.items():
         row['toolset'] = toolset_of(name)
         if row['toolset'] not in active and name not in ALWAYS:

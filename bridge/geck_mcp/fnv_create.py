@@ -2125,7 +2125,7 @@ class AuthorTools:
             test['steps'] = []
         (folder / (name + '.spec.json')).write_text(json.dumps(spec, indent=1), encoding='utf-8')
         (folder / (name + '.test.json')).write_text(json.dumps(test, indent=1), encoding='utf-8')
-        (folder / 'README.md').write_text('# %s\n\nScaffold (%s) made by fnv_author. Build with geck_plugin_build, '
+        (folder / 'README.md').write_text('# %s\n\nScaffold (%s) made by fnv_author. Build with fnv_spec build, '
                                           'install with fnv_install, test with fnv_test.\n' % (name, kind),
                                           encoding='utf-8')
         return {'folder': str(folder), 'files': sorted(p.name for p in folder.iterdir()),

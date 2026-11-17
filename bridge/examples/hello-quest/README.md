@@ -1,13 +1,13 @@
 # Hello Quest: a mod built and proven end to end (fnv-mcp milestone 9)
 
-A small quest mod made from a one-line description with geck-mcp-nv's spec builder, its script compiled
+A small quest mod made from a one-line description with the spec builder (`fnv_spec`), its script compiled
 by the running game, and proven by a scenario test:
 
 > A small room with three Hello Tokens. Picking up all three completes the quest and pays 100 caps.
 
 | File | What it is |
 | --- | --- |
-| `hello-quest.spec.json` | The geck-mcp-nv spec: a token (MISC), a light, the quest (QUST, start game enabled, stages 10 and 20), its script, and a room with a coc marker, three floor tiles and three persistent tokens |
+| `hello-quest.spec.json` | The spec: a token (MISC), a light, the quest (QUST, start game enabled, stages 10 and 20), its script, and a room with a coc marker, three floor tiles and three persistent tokens |
 | `scripts/HelloQuestScript.gek` | The quest script: stage 10 at start; with three tokens, 100 caps and stage 20, once |
 | `tests/hello-quest.yaml` | The scenario: picks up two tokens (no reward yet), then the third, and checks stage 20, 3 tokens, 100 caps, `rewarded == 1` and no script errors |
 
@@ -17,13 +17,13 @@ GECK is not needed. The builder emits a script uncompiled until its compiled-scr
 `fnv_scripts_compile` fills that cache from the running game:
 
 1. `fnv_script_lint` on the script (offline).
-2. `geck_spec_validate`, then `geck_plugin_build`: `build/HelloQuest.esp` with the script uncompiled.
+2. `fnv_spec action=validate`, then `action=build`: `build/HelloQuest.esp` with the script uncompiled.
 3. `fnv_install build/HelloQuest.esp` (MO2 dev profile), `fnv_game launch coc:HelloQuestRoom`: the plugin's forms
    now exist in the game.
 4. `fnv_scripts_compile`: the game compiles the script; its bytecode, variables and references are mapped
    to the plugin (master-relative form ids, xNVSE's leading scriptname statement dropped), checked with the
    builder's own `verify_script`, and cached with an in-game provenance.
-5. `geck_plugin_build` again: the script is now compiled (2307 bytes instead of 2061).
+5. `fnv_spec action=build` again: the script is now compiled (2307 bytes instead of 2061).
 6. `fnv_game quit`, `fnv_install`, `fnv_test tests/hello-quest.yaml`: PASSED, 16 steps.
 
 The cache entry is tied to the build's compile context (spec, sources, indexes): changing the spec means

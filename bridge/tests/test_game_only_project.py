@@ -1,7 +1,7 @@
-"""Release plan Task 4.3 (audit H8): a project file for the game alone, with no GECK settings, is valid.
+"""Release plan Task 4.3 (audit H8): a project file for the game alone, with no plugin settings, is valid.
 
-- Project.load accepts projects/example-fnv.json (no plugin, helper, records or spec).
-- A geck_* tool on such a project answers NOT_CONFIGURED and names the missing keys; the fnv_* tools work.
+- Project.load accepts projects/example-fnv.json (no plugin or spec).
+- fnv_spec on such a project answers NO_SPEC; the other fnv_* tools work.
 - An invalid project file ends run_mcp.py with one line on stderr and exit code 2, no traceback.
 - fnv_plugin_build plans prologues from fnv.clean_exe, then FNV_CLEAN_EXE, then ~/.fnvdecomp/FalloutNV.exe."""
 import json
@@ -37,42 +37,18 @@ class LoadTests(unittest.TestCase):
     def test_the_example_loads(self):
         project = Project.load(EXAMPLE)
         self.assertIsNone(project.plugin)
-        self.assertIsNone(project.helper)
+        self.assertIsNone(project.spec)
         self.assertEqual(project.fnv.engine_control, 'read')
-        self.assertEqual(project.launcher, 'native')
 
-    def test_a_plugin_still_needs_records_or_a_spec(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'p.json'
-            path.write_text(json.dumps({'project_id': 'p', 'game_root': tmp, 'state_dir': 's', 'helper': 'h.exe',
-                                        'plugin': 'A.esp'}), encoding='utf-8')
-            with self.assertRaises(ValueError):
-                Project.load(path)
-
-
-class NotConfiguredTests(unittest.IsolatedAsyncioTestCase):
-    async def test_geck_tools_name_the_missing_keys(self):
+class NoSpecTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fnv_spec_answers_no_spec_and_the_rest_works(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = game_only(tmp)
             async with Client(make_server(project)) as client:
-                for tool, args in (('geck_status', {}), ('geck_plugin_build', {'request_key': 'k' * 16}),
-                                   ('geck_plugin_inspect', {})):
-                    with self.subTest(tool=tool):
-                        result = await client.call_tool(tool, args)
-                        error = (result.structured_content or {}).get('error') or {}
-                        self.assertEqual(error.get('code'), 'NOT_CONFIGURED')
-                        for key in ('plugin', 'helper', 'spec'):
-                            self.assertIn(key, error.get('message', ''))
-
-    async def test_fnv_tools_and_the_capabilities_still_answer(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            project = game_only(tmp)
-            async with Client(make_server(project)) as client:
+                result = await client.call_tool('fnv_spec', {'action': 'build'})
+                self.assertEqual(((result.structured_content or {}).get('error') or {}).get('code'), 'NO_SPEC')
                 result = await client.call_tool('fnv_guide', {'topic': 'crash'})
-                self.assertNotEqual(((result.structured_content or {}).get('error') or {}).get('code'),
-                                    'NOT_CONFIGURED')
-                result = await client.call_tool('geck_capabilities', {})
-                self.assertFalse(result.is_error)
+                self.assertFalse(result.is_error, result)
 
 
 class ReadmeCountTests(unittest.TestCase):
@@ -80,12 +56,12 @@ class ReadmeCountTests(unittest.TestCase):
 
     def test_the_readme_counts_match_the_server(self):
         import re
-        from geck_mcp.server import LEGACY_TOOLS, server_capabilities
+        from geck_mcp.server import server_capabilities
         text = (BRIDGE.parent / 'README.md').read_text(encoding='utf-8')
         block = re.search(r'<!-- counts -->(.*?)<!-- /counts -->', text, re.S).group(1)
         numbers = [int(n) for n in re.findall(r'\d+', block)]
         caps = server_capabilities(make_server(Project.load(EXAMPLE)))
-        self.assertEqual(numbers, [caps['fnv']['toolCount'], caps['toolCount'], caps['allTools'], len(LEGACY_TOOLS)])
+        self.assertEqual(numbers, [caps['toolCount']])
 
 
 class InvalidProjectTests(unittest.TestCase):

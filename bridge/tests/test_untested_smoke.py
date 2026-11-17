@@ -107,8 +107,6 @@ class WinCaptureSmoke(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / 'x.png'
             bad = {name: result for name, fn in {
-                'geck_windows none': lambda: wincapture.geck_windows('NoSuchWindowClass_xyz'),
-                'render_window': lambda: wincapture.render_window(),
                 'capture no window': lambda: wincapture.capture({'hwnd': 0}, out),   # callers pass {'hwnd': ...}
             }.items() if (result := outcome(fn)).startswith('UNCODED')}
         self.assertEqual(bad, {})

@@ -413,7 +413,7 @@ class RecordsTools:
             # a file outside the load order: only under the game Data folder or the dev profile's mods (T7); checked
             # before the file is looked at, so a refusal does not tell whether a path exists (X2)
             allowed = [Path(project.game_root) / 'Data']
-            if getattr(project, 'state_dir', None):     # geck_plugin_build's output, before install (S6 review C I3)
+            if getattr(project, 'state_dir', None):     # fnv_spec build's output, before install (S6 review C I3)
                 from .authoring import default_build_dir
                 allowed.append(default_build_dir(project.state_dir))
             fnv = getattr(project, 'fnv', None)

@@ -1,16 +1,15 @@
 # fnv-mcp
 
 **MCP tools that let an AI agent build, run, debug and change Fallout: New Vegas: the running game, the engine
-itself and the GECK.**
+itself and the plugins that mod it.**
 
 fnv-mcp is a standalone continuation of [geck-mcp-nv](https://github.com/2Shay96/geck-mcp-nv) by **2Shay**, which
 it is built on and keeps the full history of; see "Built on geck-mcp-nv" below.
 
 ## What it is
 
-One MCP server with <!-- counts -->**137 `fnv_*` tools** for the game and its engine and **27 `geck_*` tools** for the
-GECK (164 in all; the legacy toolset adds 15 more)<!-- /counts -->. The counts are checked against the server's own
-tool list by the tests.
+One MCP server with <!-- counts -->**138 `fnv_*` tools**<!-- /counts --> for the game, its engine and plugins built
+from a JSON spec. The count is checked against the server's own tool list by the tests.
 
 - **Engine knowledge**: function and class lookup from the decompilation, a symbol database with source lines and
   named locals for the retail exe, crash explanation, engine warnings.
@@ -30,9 +29,7 @@ tool list by the tests.
 - Zig 0.14.1, to build the engine companion that runs inside the game.
 - A checkout of the [fnv_decomp](https://github.com/momusdigital/fnv_decomp) decompilation, from which you generate
   the engine map on your own machine.
-- For the `geck_*` tools only: the GECK and a small helper you build locally.
-
-Nothing from the game, the GECK or the decompilation is in this repository: each user builds the engine map and
+Nothing from the game or the decompilation is in this repository: each user builds the engine map and
 symbol database from their own copies.
 
 ## Start
@@ -52,23 +49,24 @@ listed in [KNOWN-ISSUES.md](bridge/docs/KNOWN-ISSUES.md). To remove it again, se
 ## Credits
 
 - **2Shay**: author of [geck-mcp-nv](https://github.com/2Shay96/geck-mcp-nv), the project this repository is built
-  on: `bridge/` (GECK bridge, plugin builder, script compiler, runtime diagnostics, console companion).
+  on: the server's start and the offline plugin builder (`fnv_spec`).
 - **HUNK2**: the `fnv_*` live, engine and debugging tools and the engine companion.
 - The [fnv_decomp](https://github.com/momusdigital/fnv_decomp) project, xNVSE, JIP LN NVSE and Yvile's Crash Logger,
   whose work these tools read at runtime; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Built on geck-mcp-nv
 
-The `geck_*` tools are 2Shay's [geck-mcp-nv](https://github.com/2Shay96/geck-mcp-nv) (version 0.4.0 Beta): a GECK
+fnv-mcp started as 2Shay's [geck-mcp-nv](https://github.com/2Shay96/geck-mcp-nv) (version 0.4.0 Beta): a GECK
 bridge, an offline plugin builder from a JSON spec, script compilation with GECK's own compiler, runtime
-diagnostics and an opt-in console companion. They need the GECK and the small 32-bit helper that
-`bridge/build_helper.py` builds; the `fnv_*` tools need neither. See [bridge/README.md](bridge/README.md),
-[bridge/docs/MCP-QUICKSTART.md](bridge/docs/MCP-QUICKSTART.md) and [docs/SOURCE-SETUP.md](docs/SOURCE-SETUP.md).
-Its own release history is in [CHANGELOG.md](CHANGELOG.md).
+diagnostics and an opt-in console companion. The plugin builder lives on as `fnv_spec`
+([bridge/README.md](bridge/README.md)); the GECK editor tools, their 32-bit helper and the runtime and console
+tools were removed on 2026-11-18, since the `fnv_*` tools do those jobs in the running game. geck-mcp-nv's own
+release history is in [CHANGELOG.md](CHANGELOG.md), and the removed code is in the git history.
 
 ## Licence
 
 - MIT. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- `bridge/` (the GECK side) © 2026 2Shay. The `fnv_*` tools and the engine companion © 2026 HUNK2.
+- The plugin builder and the server's base, from geck-mcp-nv, © 2026 2Shay. The `fnv_*` tools and the engine
+  companion © 2026 HUNK2.
 - Not affiliated with or endorsed by Bethesda Softworks, ZeniMax, Microsoft, Anthropic or OpenAI.
   Fallout and G.E.C.K. are trademarks of their owners.

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-import test_service  # noqa: E402
+import project_fixture  # noqa: E402
 from geck_mcp.action_params import ACTION_PARAMS, unused_arguments  # noqa: E402
 from geck_mcp.server import make_server  # noqa: E402
 
@@ -25,11 +25,11 @@ def enum_of(schema):
 
 class TableTests(unittest.TestCase):
     def setUp(self):
-        fixture = test_service.ServiceTests()
+        fixture = project_fixture.ProjectFixture()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
         project = fixture.p.model_copy(update={'toolsets': ['game', 'editor', 'naming', 'legacy']})
-        server = make_server(project, fixture.service)
+        server = make_server(project)
         self.raw = {t.name: t.parameters for t in server._tool_manager.list_tools()}
 
     def test_the_table_covers_each_tool_exactly(self):
@@ -71,14 +71,14 @@ class TableTests(unittest.TestCase):
 
 class RefusalTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.fixture = test_service.ServiceTests()
+        self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
 
     async def asyncTearDown(self):
         self.fixture.tearDown()
 
     async def test_an_unused_parameter_is_refused_before_the_tool_runs(self):
-        async with Client(make_server(self.fixture.p, self.fixture.service)) as client:
+        async with Client(make_server(self.fixture.p)) as client:
             answer = (await client.call_tool('fnv_place', {'action': 'list', 'base': 'player'})).structured_content
             self.assertEqual(answer['error']['code'], 'INVALID_ARGUMENT')
             self.assertIn('base', answer['error']['message'])

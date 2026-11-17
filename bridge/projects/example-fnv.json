@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
   "project_id": "my-fnv",
-  "launcher": "native",
   "game_root": "C:/Program Files (x86)/Steam/steamapps/common/Fallout New Vegas",
   "state_dir": "../state",
   "fnv": {

@@ -17,7 +17,7 @@ if msvcrt is not None:
     kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
     psapi = ctypes.WinDLL('psapi', use_last_error=True)
     dbghelp = ctypes.WinDLL('dbghelp', use_last_error=True)
-else:   # macOS/Linux (the GECK tools under Wine): the fnv tools need Windows, but the server must still import (N22)
+else:   # not Windows: the fnv tools need Windows, but the server must still import (N22)
     kernel32 = psapi = dbghelp = None
 
 PROCESS_QUERY_INFORMATION = 0x0400

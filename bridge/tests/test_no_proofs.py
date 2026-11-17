@@ -146,7 +146,7 @@ class ProofFolderTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         env = {k: v for k, v in os.environ.items() if k != 'FNVSYM_ROOT'}
         wrong = []
         with mock.patch.dict(os.environ, env, clear=True):
-            async with Client(make_server(self.project, self.fixture.service)) as client:
+            async with Client(make_server(self.project)) as client:
                 for tool, args in self.CASES:
                     code, result = await self.call(client, tool, args)
                     message = (result.structured_content or {}).get('error', {}).get('message', '')
@@ -156,7 +156,7 @@ class ProofFolderTests(GateFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_with_fnvsym_root_they_get_past_the_check(self):
         with tempfile.TemporaryDirectory() as root, mock.patch.dict(os.environ, {'FNVSYM_ROOT': root}):
-            async with Client(make_server(self.project, self.fixture.service)) as client:
+            async with Client(make_server(self.project)) as client:
                 for tool, args in self.CASES:
                     code, _ = await self.call(client, tool, args)
                     self.assertNotEqual(code, 'NO_PROOF_FOLDER', tool)

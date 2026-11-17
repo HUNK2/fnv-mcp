@@ -85,16 +85,6 @@ class SetupRowTests(unittest.TestCase):
         self.assertEqual(row(report, 'symbol database')['state'], 'ok')
         self.assertEqual(row(report, 'proof folder')['state'], 'ok')
 
-    def test_the_helper_row_only_with_geck_settings(self):
-        with tempfile.TemporaryDirectory() as folder:
-            p = project(folder, fnv_settings(folder))
-            p.plugin, p.helper = 'Mine.esp', Path(folder) / 'Probe.Mcp.exe'
-            report = run(p)
-            self.assertEqual(row(report, 'GECK helper')['state'], 'missing')
-            self.assertIn('build_helper.py', row(report, 'GECK helper')['fix'])
-            p.helper.write_bytes(b'MZ')
-            self.assertEqual(row(run(p), 'GECK helper')['state'], 'ok')
-
     def test_large_address_aware(self):
         with tempfile.TemporaryDirectory() as folder:
             game = Path(folder) / 'game'

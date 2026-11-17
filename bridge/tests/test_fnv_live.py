@@ -87,9 +87,8 @@ class GameHelperTests(unittest.TestCase):
         self.game_root = root / 'game'
         self.game_root.mkdir()
         self.project = Project.model_validate({
-            'project_id': 'livetest', 'launcher': 'native', 'game_root': str(self.game_root), 'plugin': 'Fixture.esp',
-            'records': [{'editor_id': 'FixtureStatic', 'form_id': '01000800'}],
-            'state_dir': str(root / 'state'), 'helper': str(root / 'helper.exe'),
+            'project_id': 'livetest', 'game_root': str(self.game_root), 'plugin': 'Fixture.esp',
+            'state_dir': str(root / 'state'),
             'fnv': {'mo2_root': str(self.mo2), 'mo2_profile': 'Dev', 'engine_control': 'full'}})
 
     def tearDown(self):
@@ -179,18 +178,6 @@ class LiveServiceTests(GameHelperTests):
             live.run('fnv_z', lambda: seen.setdefault('read', busy.count(path)) and {}, 'read')
         self.assertEqual(seen, {'act': 1, 'control': 1, 'read': 1})   # a cancelled read keeps running too (fnv_wait_for holds the gate)
         self.assertEqual(busy.count(path), 0)
-
-    def test_geck_changes_are_reported_busy(self):
-        from types import SimpleNamespace
-        from geck_mcp import busy
-        from geck_mcp.service import Service
-        path = Path(self.tmp.name) / 'busy.json'
-        seen = []
-        fake = SimpleNamespace(_run=lambda *a, **k: seen.append(busy.count(path)) or {'ok': True})
-        with mock.patch.dict(os.environ, {'GECK_MCP_BUSY_FILE': str(path)}):
-            Service.run(fake, 'geck_plugin_save', {}, lambda: {}, modifies=True)
-            Service.run(fake, 'geck_status', {}, lambda: {}, modifies=False)
-        self.assertEqual(seen, [1, 0])
 
     def test_act_tools_refuse_without_full_control(self):
         live, link = self.live('read')

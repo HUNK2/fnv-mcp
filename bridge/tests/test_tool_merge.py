@@ -28,13 +28,12 @@ TIER_2A = {
     'fnv_record_find': 'fnv_record', 'fnv_record_show': 'fnv_record', 'fnv_record_users': 'fnv_record',
     'fnv_quest_targets': 'fnv_quest', 'fnv_dialogue_tree': 'fnv_dialogue', 'fnv_hang_doctor': 'fnv_threads',
     'fnv_heap': 'fnv_memory', 'fnv_frame_profile': 'fnv_profile',
-    'geck_preview_open': 'geck_preview', 'geck_preview_close': 'geck_preview',
 }
 
 
 class MergeTests(GateFixture, unittest.IsolatedAsyncioTestCase):
     async def names(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             return {t.name for t in (await client.list_tools()).tools}
 
     async def test_old_names_gone_new_ones_there(self):
@@ -76,7 +75,7 @@ class MergeTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         wrong = []
         # full control: under read the gate answers first (CONTROL_DISABLED); the checks come before any game call
         full = self.project.model_copy(update={'fnv': self.project.fnv.model_copy(update={'engine_control': 'full'})})
-        async with Client(make_server(full, self.fixture.service)) as client:
+        async with Client(make_server(full)) as client:
             for tool, args, word in cases:
                 code, result = await self.call(client, tool, args)
                 message = ((result.structured_content or {}).get('error') or {}).get('message', '')
@@ -85,7 +84,7 @@ class MergeTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wrong, [])
 
     async def test_crash_explain_is_the_default_and_offline(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             answer = (await client.call_tool('fnv_crash', {})).structured_content
         self.assertEqual(answer['operation'], 'fnv_crash')
         self.assertEqual(self.pipe_ops, [])                  # no game needed: it reads crash log files

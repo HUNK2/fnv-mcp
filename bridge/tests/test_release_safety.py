@@ -51,7 +51,7 @@ class PackageTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         decoy = self.state / 'decoy'
         decoy.mkdir(parents=True)
         (decoy / 'keep.txt').write_text('mine', encoding='utf-8')
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             for name in ['..\\..\\decoy', str(decoy), 'a/b', 'x.']:
                 with self.subTest(name=name):
                     code, _ = await self.package(client, name=name)
@@ -60,7 +60,7 @@ class PackageTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(p.name for p in decoy.iterdir()), ['keep.txt'])
 
     async def test_package_never_deletes_an_existing_folder(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             code, first = await self.package(client, name='rel')
             self.assertIsNone(code, first)
             mine = Path(first['folder']) / 'mine.txt'
@@ -74,7 +74,7 @@ class PackageTests(GateFixture, unittest.IsolatedAsyncioTestCase):
     async def test_two_packages_in_one_second_get_two_folders(self):
         folders = set()
         with mock.patch('time.strftime', return_value='20261115-120000'):
-            async with Client(make_server(self.project, self.fixture.service)) as client:
+            async with Client(make_server(self.project)) as client:
                 for _ in range(3):
                     code, out = await self.package(client, name='rel')
                     self.assertIsNone(code, out)
@@ -82,14 +82,14 @@ class PackageTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(folders), 3)
 
     async def test_default_name_is_the_plugin_stem(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             code, out = await self.package(client)
         self.assertIsNone(code, out)
         self.assertEqual(Path(out['folder']), (self.state / 'fnv' / 'packages' / 'CoolWorld').resolve())
         self.assertEqual(Path(out['archive']).name, 'CoolWorld.zip')
 
     async def test_dotted_name_keeps_its_archive_name(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             code, out = await self.package(client, name='my.mod')
         self.assertIsNone(code, out)
         self.assertEqual(Path(out['archive']).name, 'my.mod.zip')
@@ -99,28 +99,13 @@ class CompilerPathTests(GateFixture, unittest.IsolatedAsyncioTestCase):
     """B2 (Task 1.3): no tool runs a program whose path an agent passes; the compiler comes from the project file."""
 
     async def test_no_tool_takes_a_compiler_path(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             listing = await client.list_tools()
         tools = listing.tools if hasattr(listing, 'tools') else listing
         found = sorted((t.name, prop) for t in tools if t.name.startswith(('geck_', 'fnv_'))
                        for prop in (t.input_schema or {}).get('properties', {}) if prop in ('zig', 'zig_path'))
         self.assertEqual(found, [])
 
-    def test_setup_and_preflight_use_the_project_zig(self):
-        from geck_mcp import fnv_link
-        missing = fnv_link.LinkError('ZIG_MISSING', 'none set')
-        with mock.patch.object(fnv_link, 'find_zig', side_effect=missing) as find:
-            built = self.fixture.service.console_setup('build', self.fixture.hash, 'zig-missing-1')
-            self.assertEqual(built['error']['code'], 'ZIG_MISSING', built)
-            self.assertTrue(find.called)
-        from geck_mcp import runtime_companion
-        with mock.patch.object(runtime_companion, 'preflight', return_value={}) as preflight:
-            with mock.patch.object(fnv_link, 'find_zig', side_effect=missing):
-                self.fixture.service.runtime_preflight({})
-            self.assertIsNone(preflight.call_args.args[2])
-            with mock.patch.object(fnv_link, 'find_zig', return_value=Path('C:/project/zig.exe')):
-                self.fixture.service.runtime_preflight({})
-            self.assertEqual(preflight.call_args.args[2], Path('C:/project/zig.exe'))
 
 
 def filetime(unix):
@@ -156,7 +141,7 @@ class QuitOwnershipTests(GateFixture, unittest.IsolatedAsyncioTestCase):
                                              encoding='utf-8')
 
     async def quit(self, tool='fnv_game', args=None):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             return await self.call(client, tool, args or {'action': 'quit', 'force': True, 'timeout_seconds': 5})
 
     async def test_quit_refuses_a_game_it_did_not_launch(self):
@@ -200,7 +185,7 @@ class QuitOwnershipTests(GateFixture, unittest.IsolatedAsyncioTestCase):
     async def test_status_still_answers_for_a_foreign_game(self):
         self.session(None)
         self.running(self.launched + 2)
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             code, result = await self.call(client, 'fnv_status', {})
         self.assertIsNone(code, result.structured_content)
         self.assertTrue(result.structured_content['ok'])
@@ -258,7 +243,7 @@ class PathArgumentTests(GateFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_path_arguments_are_checked(self):
         wrong = []
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             for tool, args in self.cases:
                 code, result = await self.call(client, tool, args)
                 if code != 'INVALID_ARGUMENT':
@@ -267,19 +252,8 @@ class PathArgumentTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wrong, [])
         self.assertEqual(sorted(p.name for p in self.outside_dir.iterdir()), ['secret.log'])
 
-    async def test_image_cutout_writes_only_inside_the_project(self):
-        png = self.outside_dir / 'shot.png'
-        from PIL import Image
-        Image.new('RGB', (8, 8), (0, 255, 0)).save(png)
-        async with Client(make_server(self.project, self.fixture.service)) as client:
-            for path in (str(png), UNC + '.png'):
-                result = await client.call_tool('geck_image_cutout', {'path': path})
-                sc = result.structured_content or {}
-                self.assertFalse(sc.get('ok', True), sc)
-        self.assertEqual(sorted(p.name for p in self.outside_dir.iterdir()), ['secret.log', 'shot.png'])
-
     async def test_paths_inside_the_roots_still_work(self):
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             log = self.state / 'CrashLogger.log'
             log.write_text('nothing\n', encoding='utf-8')
             code, _ = await self.call(client, 'fnv_crash', {'action': 'latest', 'path': str(log).replace('\\', '/')})

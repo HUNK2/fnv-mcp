@@ -42,7 +42,8 @@ class GuideFileTests(unittest.TestCase):
     def test_every_tool_a_guide_names_exists(self):
         known = registered_tools()
         self.assertIn('fnv_crash', known)
-        self.assertIn('geck_status', known)
+        self.assertIn('fnv_spec', known)
+        self.assertFalse([n for n in known if n.startswith('geck_')])
         for name, g in load_guides().items():
             head, planned = split_planned(g['text'])
             named = set(TOOL_NAME.findall(head))
@@ -163,9 +164,8 @@ class RegistrationTests(unittest.TestCase):
             (root / 'mo2/profiles/Dev').mkdir(parents=True)
             (root / 'game').mkdir()
             project = Project.model_validate({
-                'project_id': 'regtest', 'launcher': 'native', 'game_root': str(root / 'game'), 'plugin': 'F.esp',
-                'records': [{'editor_id': 'A', 'form_id': '01000800'}], 'state_dir': str(root / 'state'),
-                'helper': str(root / 'h.exe'), 'fnv': {'mo2_root': str(root / 'mo2'), 'mo2_profile': 'Dev'}})
+                'project_id': 'regtest', 'game_root': str(root / 'game'), 'plugin': 'F.esp', 'state_dir': str(root / 'state'),
+                'fnv': {'mo2_root': str(root / 'mo2'), 'mo2_profile': 'Dev'}})
             tools = {}
 
             class FakeServer:

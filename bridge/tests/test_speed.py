@@ -453,7 +453,6 @@ class WarmUp(FnvTestBase):
     def test_the_server_starts_it(self):
         from geck_mcp import server as server_module
         with mock.patch.object(server_module.Project, 'load', return_value=self.project), \
-                mock.patch.object(server_module, 'Service', return_value=mock.Mock()), \
                 mock.patch.object(server_module, 'make_server', return_value=mock.Mock()), \
                 mock.patch.object(fnv_tools, 'warm_up') as warm_up:
             server_module.main(['--project', 'x.json'])

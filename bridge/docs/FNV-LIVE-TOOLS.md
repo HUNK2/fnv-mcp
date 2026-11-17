@@ -48,7 +48,6 @@ Tools that did the same job became one tool with actions. The old names no longe
 | `fnv_hang_doctor` | `fnv_threads action=hang` (`fnv_threads` alone is `list`) |
 | `fnv_heap` | `fnv_memory action=address_space` (`fnv_memory` alone is `pools`) |
 | `fnv_frame_profile` | `fnv_profile action=frame` (`fnv_profile` alone is `sample`) |
-| `geck_preview_open`, `geck_preview_close` | `geck_preview action=open`, `action=close` |
 
 A merged tool refuses a parameter its chosen action does not use (`INVALID_ARGUMENT`), so a call with a leftover
 argument from another action is not silently half-done.
@@ -259,7 +258,7 @@ Every answer is an envelope: `ok`, `outcome`, `data`, `error`. For an `fnv_*` ca
 | `fnv_script_lint` | read | Script source checked offline: structure, block types, variables, unknown commands, argument counts, EditorIDs of the wrong type or in no plugin |
 | `fnv_compile_ingame` | read | Compile with the running game's compiler: its errors with line numbers, or the variables, references, statements and bytecode |
 | `fnv_script_hot_swap` | act | Replace a running script's code with a new compile; instances keep their variables; undoable |
-| `fnv_scripts_compile` | control | Compile the project spec's scripts with the running game into geck-mcp-nv's compiled-script cache, so `geck_plugin_build` emits compiled scripts without GECK |
+| `fnv_scripts_compile` | control | Compile the project spec's scripts with the running game into the builder's compiled-script cache, so `fnv_spec build` emits compiled scripts without GECK |
 | `fnv_dialogue action=tree` | read | The responses a speaker could give for a topic (GREETING by default): prompt, quest and priority, flags, response text, every condition with its value, the engine's verdict, and the response it would pick now |
 | `fnv_dialogue_choose` | act | Talk to an NPC and pick responses by index, prompt text or info id; each step's options, the pick and the answer |
 | `fnv_ai_packages` | read | An actor's packages in order: type, flags, schedule against the game clock, location, conditions with values; which one runs, which are eligible or shadowed, and why the others are not |
@@ -1302,13 +1301,13 @@ save's form id array (0x800000 = created in game).
 
 ## Building a mod without GECK
 
-geck-mcp-nv's builder emits a script uncompiled until its compiled-script cache (`state/scripts/<project>.json`)
-has it; normally GECK fills that cache. `fnv_scripts_compile` fills it from the running game instead: with the
+The spec builder (`fnv_spec`) emits a script uncompiled until its compiled-script cache (`state/scripts/<project>.json`)
+has it; geck-mcp-nv filled that cache with GECK. `fnv_scripts_compile` fills it from the running game: with the
 last build installed and loaded, it compiles each spec script in game, drops the scriptname statement xNVSE
 writes before compiling (GECK's bytecode starts with a single one), maps runtime form ids to the plugin's
 master-relative ids, builds `SCHR`/`SCDA`/`SCTX`/`SLSD`/`SCVR`/`SCRO`/`SCRV`, checks them with the builder's own
 `verify_script`, and stores them with an in-game provenance tied to the build's compile context. The next
-`geck_plugin_build` includes them. Scripts with `Quest.variable` references still need GECK. The worked
+`fnv_spec build` includes them. Scripts with `Quest.variable` references stay uncompiled. The worked
 example is [examples/hello-quest](../examples/hello-quest/README.md).
 
 Dialogue: a `DIAL` record in the spec takes `infos`, lines with `key`, `quest`, `responses`, `conditions`, `choices`,
@@ -1367,7 +1366,7 @@ Milestone 8 (2026-11-07):
 - `fnv_script_hot_swap GoodspringsRadioScript` with a line `set Button to 42`: the radio's `Button` read 42
   while swapped and -1 again after `fnv_undo`; a version that reordered the variables was refused.
 
-Milestone 9 (2026-11-07): Hello Quest built with `geck_plugin_build`, its script compiled in game with
+Milestone 9 (2026-11-07): Hello Quest built with `geck_plugin_build` (now `fnv_spec build`), its script compiled in game with
 `fnv_scripts_compile`, rebuilt, installed and proven by `hello-quest.yaml` (16 steps passed, twice: after the
 first build and after a spec change that invalidated the cached script). Open: launching from the main menu
 straight into that room takes 2-3.5 minutes (the main thread is in DirectSound buffer creation, per
@@ -1549,7 +1548,7 @@ plugins). Five were wrong and are fixed; one was removed. Tests: 858 pass.
   output schema (checked over raw stdio, 8 calls including errors). `fnv_globals`, `fnv_hud`, `fnv_physics` are
   annotated as acting on the game.
 - Code reloads without a restart: `run_mcp.py` is now a supervisor that reloads the server when `geck_mcp/`
-  changes and sends the client a tool-list change (MCP-QUICKSTART.md, "Code changes reload by themselves"). Checked
+  changes and sends the client a tool-list change (`run_mcp.py --reload`). Checked
   in the Claude app (Claude Code 2.1.321): the app speaks 2026-07-28 (`server/discover`, then `subscriptions/listen`
   for tools, prompts and resources), the server declares `tools.listChanged`, reloads swap the process between calls,
   and the stamped notices reach the listen stream. The app never sends `tools/list` itself: it keeps a saved tool

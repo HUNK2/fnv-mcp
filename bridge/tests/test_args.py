@@ -103,11 +103,11 @@ class EnvelopeThroughServerTests(unittest.IsolatedAsyncioTestCase):
     invoke and the SDK answered TOOL_ERROR)."""
 
     async def asyncSetUp(self):
-        import test_service
+        import project_fixture
         from unittest import mock
         from geck_mcp import fnv_link
         from geck_mcp.config import FnvSettings
-        self.fixture = test_service.ServiceTests()
+        self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
         root = Path(self.fixture.tmp.name)
         (root / 'mo2/profiles/Dev').mkdir(parents=True)
@@ -128,7 +128,7 @@ class EnvelopeThroughServerTests(unittest.IsolatedAsyncioTestCase):
     async def call(self, tool, args):
         from mcp import Client
         from geck_mcp.server import make_server
-        async with Client(make_server(self.project, self.fixture.service)) as client:
+        async with Client(make_server(self.project)) as client:
             result = await client.call_tool(tool, args)
         return result.structured_content or {}
 

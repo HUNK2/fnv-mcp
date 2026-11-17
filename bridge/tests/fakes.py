@@ -157,9 +157,8 @@ def project(root, engine_control='full'):
     (mo2 / 'profiles/Dev/plugins.txt').write_text('# header\nFalloutNV.esm\n', encoding='utf-8')
     (root / 'game').mkdir(exist_ok=True)
     return Project.model_validate({
-        'project_id': 'livetest', 'launcher': 'native', 'game_root': str(root / 'game'), 'plugin': 'Fixture.esp',
-        'records': [{'editor_id': 'FixtureStatic', 'form_id': '01000800'}],
-        'state_dir': str(root / 'state'), 'helper': str(root / 'helper.exe'),
+        'project_id': 'livetest', 'game_root': str(root / 'game'), 'plugin': 'Fixture.esp',
+        'state_dir': str(root / 'state'),
         'fnv': {'mo2_root': str(mo2), 'mo2_profile': 'Dev', 'engine_control': engine_control}})
 
 

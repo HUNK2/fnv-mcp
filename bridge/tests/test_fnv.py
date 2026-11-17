@@ -124,9 +124,8 @@ class FnvTestBase(unittest.TestCase):
         (game / 'Data').mkdir(parents=True)
         cls.game = game
         cls.project = Project.model_validate({
-            'project_id': 'fnvtest', 'launcher': 'native', 'game_root': str(game), 'plugin': 'Fixture.esp',
-            'records': [{'editor_id': 'FixtureStatic', 'form_id': '01000800'}], 'state_dir': str(root / 'state'),
-            'helper': str(root / 'helper.exe'), 'fnv': {'engine_map': str(cls.map_path)}})
+            'project_id': 'fnvtest', 'game_root': str(game), 'plugin': 'Fixture.esp', 'state_dir': str(root / 'state'),
+            'fnv': {'engine_map': str(cls.map_path)}})
 
     @classmethod
     def tearDownClass(cls):
@@ -484,43 +483,6 @@ class CrashTests(FnvTestBase):
     def test_tool_catalog(self):
         self.assertEqual(len(FNV_TOOLS), 11)   # tool merge tiers 1 and 2a: crash moved, func and class merged
         self.assertTrue(all(name.startswith('fnv_') for name in FNV_TOOLS))
-
-
-class Mo2ConsolePathTests(unittest.TestCase):
-    """Console exchange files under MO2's virtual file system (geck_mcp.console.paths)."""
-
-    def setUp(self):
-        from types import SimpleNamespace
-        from geck_mcp import console
-        self.console = console
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
-        self.real = root / 'game/Data/NVSE/Plugins'
-        self.over = root / 'mo2/overwrite/NVSE/Plugins'
-        self.real.mkdir(parents=True)
-        self.over.mkdir(parents=True)
-        self.project = SimpleNamespace(project_id='p', game_root=root / 'game', state_dir=root / 'state',
-                                       fnv=SimpleNamespace(mo2_root=root / 'mo2'))
-
-    def test_without_mo2_everything_is_in_data(self):
-        self.project.fnv = None
-        p = self.console.paths(self.project)
-        self.assertTrue(all(p[s].parent == self.real for s in ('.dll', '.ready.json', '.request', '.claimed',
-                                                               '.result.json', '.context')))
-
-    def test_game_written_files_follow_overwrite(self):
-        p = self.console.paths(self.project)
-        token = p['token']
-        for s in ('.ready.json', '.claimed', '.result.json'):
-            self.assertEqual(p[s].parent, self.over, s)     # where the game will create them
-        for s in ('.dll', '.request', '.context'):
-            self.assertEqual(p[s].parent, self.real, s)     # the bridge's own files stay real
-        (self.real / (token + '.claimed')).write_text('x')  # a real copy the game still sees
-        (self.over / (token + '.context')).write_text('y')  # the companion's rewrite hides the real one
-        p = self.console.paths(self.project)
-        self.assertEqual(p['.claimed'].parent, self.real)
-        self.assertEqual(p['.context'].parent, self.over)
 
 
 if __name__ == '__main__':

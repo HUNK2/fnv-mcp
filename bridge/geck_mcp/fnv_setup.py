@@ -166,11 +166,6 @@ def setup_check(project):
     add('capstone', capstone, 'installed' if capstone else 'not installed',
         'Optional, for fnv_probe and fnv_atlas: .venv\\Scripts\\python.exe -m pip install capstone==5.0.7.',
         required=False)
-    if getattr(project, 'plugin', None) or getattr(project, 'helper', None):
-        helper = getattr(project, 'helper', None)
-        add('GECK helper', bool(helper and Path(helper).is_file()), str(helper) if helper else 'helper not set',
-            'The geck_* tools need the helper: set "helper" and build it with build_helper.py --project <file> '
-            '(docs/SOURCE-SETUP.md).')
     clean = fnv.clean_exe
     if clean and Path(clean).exists():
         data = Path(clean).read_bytes()[:4096]

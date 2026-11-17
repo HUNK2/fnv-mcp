@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-import test_service  # noqa: E402
+import project_fixture  # noqa: E402
 from geck_mcp.server import make_server, slim_schema  # noqa: E402
 
 SCHEMA_LISTS = ('anyOf', 'oneOf', 'allOf', 'prefixItems')
@@ -72,14 +72,14 @@ class SlimSchemaUnitTests(unittest.TestCase):
 
 class SlimListingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.fixture = test_service.ServiceTests()
+        self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
 
     async def asyncTearDown(self):
         self.fixture.tearDown()
 
     async def test_listing_is_slim(self):
-        server = make_server(self.fixture.p, self.fixture.service)
+        server = make_server(self.fixture.p)
         async with Client(server) as client:
             tools = (await client.list_tools()).tools
         titled, nullable, indented = [], [], []
@@ -102,19 +102,18 @@ class SlimListingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_envelope_schema_is_emitted_once_per_entry_tool(self):
         """The envelope (ok, operation, data, error, outcome) is every tool's answer. Its full schema is emitted on
-        fnv_status and geck_status; the other tools emit a short object schema that names them. The tool manager
+        fnv_status; the other tools emit a short object schema that names them. The tool manager
         keeps the full schema on every tool, so structured results are still checked against it."""
-        server = make_server(self.fixture.p, self.fixture.service)
+        server = make_server(self.fixture.p)
         async with Client(server) as client:
             tools = {t.name: t for t in (await client.list_tools()).tools}
-        full = tools['geck_status'].output_schema
+        full = tools['fnv_status'].output_schema
         self.assertIn('error', full.get('properties', {}))
-        self.assertEqual(tools['fnv_status'].output_schema, full)
         wrong = []
         for name, tool in tools.items():
             out = tool.output_schema
             raw = slim_schema(server._tool_manager.get_tool(name).output_schema or {})
-            if name in ('fnv_status', 'geck_status') or raw != full:
+            if name == 'fnv_status' or raw != full:
                 if out != raw:
                     wrong.append((name, 'changed'))
                 continue
@@ -125,7 +124,7 @@ class SlimListingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('error', server._tool_manager.get_tool('fnv_ref').output_schema.get('properties', {}))
 
     async def test_null_for_an_optional_parameter_still_validates(self):
-        server = make_server(self.fixture.p, self.fixture.service)
+        server = make_server(self.fixture.p)
         refused = {}
         for tool in server._tool_manager.list_tools():
             props = (tool.parameters or {}).get('properties', {})
