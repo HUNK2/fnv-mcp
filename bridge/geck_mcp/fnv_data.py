@@ -63,8 +63,9 @@ class DataError(Exception):
 # ===================================================================================== load order
 # Working the load order out looks for each plugin in every enabled mod folder and reads its header: about 160 file
 # checks and 11 ms. Record lookups need it each time (fnv_save_inspect makes 200 for one save), so the answer is kept
-# until something it was made from changes: a profile file, an enabled mod folder or the Data folder (a folder's
-# time changes when a plugin is put in, removed or renamed), or a plugin file found (its size or time: its masters).
+# until something it was made from changes: a profile file (by content), the plugin names in an enabled mod folder or
+# the Data folder, or the header record of a plugin found (its masters). Not by size and time: a rewrite in the same
+# tick of the file clock keeps both.
 _LOAD_ORDERS = {}
 PROFILE_FILES = ('modlist.txt', 'plugins.txt', 'loadorder.txt')
 
@@ -86,12 +87,17 @@ def _plugin_names(folder):
         return None
 
 
-def _stamp(path):
+def _header(path):
+    """A plugin's header record (TES4), where its masters are. Not its size and time: a plugin rewritten at the same
+    size in the same tick of the file clock keeps both. Some hundred bytes, one open and two reads."""
     try:
-        st = os.stat(path)
+        with open(path, 'rb') as f:
+            head = f.read(24)
+            if len(head) < 24 or head[:4] != b'TES4':
+                return head
+            return head + f.read(struct.unpack_from('<I', head, 4)[0])
     except OSError:
         return None
-    return st.st_size, st.st_mtime_ns
 
 
 def load_order(project, live_plugins=None):
@@ -152,7 +158,7 @@ def _load_order(root, profile, data_dir, live_plugins, stamps):
             entry['prefix'] = '%02X' % entry['index']
             index += 1
         if path:
-            stamps.append((_stamp, path, _stamp(path)))
+            stamps.append((_header, path, _header(path)))
             try:
                 entry['masters'] = plugin_masters(path)
             except (OSError, codec.FormatError) as e:

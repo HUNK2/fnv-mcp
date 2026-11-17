@@ -545,6 +545,19 @@ class LoadOrderSpeed(unittest.TestCase):
         self.assertEqual(modlist.stat().st_size, st.st_size)
         self.assertIsNone(self.entry(load_order(self.project), 'Other.esp')['path'])
 
+    def test_a_plugin_rewritten_in_the_same_clock_tick_gives_its_new_masters(self):
+        """A plugin rewritten at the same size in the same tick of the file clock keeps its size and time: plugins are
+        told apart by their header record, where the masters are."""
+        from geck_mcp.fnv_data import load_order
+        mod = self.mo2 / 'mods' / 'Bottom' / 'Mod.esp'
+        write_plugin(mod, [], masters=['FalloutNV.esm', 'Other.esp'])
+        self.assertEqual(self.entry(load_order(self.project), 'Mod.esp')['masters'], ['FalloutNV.esm', 'Other.esp'])
+        st = mod.stat()
+        write_plugin(mod, [], masters=['FalloutNV.esm', 'Thing.esp'])
+        os.utime(mod, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual(mod.stat().st_size, st.st_size)
+        self.assertEqual(self.entry(load_order(self.project), 'Mod.esp')['masters'], ['FalloutNV.esm', 'Thing.esp'])
+
     def test_the_game_list_is_its_own_load_order(self):
         from geck_mcp.fnv_data import load_order
         load_order(self.project)
