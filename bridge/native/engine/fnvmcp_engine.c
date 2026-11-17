@@ -2684,24 +2684,28 @@ static DWORD WINAPI pipe_thread(void *unused) {
  * gate and a running step or until are not touched: gate_park and the frame tick serve those.
  *
  * The wait spins on the performance counter. A timed wait on the request event can take a whole timer tick
- * (15.6 ms) to give up, which is the frame this saves. */
-static void serve_more(void) {
+ * (15.6 ms) to give up, which is the frame this saves.
+ *
+ * The budget runs from `started`, before the frame's first request, and the clock is read again right before each
+ * next request is taken: time the thread was switched out counts against the budget (a busy CI runner served two
+ * reads in one frame under a 1 microsecond budget when the check used a time read before the switch). */
+static void serve_more(LONGLONG started) {
     LONG wait = linger_wait_us, budget = linger_frame_us;
     if (wait <= 0 || budget <= 0 || qpc_frequency.QuadPart <= 0) return;
     LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    LONGLONG frame_end = now.QuadPart + qpc_frequency.QuadPart * budget / 1000000;
+    LONGLONG frame_end = started + qpc_frequency.QuadPart * budget / 1000000;
     while (request_marked && !gate_held && suspend_kind == SUSP_NONE && !client_left && !exiting) {
-        if (now.QuadPart >= frame_end) return;
+        SEAM(7); /* tests: the main thread is switched out between a request and the next */
+        QueryPerformanceCounter(&now);
         LONGLONG wait_end = now.QuadPart + qpc_frequency.QuadPart * wait / 1000000;
         if (wait_end > frame_end) wait_end = frame_end;
-        while (InterlockedCompareExchange(&pending, 2, 1) != 1) {
-            QueryPerformanceCounter(&now);
+        for (;;) {
             if (now.QuadPart >= wait_end) return;
+            if (InterlockedCompareExchange(&pending, 2, 1) == 1) break;
             SwitchToThread();
+            QueryPerformanceCounter(&now);
         }
         serve_request(request);
-        QueryPerformanceCounter(&now);
     }
 }
 
@@ -2722,8 +2726,10 @@ static void main_loop(void) {
     SEAM(6); /* tests: the main thread is busy elsewhere and takes no request (K2) */
     gate_let_go();
     if (InterlockedCompareExchange(&pending, 2, 1) == 1) {
+        LARGE_INTEGER started;
+        QueryPerformanceCounter(&started);
         serve_request(request);
-        serve_more();
+        serve_more(started.QuadPart);
     }
     gate_park();
 }

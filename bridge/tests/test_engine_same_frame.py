@@ -202,5 +202,55 @@ class SameFrameDefaultsTests(unittest.TestCase):
             link.close()
 
 
+@needs_zig
+class FrameBudgetSeamTests(unittest.TestCase):
+    """The frame budget counts the time the main thread lost. Seam 7 parks the main thread after it served a marked
+    read and before it takes the next one, as Windows does when it switches the thread out (a busy CI runner did:
+    two reads shared a frame under a 1 microsecond budget). The budget was checked against the time read before the
+    pause, so the read that came during the pause joined the frame however long the pause was."""
+
+    @classmethod
+    def setUpClass(cls):
+        from engine_host import build
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.receipt = build(cls.tmp.name, defines=('FNVMCP_TEST_SEAM',))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        from engine_host import StopHost
+        self.host = StopHost(self.receipt, Path(self.receipt['dll']).parent, self.tmp.name, 60)
+        self.addCleanup(self.host.close)
+        self.t, self.link = self.host.t, self.host.link
+        self.assertTrue(self.t['seam'], 'not a seam build')
+
+    def poke_seam(self, value):
+        from test_engine_races import poke
+        poke(self.host.process, self.t['seam'], value)
+
+    def read(self):
+        request_id = 'r' + uuid.uuid4().hex[:11]
+        reply = self.link._exchange(request_id + '\trd %s 4' % hexint(self.t['buffer']), 15.0)
+        self.assertEqual(reply['id'], request_id)
+        return reply['frame']
+
+    def test_a_pause_past_the_budget_ends_the_frame(self):
+        import threading
+        self.assertTrue(self.link.one('linger', hexint(LONG_WAIT_US), hexint(20_000))['ok'])     # 20 ms budget
+        self.addCleanup(self.poke_seam, 0)
+        self.poke_seam(7)
+        first = self.read()                     # served; the main thread now waits in seam 7
+        second = []
+        sender = threading.Thread(target=lambda: second.append(self.read()))
+        sender.start()
+        time.sleep(0.06)                        # the next read is there, and the 20 ms are gone
+        self.poke_seam(0)
+        sender.join(10)
+        self.assertEqual(len(second), 1)
+        self.assertGreater(second[0], first)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -65,7 +65,7 @@ class LegacyToolsetTests(unittest.IsolatedAsyncioTestCase):
     def test_command_line_flag_turns_it_on(self):
         seen = {}
 
-        def fake_make(project, service):
+        def fake_make(project, service, **kwargs):
             seen['legacy'] = project.legacy_tools
             return mock.Mock()
         with mock.patch.object(server_module.Project, 'load', return_value=self.fixture.p), \

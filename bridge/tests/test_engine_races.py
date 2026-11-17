@@ -234,13 +234,21 @@ class BreakHookRaceTests(StopTestCase):
     def alive(self):
         return 'the host died (exit 0x%08X)' % ((self.host.process.poll() or 0) & 0xFFFFFFFF)
 
+    def bp_hits(self, bp_id):
+        return next((b['hits'] for b in self.host.link.one('bp', 'list')['bps'] if b['id'] == bp_id), 0)
+
     def test_bp_two_threads_same_int3(self):
+        # Seam 8 parks the first thread inside the trap with the int3 still in place, so the second thread traps on it
+        # whenever it runs. Parked later (after the first put the original byte back) the second thread ran over the
+        # plain byte when the scheduler gave it its turn late: 1 stop of 2 on a busy CI runner, always on one CPU (N24).
         link = self.host.link
         self.assertTrue(link.one('bp', 'set', hexint(1), hexint(self.t['bpTarget']), 'int3', 'ff', '0').get('ok'))
-        poke(self.host.process, self.t['seam'], 3)        # the first thread parks after the trap, before its stop
+        poke(self.host.process, self.t['seam'], 8)
         self.start_race(2, 1)
         poke(self.host.process, self.t['raceGo'], 1)
-        time.sleep(0.5)                                   # the second thread traps on the same int3 meanwhile
+        end = time.monotonic() + 10                       # hits is counted without a lock: two traps at once may count
+        while self.bp_hits(1) < 2 and time.monotonic() < end:     # one, and then the stops below still tell
+            time.sleep(0.01)
         self.release_seam()
         stops = self.wait_stops(2)
         self.assertIsNone(self.host.process.poll(), self.alive())

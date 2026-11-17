@@ -780,7 +780,7 @@ def warm_up(project, delay=WARM_UP_DELAY):
     return thread
 
 
-def register(server, project, observe, result_type):
+def register(server, project, observe, result_type, maintain=False):
     """Add the fnv_* tools to the bridge's MCP server."""
     import json
     from functools import partial
@@ -947,5 +947,6 @@ def register(server, project, observe, result_type):
     act = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
     control = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
     live_read = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=False)
-    fnv_live_tools.register(server, project, (live_read, act, control), result_type, offline=service)
+    fnv_live_tools.register(server, project, (live_read, act, control), result_type, maintain=maintain,
+                            offline=service)
     return service

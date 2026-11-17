@@ -122,6 +122,48 @@ class MaintainTests(unittest.TestCase):
         self.assertFalse(m.called)
         self.assertNotIn('fnv-state-maintenance', {t.name for t in threading.enumerate()} - before)
 
+    def test_a_server_made_for_a_test_starts_no_maintenance(self):
+        """make_server is what tests build: its maintenance thread wrote the journal into the test's state folder while
+        the test deleted it (WinError 145 on CI) and pruned the real %LOCALAPPDATA%\\fnvmcp crash folder."""
+        import threading
+        import test_service
+        from geck_mcp import fnv_live_tools
+        from geck_mcp.server import make_server
+        fixture = test_service.ServiceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        with mock.patch.object(fnv_live_tools.LiveService, 'maintain') as m:
+            make_server(fixture.p, fixture.service)
+            for t in threading.enumerate():
+                if t.name == 'fnv-state-maintenance':
+                    t.join(5)
+        self.assertFalse(m.called)
+
+    def test_a_server_asked_for_maintenance_runs_it(self):
+        import threading
+        import test_service
+        from geck_mcp import fnv_live_tools
+        from geck_mcp.server import make_server
+        fixture = test_service.ServiceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        with mock.patch.object(fnv_live_tools.LiveService, 'maintain') as m:
+            make_server(fixture.p, fixture.service, maintain=True)
+            for t in threading.enumerate():
+                if t.name == 'fnv-state-maintenance':
+                    t.join(5)
+        self.assertTrue(m.called)
+
+    def test_the_real_server_keeps_its_maintenance(self):
+        from geck_mcp import fnv_tools
+        from geck_mcp import server as server_module
+        with mock.patch.object(server_module.Project, 'load', return_value=_project()), \
+                mock.patch.object(server_module, 'Service', return_value=mock.Mock()), \
+                mock.patch.object(server_module, 'make_server', return_value=mock.Mock()) as make, \
+                mock.patch.object(fnv_tools, 'warm_up'):
+            server_module.main(['--project', 'x.json'])
+        self.assertIs(make.call_args.kwargs.get('maintain'), True)
+
 
 def _project():
     tmp = tempfile.mkdtemp()

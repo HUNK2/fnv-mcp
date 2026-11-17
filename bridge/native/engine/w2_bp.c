@@ -363,6 +363,7 @@ static void bp_hit(CONTEXT *c, EXCEPTION_RECORD *rec, int site, DWORD tid) {
     Bp *b = &bps[id];
     bool hit;
     b->hits++;
+    SEAM(8); /* tests: the trap is taken, the int3 still in place */
     hit = bp_passes(b, c);
     if (hit && (b->flags & BP_FLAG_ONCE)) {
         isite_remove(site);

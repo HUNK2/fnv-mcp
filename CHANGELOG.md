@@ -64,7 +64,8 @@ The first version of the fork. The entries below this one are geck-mcp-nv's own 
   7.1 s to 1.1 s; `fnv_scene_graph` 1,083 ms to 35 ms, `fnv_render lights` 929 ms to 23 ms,
   `fnv_script_instances` 1,281 ms to 139 ms, `fnv_look` 1,030 ms to 103 ms, `fnv_quest` 262 ms to 21 ms,
   `fnv_player` 196 ms to 20 ms. Tools that change the game, the console and ray casts keep one request a frame.
-  It needs this version's companion (`fnv_companion_install`);
+  A frame's reads stop at its 8 ms budget, counted from its first request and including any time Windows switched
+  the game's main thread out. It needs this version's companion (`fnv_companion_install`);
   `FNV_MCP_SAME_FRAME=0` turns it off. Without the game: `fnv_conflicts` 43 s to 0.6 s and `fnv_record users`
   4.9 s to 18 ms (two index lookups that scanned), `fnv_func` name search 560 ms to 30 ms and `strings` 1.2 s to
   0.3 s; the engine map loads in the background at server start instead of in the first `fnv_func` call

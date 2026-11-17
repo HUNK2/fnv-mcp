@@ -353,7 +353,7 @@ def server_capabilities(server):
             'allTools': len(names)}
 
 
-def make_server(project, service=None):
+def make_server(project, service=None, maintain=False):
     service = service or Service(project)
     server = BridgeServer(NAME, version=__version__, project_id=project.project_id,
                           missing=project.missing_geck_settings(),
@@ -695,7 +695,7 @@ def make_server(project, service=None):
         return await invoke(service.image_cutout, path, tolerance, chroma_tolerance)
 
     # fnv_* tools: offline engine knowledge (decomp) and crash doctor; read-only.
-    fnv_tools.register(server, project, observe, Result)
+    fnv_tools.register(server, project, observe, Result, maintain=maintain)
 
     @server.resource('geck://project/manifest', mime_type='application/json')
     def manifest() -> str:
@@ -749,7 +749,8 @@ def main(argv=None):
     service = Service(project)
     fnv_tools.warm_up(project)      # the engine map, on a background thread a moment after start
     try:
-        make_server(project, service).run(transport='stdio')
+        # state maintenance (journal compaction, pruning) only for the real server, not the servers tests build
+        make_server(project, service, maintain=True).run(transport='stdio')
     finally:
         # Close the persistent helper so no Wine worker outlives the MCP server.
         service.close()

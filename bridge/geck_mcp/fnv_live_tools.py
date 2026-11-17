@@ -281,7 +281,7 @@ def xyz_dict(value):
     return {axis: float(v) for axis, v in zip('xyz', value) if v is not None}
 
 
-def register(server, project, annotations, result_type, maintain=True, offline=None):
+def register(server, project, annotations, result_type, maintain=False, offline=None):
     import json
     from functools import partial
 
@@ -290,7 +290,8 @@ def register(server, project, annotations, result_type, maintain=True, offline=N
 
     live = LiveService(project)
     # journal compaction and state pruning, off the start path (tasklist and file walks take a moment)
-    # (tests pass maintain=False: it prunes the real %LOCALAPPDATA%\\fnvmcp crash folder; S2 review I4)
+    # (only server.main passes maintain=True: it prunes the real %LOCALAPPDATA%\\fnvmcp crash folder, S2 review I4,
+    # and a test's own state folder would be written while the test deletes it)
     if maintain:
         import threading
         threading.Thread(target=live.maintain, name='fnv-state-maintenance', daemon=True).start()
