@@ -69,6 +69,23 @@ _LOAD_ORDERS = {}
 PROFILE_FILES = ('modlist.txt', 'plugins.txt', 'loadorder.txt')
 
 
+def _content(path):
+    try:
+        return Path(path).read_bytes()
+    except OSError:
+        return None
+
+
+def _plugin_names(folder):
+    """The plugin files a folder holds. Not its time: a file added in the same tick of the file clock (about 16 ms
+    on Windows) leaves the folder's time as it was."""
+    try:
+        return frozenset(e.name.lower() for e in os.scandir(folder)
+                         if e.name.lower().endswith(('.esm', '.esp', '.esl')))
+    except OSError:
+        return None
+
+
 def _stamp(path):
     try:
         st = os.stat(path)
@@ -86,9 +103,11 @@ def load_order(project, live_plugins=None):
     root, profile = Path(fnv.mo2_root), Path(fnv.mo2_root) / 'profiles' / fnv.mo2_profile
     data_dir = Path(project.game_root) / 'Data'
     key = (str(root), str(profile), str(data_dir), tuple(sorted(live_plugins.items())) if live_plugins else None)
-    profile_stamps = [_stamp(profile / name) for name in PROFILE_FILES]
+    # The profile files by what they say: a mod turned off ('+' to '-') keeps the size, and a write in the same tick of
+    # the file clock keeps the time. They are a few KB, read on every call.
+    profile_stamps = [_content(profile / name) for name in PROFILE_FILES]
     kept = _LOAD_ORDERS.get(key)
-    if kept and kept[0] == profile_stamps and all(_stamp(path) == stamp for path, stamp in kept[1]):
+    if kept and kept[0] == profile_stamps and all(look(path) == seen for look, path, seen in kept[1]):
         return copy.deepcopy(kept[2])
     stamps = []         # taken before each thing is read, so a change while it is read shows up next time
     entries = _load_order(root, profile, data_dir, live_plugins, stamps)
@@ -110,7 +129,7 @@ def _load_order(root, profile, data_dir, live_plugins, stamps):
     active = {p.lstrip('*').lower() for p in lines('plugins.txt')}
     order = lines('loadorder.txt') or [p.lstrip('*') for p in lines('plugins.txt')]
     for folder in [root / 'mods' / mod for mod in enabled] + [data_dir]:
-        stamps.append((folder, _stamp(folder)))
+        stamps.append((_plugin_names, folder, _plugin_names(folder)))
 
     def locate(name):
         for mod in enabled:
@@ -133,7 +152,7 @@ def _load_order(root, profile, data_dir, live_plugins, stamps):
             entry['prefix'] = '%02X' % entry['index']
             index += 1
         if path:
-            stamps.append((path, _stamp(path)))
+            stamps.append((_stamp, path, _stamp(path)))
             try:
                 entry['masters'] = plugin_masters(path)
             except (OSError, codec.FormatError) as e:

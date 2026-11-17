@@ -522,6 +522,29 @@ class LoadOrderSpeed(unittest.TestCase):
         (self.profile / 'modlist.txt').write_text('+Top\n-Middle\n+Bottom\n', encoding='utf-8')
         self.assertIsNone(self.entry(load_order(self.project), 'Other.esp')['path'])
 
+    def test_a_plugin_added_in_the_same_clock_tick_is_seen(self):
+        """A folder's time stays put when a file arrives in the same tick of the file clock: folders are told apart
+        by the plugin names in them."""
+        from geck_mcp.fnv_data import load_order
+        top = self.mo2 / 'mods' / 'Top'
+        load_order(self.project)
+        st = top.stat()
+        write_plugin(top / 'Mod.esp', [], masters=['FalloutNV.esm', 'Other.esp'])
+        os.utime(top, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual(self.entry(load_order(self.project), 'Mod.esp')['mod'], 'Top')
+
+    def test_a_mod_turned_off_in_the_same_clock_tick_is_seen(self):
+        """'+Middle' to '-Middle' keeps the file's size, and a write in the same tick of the file clock (about 16 ms
+        on Windows, as on the CI runner) keeps its time: profile files are told apart by what they say."""
+        from geck_mcp.fnv_data import load_order
+        modlist = self.profile / 'modlist.txt'
+        self.assertEqual(self.entry(load_order(self.project), 'Other.esp')['mod'], 'Middle')
+        st = modlist.stat()
+        modlist.write_text('+Top\n-Middle\n+Bottom\n', encoding='utf-8')
+        os.utime(modlist, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual(modlist.stat().st_size, st.st_size)
+        self.assertIsNone(self.entry(load_order(self.project), 'Other.esp')['path'])
+
     def test_the_game_list_is_its_own_load_order(self):
         from geck_mcp.fnv_data import load_order
         load_order(self.project)
@@ -579,7 +602,11 @@ class ArchiveNameSpeed(unittest.TestCase):
     def test_a_changed_archive_is_read_again(self):
         from geck_mcp.esp.assets import AssetIndex
         AssetIndex(None, [], [self.bsa])
+        st = self.bsa.stat()
         self.make_bsa(self.bsa, {'meshes\\a\\b.nif': b'1', 'meshes\\new.nif': b'22'})
+        # This archive has the old one's size; a real rebuild takes longer than a tick of the file clock (about 16 ms
+        # on Windows), which two test writes do not (seen on the CI runner): its time is set one second later.
+        os.utime(self.bsa, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         index = AssetIndex(None, [], [self.bsa])
         self.assertIsNotNone(index.find('meshes\\new.nif'))
         self.assertIsNone(index.find('textures\\t.dds'))
