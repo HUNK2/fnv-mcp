@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from . import NAME, __version__
 from .config import Project
 from . import fnv_guide, fnv_spec, fnv_tools
-from .toolsets import ALWAYS, TOOLSETS, toolset_of
+from .toolsets import TOOLSETS, registered
 from .action_params import refusal, unused_arguments
 
 class Envelope(BaseModel):
@@ -384,7 +384,7 @@ def make_server(project, maintain=False):
 
     active = project.active_toolsets()          # TOOL-MERGE step 1: the toolsets this server registers
     for tool in list(server._tool_manager.list_tools()):
-        if tool.name not in ALWAYS and toolset_of(tool.name) not in active:
+        if not registered(tool.name, active):
             server.remove_tool(tool.name)
     return server
 

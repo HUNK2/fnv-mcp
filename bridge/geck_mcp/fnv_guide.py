@@ -66,14 +66,14 @@ def tool_table(toolsets=None):
     from .fnv_live_tools import FNV_LIVE_TOOLS
     from .fnv_spec import FNV_SPEC_TOOLS
     from .fnv_tools import FNV_TOOLS
-    from .toolsets import ALWAYS, DEFAULT_TOOLSETS, hidden_note, toolset_of
+    from .toolsets import DEFAULT_TOOLSETS, hidden_note, registered, toolset_of
     active = set(DEFAULT_TOOLSETS if toolsets is None else toolsets)
     table = {n: {'kind': 'read', 'description': d} for n, d in FNV_TOOLS.items()}
     table.update({n: {'kind': k, 'description': d} for n, (k, d) in FNV_LIVE_TOOLS.items()})
     table.update({n: {'kind': k, 'description': d} for n, (k, d) in FNV_SPEC_TOOLS.items()})
     for name, row in table.items():
         row['toolset'] = toolset_of(name)
-        row['active'] = row['toolset'] in active or name in ALWAYS
+        row['active'] = registered(name, active)
         if not row['active']:
             row['description'] = '%s. %s' % (row['description'], hidden_note(row['toolset']))
     return table
