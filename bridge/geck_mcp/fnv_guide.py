@@ -1,5 +1,6 @@
 """fnv_guide: which tool for which problem. Guides (Markdown in geck_mcp/guides/), a search over the tool
 descriptions, and a search over saved engine research notes and the recorded engine facts."""
+import math
 import os
 import re
 from pathlib import Path
@@ -7,23 +8,41 @@ from pathlib import Path
 from .fnv_conv import ConvError, dispatch, page, verdict
 
 GUIDES_DIR = Path(__file__).resolve().parent / 'guides'
-STOP = set('a an the to of for in on is it my i do does how what which why when and or with that this tool tools '
-           'use find get can not no be are was'.split())
+STOP = set('a an the to of for in on is it my i do does did how what which why when and or with that this tool tools '
+           'use find get can be are was me from into at by its so fnv please want need'.split())
 TOOL_NAME = re.compile(r'\b(?:fnv|geck)_[a-z0-9_]+\b')
+UNDOUBLE = set('bdgmnpt')          # running -> run, stopped -> stop; call, miss, buzz keep their pair
 
 
-def stems(text):
-    """Lower-case words of a text with the commonest endings removed, stop words dropped."""
-    out = []
-    for w in re.findall(r'[a-z0-9]+', text.lower()):
-        if w in STOP:
-            continue
-        for suffix in ('ing', 'ed', 'es', 's'):
-            if len(w) > len(suffix) + 2 and w.endswith(suffix):
-                w = w[:-len(suffix)]
-                break
-        out.append(w)
-    return out
+def stem(w):
+    """A small suffix rule (no dependency): plural and -ing/-ed endings go, then a final e, so place, places,
+    placed and placing all give "plac", and building gives "build" (a whole word: it never matches "build" inside
+    another word)."""
+    if len(w) > 4 and w.endswith('ies'):
+        w = w[:-3] + 'y'
+    elif len(w) > 4 and w.endswith('sses'):
+        w = w[:-2]
+    elif (len(w) > 3 and w.endswith('es') and w[-3] in 'sxz') or w.endswith(('ches', 'shes')):
+        w = w[:-2]
+    elif len(w) > 3 and w.endswith('s') and not w.endswith(('ss', 'us', 'is')):
+        w = w[:-1]
+    for suffix in ('ing', 'ed'):
+        if len(w) > len(suffix) + 2 and w.endswith(suffix):
+            w = w[:-len(suffix)]
+            if len(w) > 3 and w[-1] == w[-2] and w[-1] in UNDOUBLE:
+                w = w[:-1]
+            break
+    if len(w) > 3 and w.endswith('e'):
+        w = w[:-1]
+    return w
+
+
+def words(text):
+    """Lower-case whole words of a text, stop words dropped, each stemmed (fnv_guide find, part 2)."""
+    return [stem(w) for w in re.findall(r'[a-z0-9]+', (text or '').lower()) if w not in STOP]
+
+
+stems = words          # the older name (guides and the engine search use it)
 
 
 def load_guides(folder=GUIDES_DIR):
@@ -54,9 +73,74 @@ def tool_table(toolsets=None):
     table.update({n: {'kind': k, 'description': d} for n, (k, d) in FNV_SPEC_TOOLS.items()})
     for name, row in table.items():
         row['toolset'] = toolset_of(name)
-        if row['toolset'] not in active and name not in ALWAYS:
+        row['active'] = row['toolset'] in active or name in ALWAYS
+        if not row['active']:
             row['description'] = '%s. %s' % (row['description'], hidden_note(row['toolset']))
     return table
+
+
+ACTION_PHRASE = re.compile(r'^([a-z_]+): (.+)$')
+
+
+def tool_documents(table, use_when, schemas=None):
+    """{tool: {name, desc, phrases, actions: {action: {name, phrases}}}}, every field a set of words (phrases a list
+    of sets). An action comes from the tool's schema (its `action` enum), ACTION_PARAMS and the use_when phrases."""
+    from .action_params import ACTION_PARAMS
+    docs = {}
+    for name, row in table.items():
+        tool_phrases, action_phrases = [], {}
+        for phrase in use_when.get(name, ()):
+            m = ACTION_PHRASE.match(phrase)
+            if m:
+                action_phrases.setdefault(m.group(1), []).append(set(words(m.group(2))))
+            else:
+                tool_phrases.append(set(words(phrase)))
+        enum = (((schemas or {}).get(name) or {}).get('properties') or {}).get('action', {}).get('enum') or []
+        actions = list(enum) + [a for a in ACTION_PARAMS.get(name, {}).get('actions', {}) if a not in enum]
+        actions += [a for a in action_phrases if a not in actions]
+        docs[name] = {'name': set(words(name.replace('_', ' '))), 'desc': set(words(row['description'])),
+                      'phrases': tool_phrases,
+                      'actions': {a: {'name': set(words(a.replace('_', ' '))), 'phrases': action_phrases.get(a, [])}
+                                  for a in actions}}
+    return docs
+
+
+def _all_words(doc):
+    out = set(doc['name']) | doc['desc']
+    for p in doc['phrases']:
+        out |= p
+    for a in doc['actions'].values():
+        out |= a['name']
+        for p in a['phrases']:
+            out |= p
+    return out
+
+
+def score_tool(query, doc, idf, action=None):
+    """Score of one tool (and one of its actions, when given) for the query words: per word its weight (idf) times
+    the best field it is in (name 3, a task phrase 3, the action's name 2.5, the description 1), plus the words that
+    one phrase shares with the query again (a phrase that says the whole task beats words found here and there)."""
+    phrases = list(doc['phrases'])
+    action_name = set()
+    if action is not None:
+        phrases += doc['actions'][action]['phrases']
+        action_name = doc['actions'][action]['name']
+    phrase_words = set().union(*phrases) if phrases else set()
+    total = 0.0
+    for q in query:
+        w = idf.get(q, 0)
+        field = max(3 * (q in doc['name']), 3 * (q in phrase_words), 2.5 * (q in action_name), 1 * (q in doc['desc']))
+        total += w * field
+    if phrases:
+        total += 2 * max(sum(idf.get(q, 0) for q in query if q in p) for p in phrases)
+    return total
+
+
+def example_call(name, action=None, schema=None):
+    """One line: fnv_place(action="snap", ref=...). Required parameters other than action get `...`."""
+    args = ['action="%s"' % action] if action else []
+    args += ['%s=...' % p for p in ((schema or {}).get('required') or []) if p != 'action']
+    return '%s(%s)' % (name, ', '.join(args))
 
 
 def score_guide(query, guide):
@@ -71,10 +155,11 @@ def score_guide(query, guide):
 
 
 class GuideTools:
-    def __init__(self, research_dir=None, guides_dir=GUIDES_DIR, toolsets=None):
+    def __init__(self, research_dir=None, guides_dir=GUIDES_DIR, toolsets=None, schemas=None):
         self.research_dir = research_dir or os.environ.get('FNV_RESEARCH_DIR')
         self.guides_dir = guides_dir
         self.toolsets = toolsets          # the server's active toolsets (None: the default ones)
+        self.schemas = schemas            # {tool: input schema}: actions and required parameters for examples
 
     # ------------------------------------------------------------ list, topic, find
     def list(self):
@@ -104,25 +189,46 @@ class GuideTools:
                        otherCandidates=[{'name': g['name'], 'title': g['title'], 'score': round(s, 1)}
                                         for s, g in ranked[1:4]], guide=best['text'])
 
-    def find(self, words, limit=20, offset=0, brief=False):
-        if not words or not words.strip():
+    def find(self, text, limit=20, offset=0, brief=False):
+        """Tools, their actions and the guides for a task said in plain words. Words match whole (after a small
+        stemming rule), weighted by how rare they are among the tools; each tool's use_when task phrases count like
+        its name. A tool row gives the best action and a one-line example call; active=false when the tool is in a
+        toolset this server does not register."""
+        if not text or not text.strip():
             raise ValueError('find needs words, for example "script does not run" or "crash log"')
-        query = stems(words)
+        from .fnv_live_tools import USE_WHEN
+        query = list(dict.fromkeys(words(text)))
+        table = tool_table(self.toolsets)
+        docs = tool_documents(table, USE_WHEN, self.schemas)
+        df = {}
+        for doc in docs.values():
+            for w in _all_words(doc):
+                df[w] = df.get(w, 0) + 1
+        idf = {q: math.log(1 + len(docs) / df[q]) for q in query if q in df}
         rows = []
-        for name, t in tool_table(self.toolsets).items():
-            name_words, description = set(stems(name.replace('_', ' '))), set(stems(t['description']))
-            score = sum(3 * (q in name_words) + 1 * (q in description) for q in set(query))
-            if score:
-                rows.append({'kind': 'tool', 'name': name, 'toolKind': t['kind'], 'toolset': t['toolset'],
-                             'score': score, 'description': t['description']})
-        for g in load_guides(self.guides_dir).values():
-            score = score_guide(query, g)
-            if score >= 1:
-                rows.append({'kind': 'guide', 'name': g['name'], 'score': round(score, 1), 'description': g['summary']})
+        for name, doc in docs.items():
+            best, best_action = score_tool(query, doc, idf), None
+            for action in doc['actions']:
+                score = score_tool(query, doc, idf, action)
+                if score > best + 1e-9:
+                    best, best_action = score, action
+            if best <= 0:
+                continue
+            t = table[name]
+            rows.append({'kind': 'tool', 'name': name, 'tool': name, 'action': best_action,
+                         'example': example_call(name, best_action, (self.schemas or {}).get(name)),
+                         'toolKind': t['kind'], 'toolset': t['toolset'], 'active': t['active'],
+                         'score': round(best, 2), 'description': t['description']})
+        if query:
+            for g in load_guides(self.guides_dir).values():
+                score = score_guide(query, g)
+                if score >= 1:
+                    rows.append({'kind': 'guide', 'name': g['name'], 'score': round(score, 1),
+                                 'description': g['summary']})
         rows.sort(key=lambda r: (-r['score'], r['name']))
-        head = ('%d matches for %r, best: %s' % (len(rows), words, rows[0]['name'])) if rows else 'No match for %r' % words
+        head = ('%d matches for %r, best: %s' % (len(rows), text, rows[0]['name'])) if rows else 'No match for %r' % text
         return verdict(head, None if rows else 'Try other words, or call fnv_guide list.',
-                       **page(rows, limit, offset, brief=brief, brief_fields=['kind', 'name', 'description']))
+                       **page(rows, limit, offset, brief=brief, brief_fields=['kind', 'name', 'action', 'example']))
 
     # ------------------------------------------------------------ engine research and recorded facts
     def sections(self, folder):

@@ -107,7 +107,9 @@ class GuideToolTests(unittest.TestCase):
         self.assertEqual((paged['count'], paged['offset']), (3, 1))
         self.assertTrue(paged['more'])
         brief = self.tools.run('find', 'script', brief=True)
-        self.assertEqual(set(brief['rows'][0]), {'kind', 'name', 'description'})
+        for row in brief['rows']:      # brief: what to call (part 2), no description
+            self.assertEqual(set(row), {'kind', 'name', 'action', 'example'} if row['kind'] == 'tool'
+                             else {'kind', 'name'})
         self.assertTrue(self.tools.run('find', 'qqqqzzzz')['verdict'].startswith('No match'))
 
     def test_engine_search_research_sections(self):
