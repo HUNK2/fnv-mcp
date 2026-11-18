@@ -87,9 +87,10 @@ class BridgeServer(MCPServer):
     unknown tool) gets the same structured result as the tools' own errors, so every result matches the declared
     output schema (the Envelope)."""
 
-    def __init__(self, *args, project_id='', **kwargs):
+    def __init__(self, *args, project_id='', call_log=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._project_id = project_id
+        self._call_log = call_log          # fnv_calllog.CallLog: one line per call (tool quality part 1)
 
     async def list_tools(self):
         """Every tool with a display title (release audit L6); one set at registration is kept. Schemas and
@@ -182,6 +183,33 @@ class BridgeServer(MCPServer):
                 'elapsedMs': 0, 'replayed': False}
 
     async def _handle_call_tool(self, ctx, params):
+        """Every call, logged (fnv_calllog): tool, action, ok, code, time, answer size, cut. No argument values."""
+        started = time.monotonic()
+        result = None
+        try:
+            result = await self._handle_call_tool_inner(ctx, params)
+            return result
+        finally:
+            if self._call_log is not None:
+                self._log_call(params, result, round((time.monotonic() - started) * 1000))
+
+    def _log_call(self, params, result, elapsed_ms):
+        action = (params.arguments or {}).get('action') if isinstance(params.arguments, dict) else None
+        structured = getattr(result, 'structured_content', None)
+        if isinstance(structured, dict):
+            ok = bool(structured.get('ok', not getattr(result, 'is_error', False)))
+            error = structured.get('error') if isinstance(structured.get('error'), dict) else {}
+            data = structured.get('data') if isinstance(structured.get('data'), dict) else {}
+            size = len(json.dumps(structured, default=str))
+            cut = bool(structured.get('truncated') or data.get('truncated'))
+            code = error.get('code')
+        else:                                   # no result: the call raised (counted as a bug)
+            ok = result is not None and not getattr(result, 'is_error', False)
+            size = sum(len(getattr(c, 'text', '') or '') for c in getattr(result, 'content', None) or ())
+            cut, code = False, None if ok else 'INTERNAL_ERROR'
+        self._call_log.record(params.name, action, ok, code, elapsed_ms, size, cut)
+
+    async def _handle_call_tool_inner(self, ctx, params):
         tool = self._tool_manager.get_tool(params.name)
         if tool is not None:                     # TOOL-MERGE: a parameter the action does not use (T8)
             action, unused = unused_arguments(params.name, params.arguments, tool.parameters)
@@ -299,7 +327,9 @@ INSTRUCTIONS = ('Start with fnv_status: it says whether the game is running and 
 
 
 def make_server(project, maintain=False):
-    server = BridgeServer(NAME, version=__version__, project_id=project.project_id, instructions=INSTRUCTIONS)
+    from .fnv_calllog import CallLog
+    server = BridgeServer(NAME, version=__version__, project_id=project.project_id, instructions=INSTRUCTIONS,
+                          call_log=CallLog(project.state_dir))
     observe = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                               idempotentHint=True, openWorldHint=False)
     ui = ToolAnnotations(readOnlyHint=False, destructiveHint=False,

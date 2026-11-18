@@ -816,10 +816,20 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         return await invoke('fnv_script_set', lambda: live.script_set(target, kind, value, name, index), 'act')
 
     @server.tool(annotations=read)
-    async def fnv_journal(limit: Annotated[int, Field(ge=1, le=1000)] = 100, include_undone: bool = True) -> result_type:
-        """Every change made through the act tools (memory writes, engine calls, settings, console lines, actor
-        actions, input), with old and new values and whether it can be or was undone."""
-        return await invoke('fnv_journal', lambda: live.journal_list(limit, include_undone))
+    async def fnv_journal(action: Literal['list', 'calls'] = 'list',
+                          limit: Annotated[int, Field(ge=1, le=1000)] | None = None, include_undone: bool = True,
+                          since_seconds: Annotated[int, Field(ge=0, le=31 * 86400, description=(
+                              'calls: only the calls of the last N seconds (default: the whole log, 30 days)'))]
+                          | None = None) -> result_type:
+        """list (default): every change made through the act tools (memory writes, engine calls, settings, console
+        lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default
+        100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the
+        largest answers (limit rows each, default 10)."""
+        if action == 'calls':
+            from .fnv_calllog import CallLog
+            return await invoke('fnv_journal', lambda: CallLog(project.state_dir).summary(since_seconds, limit or 10),
+                                action=action)
+        return await invoke('fnv_journal', lambda: live.journal_list(limit or 100, include_undone), action=action)
 
     @server.tool(annotations=act)
     async def fnv_undo(count: Annotated[int, Field(ge=1, le=100)] = 1,

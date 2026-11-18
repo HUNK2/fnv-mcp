@@ -310,9 +310,11 @@ def prune(state_dir, now, crash_dir=None):
     """Bound what the bridge keeps under state/fnv (N12). Returns the number of files removed per kind. Kept:
     quit-log.jsonl's last 500 lines; modules/ builds younger than 14 days (a loaded one cannot be deleted and
     stays); the newest 50 crash-context files in %LOCALAPPDATA%\fnvmcp; the newest 20 install and MO2 backups per
-    target; the newest 300 screens and screenshots."""
+    target; the newest 300 screens and screenshots; calls.jsonl's last 30 days (fnv_calllog)."""
+    from . import fnv_calllog
     fnv = Path(state_dir) / 'fnv'
-    out = {'quitLog': 0, 'modules': 0, 'crashContexts': 0, 'backups': 0, 'screens': 0}
+    out = {'quitLog': 0, 'modules': 0, 'crashContexts': 0, 'backups': 0, 'screens': 0,
+           'calls': fnv_calllog.prune(state_dir, now)}
     log = fnv / 'quit-log.jsonl'
     if log.is_file():
         with locked(log):
