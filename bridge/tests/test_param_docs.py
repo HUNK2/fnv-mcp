@@ -1,4 +1,7 @@
-"""Release plan Phase 7 (M1): every parameter of a tool with six or more parameters is described in its schema."""
+"""Every tool parameter is described in the schema a client sees (tool quality pass, part 4).
+
+UNDESCRIBED_ALLOWED is the allow-list of parameters that may still lack a description. It only shrinks: an entry
+that has gained a description must be removed, and a new parameter must come with one."""
 import sys
 import unittest
 from pathlib import Path
@@ -15,6 +18,10 @@ from geck_mcp.server import make_server  # noqa: E402
 
 def own_description(schema):
     return bool(schema.get('description')) or any(s.get('description') for s in schema.get('anyOf', []))
+
+
+# {tool: {parameter, ...}} that may still have no description. Only ever remove entries.
+UNDESCRIBED_ALLOWED: dict[str, set[str]] = {}
 
 
 class ParamDocTests(unittest.IsolatedAsyncioTestCase):
@@ -38,6 +45,30 @@ class ParamDocTests(unittest.IsolatedAsyncioTestCase):
                 if gaps:
                     missing[name] = gaps
         self.assertEqual(missing, {})
+
+    async def test_every_parameter_is_described(self):
+        missing = set()
+        for name, tool in (await self.listing()).items():
+            for param, schema in tool.input_schema.get('properties', {}).items():
+                if not own_description(schema):
+                    missing.add((name, param))
+        allowed = {(tool, param) for tool, params in UNDESCRIBED_ALLOWED.items() for param in params}
+        self.assertEqual(sorted(missing - allowed), [], 'parameters with no description')
+        self.assertEqual(sorted(allowed - missing), [], 'described now: remove them from UNDESCRIBED_ALLOWED')
+
+    async def test_place_rotation_is_in_degrees(self):
+        rotation = (await self.listing())['fnv_place'].input_schema['properties']['rotation']
+        self.assertIn('degrees', rotation['description'])
+        self.assertNotIn('game units', rotation['description'])
+
+    async def test_every_fix_names_a_real_parameter(self):
+        from geck_mcp.param_docs import PARAM_FIXES
+        server = make_server(self.fixture.p)
+        raw = {t.name: t.parameters.get('properties', {}) for t in server._tool_manager.list_tools()}
+        for tool, params in PARAM_FIXES.items():
+            for param, (old, new) in params.items():
+                self.assertIn(param, raw.get(tool, {}), '%s.%s' % (tool, param))
+                self.assertTrue(10 <= len(new) <= 300 and old != new, '%s.%s' % (tool, param))
 
     async def test_every_entry_is_real_and_needed(self):
         from geck_mcp.fnv_live_tools import register  # noqa: F401 - the listing below is the truth

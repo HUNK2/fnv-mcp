@@ -94,7 +94,7 @@ class BridgeServer(MCPServer):
     async def list_tools(self):
         """Every tool with a display title (release audit L6); one set at registration is kept. Schemas and
         descriptions are emitted slim (TOOL-MERGE step 0): slim_schema, and no docstring indentation."""
-        from .param_docs import PARAM_DOCS
+        from .param_docs import PARAM_DOCS, PARAM_FIXES
         tools = await super().list_tools()
         for tool in tools:
             if not tool.title:
@@ -111,6 +111,10 @@ class BridgeServer(MCPServer):
                 schema = (props or {}).get(param)
                 if isinstance(schema, dict) and not schema.get('description'):
                     schema['description'] = text
+            for param, (old, new) in PARAM_FIXES.get(tool.name, {}).items():   # a signature text that is wrong
+                schema = ((tool.input_schema or {}).get('properties') or {}).get(param)
+                if isinstance(schema, dict) and schema.get('description') == old:
+                    schema['description'] = new
         # The envelope is every tool's answer: its full schema goes out on the entry tools only, the others name
         # them (about a third of the listing). The tool manager keeps the full schema for checking results.
         envelope = next((t.output_schema for t in tools if t.name in ENVELOPE_SCHEMA_TOOLS and t.output_schema), None)
