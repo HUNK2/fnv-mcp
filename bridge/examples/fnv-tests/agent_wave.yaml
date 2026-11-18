@@ -1,4 +1,4 @@
-# Every agent step and check (docs/FNV-LIVE-TOOLS.md, "Agent steps and checks").
+# Every agent step and check (docs/SCENARIOS.md, "Agent steps and checks").
 # Needs a test save "agentwave" (fnv_test_save action=save name=agentwave) made in the Mojave with the Old
 # World Blues quest 03002FCA active (load-order index 03); the other forms are FalloutNV.esm records.
 name: agent wave end to end

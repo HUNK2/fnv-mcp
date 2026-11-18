@@ -69,5 +69,6 @@ class DoorTools:
 In `fnv_live_tools.py`, add the tool to `FNV_LIVE_TOOLS` and register it with one `@server.tool`, then call
 `invoke('fnv_door', lambda: tools.run(action, ...), 'read')`. Use `'act'` or `'control'` for actions that change
 things. Give the tool a docstring that names every action in one sentence each. Add a fake-host test and an entry
-in `docs/FNV-LIVE-TOOLS.md`. If the new tool solves a common problem, mention it in a guide
+in `geck_mcp/tool_examples.py` (its group, an example call, one line per action), then run
+`tools/gen_tool_docs.py` to write `docs/TOOLS.md` again. If the new tool solves a common problem, mention it in a guide
 (`geck_mcp/guides/`) so that `fnv_guide` can point to it.

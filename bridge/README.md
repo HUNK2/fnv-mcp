@@ -4,8 +4,8 @@
 objects. It writes a valid plugin with stable FormIDs, checks every `@EditorID` reference against your own masters
 and every mesh and texture against the Data folder, and needs neither the GECK nor the game. Installing the build
 is `fnv_install`; testing it is `fnv_test`. The rest of the server is in the
-[setup guide](docs/FNV-MCP-SETUP.md) and the tool references
-([FNV-ENGINE-TOOLS.md](docs/FNV-ENGINE-TOOLS.md), [FNV-LIVE-TOOLS.md](docs/FNV-LIVE-TOOLS.md)).
+[setup guide](docs/FNV-MCP-SETUP.md) and the [tool reference](docs/TOOLS.md); the documentation index is
+[docs/README.md](docs/README.md).
 
 The builder is 2Shay's work from [geck-mcp-nv](https://github.com/2Shay96/geck-mcp-nv). geck-mcp-nv's GECK editor
 tools, its 32-bit helper and its legacy runtime and console tools were removed from fnv-mcp on 2026-11-18: the

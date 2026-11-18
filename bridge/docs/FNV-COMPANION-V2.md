@@ -1,6 +1,6 @@
 # Engine companion, wire version 2
 
-Contract for the new ops of `native/engine/fnvmcp_engine.c` (Plan 2, waves W1 and W2) and the bridge code that
+Contract for the new ops of `native/engine/fnvmcp_engine.c` and the bridge code that
 uses them. Wire version 1 stays valid: every old op keeps its format.
 
 ## 1. Rules that do not change
@@ -15,7 +15,7 @@ uses them. Wire version 1 stays valid: every old op keeps its format.
   included by `fnvmcp_engine.c` (one translation unit, `#include "w1_gate.c"` and so on); each new file is
   added to `fnv_link.SOURCES` so the build id changes with it.
 
-## 2. Predicates (W1)
+## 2. Predicates
 
 A predicate is a small stack program. `pred set <id> <hex>` stores one (id 0..63, at most 64 ops, stack depth
 16). Values are 32-bit; each stack slot remembers whether it is an int or a float.
@@ -56,7 +56,7 @@ the program with `pred set` first. Slots the bridge uses: 32-55 `fnv_debug` brea
 57 `fnv_flow`, 62 the frame read of `fnv_time`/`fnv_wait_for`, 63 the `fnv_wait_for` condition. The rest are
 free.
 
-## 3. Frame gate (W1)
+## 3. Frame gate
 
 The gate lives in the main-loop message (`MSG_LOOP`). While the gate is held the main thread does not return
 to the game: it waits for requests (an event the pipe thread sets, no busy loop) and serves them.
@@ -83,11 +83,11 @@ to the game: it waits for requests (an event the pipe thread sets, no busy loop)
 - If the pipe cannot be created (another game with the companion holds the name), the companion writes a line to
   `%LOCALAPPDATA%\fnvmcp\companion.log` and an event of type `0x3EB` "pipe", once and then at most once a minute,
   and keeps trying every second.
-- `ping` gains `"held"`, `"stepLeft"`, `"parked"` (number of parked threads, W2) and `"lastFrameTick"`.
+- `ping` gains `"held"`, `"stepLeft"`, `"parked"` (number of parked threads) and `"lastFrameTick"`.
 - Holds never nest: `hold on` while held only changes the timeout.
 - On `MSG_EXIT` the gate opens.
 
-## 4. Sampler (W1)
+## 4. Sampler
 
 | Op | Effect and result |
 |---|---|
@@ -95,7 +95,7 @@ to the game: it waits for requests (an event the pipe thread sets, no busy loop)
 | `samp read <id> <since> [max]` | `{"samples":[{"seq","frame","tick","values":[..]}],"next":S,"stopped":bool,"stopFrame":F\|null,"dropped":D}`; values are numbers (floats as floats) |
 | `samp clear <id\|ff>`, `samp list` | |
 
-## 5. Event sinks (W1)
+## 5. Event sinks
 
 One ring of 65,536 records `{seq, frame, tick, source, ref, 6 words}` with an interlocked sequence.
 
@@ -106,7 +106,7 @@ One ring of 65,536 records `{seq, frame, tick, source, ref, 6 words}` with an in
 | `sink remove <slot\|ff>` | |
 | `sink read <since> <max> [ref]` | `{"records":[{"seq","frame","tick","source","ref","words":[6]}],"next":S,"dropped":D}`; `source` is the event name or `msg:<type>`; optional filter by ref form id |
 
-## 6. Guarded call (W1)
+## 6. Guarded call
 
 `call` accepts a two-letter kind: `ig`, `fg`, `vg` (as `i`, `f`, `v`, guarded). Before the call the companion
 saves a recovery point (esp, ebp, ebx, esi, edi and a resume address) for this thread. A fault on this thread
@@ -116,7 +116,7 @@ while the guard is set is caught by the vectored handler, which resumes at the r
 "stateSuspect":true}`. Guards nest per thread. Stack overflow is not caught. The fault still writes no
 crash-context file.
 
-## 7. Input injector (W1)
+## 7. Input injector
 
 | Op | Effect |
 |---|---|
@@ -131,7 +131,7 @@ crash-context file.
 Never write the previous-state arrays. Each job ends after its frames, on `inp clear`, on any fault in the
 injector and when the dead-man switch fires. At most 32 jobs.
 
-## 8. Stops (W2)
+## 8. Stops
 
 A stop is a thread parked by the companion: by a hook hold, a trap breakpoint, a single step or a fault. At most
 16 stops at once. Each has a sequence number (`seq`, never reused while the process lives).
@@ -204,7 +204,7 @@ leaves the range through a return (esp above the esp at the start), or after `ma
 thread then parks again as kind `step`. `trace read <seq> <since> [max]` returns
 `{"entries":[{"n","eip","values":[..]}],"next":S,"done":bool,"reason":"returned|max|fault"}`.
 
-## W5: native modules and code placement
+## 9. Native modules and code placement
 
 | Op | Result |
 |---|---|
@@ -215,7 +215,7 @@ thread then parks again as kind `step`. `trace read <seq> <since> [max]` returns
 | `code alloc <size>` / `code free <addr>` | Executable memory for swapped functions |
 | `code patch <addr> <hex>` | Writes bytes with the other threads suspended; `{"ok":true,"length","old":"<hex>"}` |
 
-## W6: line coverage
+## 10. Line coverage
 
 | Op | Result |
 |---|---|
