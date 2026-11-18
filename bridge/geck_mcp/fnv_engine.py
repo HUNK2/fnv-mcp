@@ -241,7 +241,11 @@ class EngineMap:
                                      'address or by the class name shown' % (ref, len(short), key.split('::')[-1]),
                                      {'candidates': [self.summary(a) for a in sorted(short)[:25]]})
         if not hits:
-            raise EngineMapError('NOT_FOUND', 'No function named %r; try fnv_func' % ref)
+            from .fnv_conv import nearest
+            close = nearest(str(ref).strip(), {f['name'] for f in self.functions.values() if f.get('name')})
+            raise EngineMapError('NOT_FOUND', 'No function named %r.%s Next: find it with fnv_func.'
+                                 % (ref, ' Did you mean %s?' % ', '.join(close) if close else ''),
+                                 {'didYouMean': close})
         if len(hits) > 1:
             ranked = sorted(hits, key=lambda a: (STATUS_RANK.get(self.functions[a]['status'], 9),
                                                  self.functions[a]['name'].lower() != key, a))

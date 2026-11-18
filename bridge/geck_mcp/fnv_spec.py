@@ -92,13 +92,19 @@ class SpecTools:
                     'projectId': self.project.project_id, 'outcome': outcome, 'data': data, 'error': None,
                     'elapsedMs': round((time.monotonic() - started) * 1000)}
         except Exception as e:  # reported, never raised to the client
-            code = getattr(e, 'code', 'INVALID_ARGUMENT' if isinstance(e, ValueError) else 'SPEC_ERROR')
+            code = getattr(e, 'code', None)
+            code = code if isinstance(code, str) and code else \
+                'INVALID_ARGUMENT' if isinstance(e, ValueError) else 'INTERNAL_ERROR'
+            message, data = str(e), getattr(e, 'evidence', None)
+            recovery = 'Fix the spec, the input or the project file and call again.'
+            if code == 'INTERNAL_ERROR':
+                from .fnv_conv import internal_error, next_step
+                (message, data), recovery = internal_error(e), next_step('INTERNAL_ERROR')
             # build writes the plugin and the receipt last, atomically: a failure before that changed nothing
             return {'ok': False, 'operationId': operation_id, 'operation': 'fnv_spec',
                     'projectId': self.project.project_id, 'outcome': 'failed_before_change',
-                    'data': getattr(e, 'evidence', None),
-                    'error': {'code': code, 'message': str(e), 'retrySafe': True,
-                              'recovery': 'Fix the spec, the input or the project file and call again.'},
+                    'data': data,
+                    'error': {'code': code, 'message': message, 'retrySafe': True, 'recovery': recovery},
                     'elapsedMs': round((time.monotonic() - started) * 1000)}
 
 

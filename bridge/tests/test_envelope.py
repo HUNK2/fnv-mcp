@@ -59,10 +59,11 @@ class OutcomeTests(unittest.TestCase):
         self.live = self.fake.live
 
     def test_uncoded_error_in_act_is_outcome_unknown(self):
-        r = self.live.run('fnv_place', raising(KeyError('pose')), kind='act')
+        with self.assertLogs('geck_mcp', level='ERROR'):
+            r = self.live.run('fnv_place', raising(KeyError('pose')), kind='act')
         self.assertEqual(r['outcome'], 'outcome_unknown')
         self.assertFalse(r['error']['retrySafe'])
-        self.assertEqual(r['error']['code'], 'FNV_ERROR')
+        self.assertEqual(r['error']['code'], 'INTERNAL_ERROR')      # tool quality part 3 (was FNV_ERROR)
 
     def test_uncoded_error_in_read_is_failed_before_change(self):
         r = self.live.run('fnv_ref', raising(KeyError('pose')))
@@ -76,8 +77,9 @@ class OutcomeTests(unittest.TestCase):
     def test_non_string_code_is_fnv_error(self):
         error = OSError('http')
         error.code = 404
-        r = self.live.run('fnv_asset', raising(error), kind='act')
-        self.assertEqual(r['error']['code'], 'FNV_ERROR')
+        with self.assertLogs('geck_mcp', level='ERROR'):
+            r = self.live.run('fnv_asset', raising(error), kind='act')
+        self.assertEqual(r['error']['code'], 'INTERNAL_ERROR')
 
     def test_partial_change_lists_journal_ids(self):
         made = []

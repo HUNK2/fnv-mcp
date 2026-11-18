@@ -483,6 +483,16 @@ def xyz_dict(value):
     return {axis: float(v) for axis, v in zip('xyz', value) if v is not None}
 
 
+def one_target(target, address):
+    """target, or address (its other name, tool quality part 3): exactly one of them."""
+    if target is not None and address is not None:
+        raise ValueError('Give target or address (two names for the same thing), not both')
+    if target is None and address is None:
+        raise ValueError('target is required: 0xADDRESS or a reference (player, a form id, an EditorID); '
+                         'address is another name for it')
+    return target if target is not None else address
+
+
 def register(server, project, annotations, result_type, maintain=False, offline=None):
     import json
     from functools import partial
@@ -909,15 +919,18 @@ def register(server, project, annotations, result_type, maintain=False, offline=
 
     @server.tool(annotations=read)
     async def fnv_mem_read(target: Annotated[str, Field(min_length=1, max_length=200, description=(
-                               '0xADDRESS, or a reference/form spec (player, form id, EditorID)'))],
+                               '0xADDRESS, or a reference/form spec (player, form id, EditorID)'))] | None = None,
                            path: Annotated[str, Field(max_length=300)] | None = None,
                            as_type: Literal['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64', 'ptr', 'cstr'] | None = None,
                            class_name: Annotated[str, Field(max_length=200)] | None = None,
-                           length: Annotated[int, Field(ge=1, le=4096)] | None = None) -> result_type:
+                           length: Annotated[int, Field(ge=1, le=4096)] | None = None,
+                           address: Annotated[str, Field(min_length=1, max_length=200, description=(
+                               'Another name for target'))] | None = None) -> result_type:
         """Read engine memory. With a field path (m_pBaseProcess.m_eProcessType) the fields are found in the
         decomp's class layouts, starting from the object's runtime class (RTTI), following pointers. Structs come
         back as hex plus decoded simple fields."""
-        return await invoke('fnv_mem_read', lambda: live.mem_read(target, path, as_type, length, class_name))
+        return await invoke('fnv_mem_read',
+                            lambda: live.mem_read(one_target(target, address), path, as_type, length, class_name))
 
     # ------------------------------------------------------------------ milestones 5-6: act
     @server.tool(annotations=act)
@@ -933,13 +946,18 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         return await invoke('fnv_run_script', lambda: live.run_script(source, ref), 'act')
 
     @server.tool(annotations=act)
-    async def fnv_mem_write(target: Annotated[str, Field(min_length=1, max_length=200)], value: Any,
+    async def fnv_mem_write(value: Any,
+                            target: Annotated[str, Field(min_length=1, max_length=200)] | None = None,
                             path: Annotated[str, Field(max_length=300)] | None = None,
                             as_type: Literal['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64', 'ptr', 'bool', 'bytes'] | None = None,
-                            class_name: Annotated[str, Field(max_length=200)] | None = None) -> result_type:
+                            class_name: Annotated[str, Field(max_length=200)] | None = None,
+                            address: Annotated[str, Field(min_length=1, max_length=200, description=(
+                                'Another name for target'))] | None = None) -> result_type:
         """Write engine memory at an address or field path, typed by the class layout (or as_type). The old
         bytes are journaled; fnv_undo restores them. Saves are backed up before the first change."""
-        return await invoke('fnv_mem_write', lambda: live.mem_write(target, value, path, as_type, class_name), 'act')
+        return await invoke('fnv_mem_write',
+                            lambda: live.mem_write(one_target(target, address), value, path, as_type, class_name),
+                            'act')
 
     @server.tool(annotations=act)
     async def fnv_engine_call(function: Annotated[str, Field(min_length=1, max_length=300)],
@@ -1025,11 +1043,12 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default
         100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the
         largest answers (limit rows each, default 10)."""
-        if action == 'calls':
-            from .fnv_calllog import CallLog
-            return await invoke('fnv_journal', lambda: CallLog(project.state_dir).summary(since_seconds, limit or 10),
-                                action=action)
-        return await invoke('fnv_journal', lambda: live.journal_list(limit or 100, include_undone), action=action)
+        def answer():
+            if action == 'calls':
+                from .fnv_calllog import CallLog
+                return CallLog(project.state_dir).summary(since_seconds, limit or 10)
+            return live.journal_list(limit or 100, include_undone)
+        return await invoke('fnv_journal', answer, action=action)
 
     @server.tool(annotations=act)
     async def fnv_undo(count: Annotated[int, Field(ge=1, le=100)] = 1,
@@ -1887,7 +1906,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_wait_for(frames: Annotated[int, Field(ge=1, le=10000)] | None = None,
                            seconds: Annotated[float, Field(gt=0, le=600)] | None = None,
                            clock: Literal['game', 'real'] = 'game',
-                           predicate: Annotated[str, Field(min_length=1, max_length=2000)] | None = None,
+                           predicate: Annotated[str, Field(min_length=1, max_length=2000, description=(
+                               'A condition over memory and the frame counter, for example: frame >= 500; '
+                               '[0x011DEA0C]:u8 == 1; [[0x011DEA3C]+0x24]:f32 > 0 and frame >= 100'))] | None = None,
                            loaded: bool = False,
                            timeout: Annotated[int, Field(ge=1, le=600)] = 60,
                            max_frames: Annotated[int, Field(ge=1, le=10000)] = 3600) -> result_type:
@@ -1960,7 +1981,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                         op: Literal['set', 'list', 'clear'] | None = None,
                         location: Annotated[str, Field(max_length=200)] | None = None,
                         break_id: Annotated[int, Field(ge=0, le=100000)] | None = None,
-                        when: Annotated[str, Field(max_length=500)] | None = None,
+                        when: Annotated[str, Field(max_length=500, description=(
+                            'break: stop only when this holds, for example: frame >= 500; '
+                            '[0x011DEA0C]:u8 == 1; this.[0x08]:u32 == 0x1F and arg1:i32 > 3'))] | None = None,
                         hits: Annotated[int, Field(ge=1, le=100000)] | None = None,
                         thread: Literal['main', 'any'] | None = None,
                         do: Literal['stop', 'log'] | None = None,

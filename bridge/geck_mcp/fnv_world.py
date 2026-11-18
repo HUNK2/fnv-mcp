@@ -24,6 +24,12 @@ from .fnv_deep import HF_EXIT, HF_TABLE, HookError, decode_prologue
 from .fnv_link import hexs, word
 from .fnv_live import LiveError
 
+
+def did_you_mean_global(name, editor_ids):
+    """' Did you mean GameHour?' for an unknown global name, or ''."""
+    from .fnv_conv import did_you_mean
+    return did_you_mean(name, [e for e in editor_ids if e])
+
 _SCRATCH_LOCK = threading.Lock()   # vats_odds' write/call/read of its scratch float
 PLAYER = 0x011DEA3C
 DATA_HANDLER = 0x011C3F2C
@@ -196,7 +202,8 @@ class WorldTools:
         for key, value in (set_values or {}).items():
             g = by_name.get(str(key).lower())
             if not g:
-                raise LiveError('NO_GLOBAL', 'No global variable %r' % key)
+                raise LiveError('NO_GLOBAL', 'No global variable %r.%s'
+                                % (key, did_you_mean_global(key, [e['editorId'] for e in by_name.values()])))
             number = float(value)
             rounded = False
             if g['type'] in ('short', 'long') and not number.is_integer() \

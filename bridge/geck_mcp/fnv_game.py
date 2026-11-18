@@ -151,6 +151,51 @@ def post_close(pid):
     return len(found)
 
 
+def window_hung(pid):
+    """True when a visible window of pid stopped pumping messages (IsHungAppWindow), False when none did, None when it
+    cannot be told."""
+    try:
+        user32 = ctypes.windll.user32
+        return any(bool(user32.IsHungAppWindow(hwnd)) for hwnd, _ in visible_windows(pid))
+    except Exception:  # noqa: BLE001 - a diagnosis aid only
+        return None
+
+
+def idle_seconds():
+    """Seconds since the last keyboard or mouse input on this desktop (GetLastInputInfo), or None."""
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [('cbSize', wintypes.UINT), ('dwTime', wintypes.DWORD)]
+    try:
+        info = LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO), 0)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        return round(((ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def not_ready_cause(checks):
+    """(cause, sentence) for a launch whose companion never answered (COMPANION_NOT_READY, tool quality part 3).
+    checks: crash_log (path or None), companion_present (bool or None), pipe_exists, window_hung, idle_seconds.
+    In order: a crash log written since the launch; the companion DLL missing from the install the game started
+    from; the game not drawing frames (its pipe is there but silent, or its window is hung: the display is asleep,
+    KNOWN-ISSUES); else unknown."""
+    if checks.get('crash_log'):
+        return 'crashed', ('The game crashed while starting: a crash log was written since the launch (%s). '
+                           'Next: call fnv_crash to explain it.' % checks['crash_log'])
+    if checks.get('companion_present') is False:
+        return 'companion_missing', ('The engine companion is not in the install the game started from, so nothing '
+                                     'answers. Next: fnv_game quit, fnv_companion_install, then fnv_game launch.')
+    if checks.get('pipe_exists') or checks.get('window_hung'):
+        idle = checks.get('idle_seconds')
+        return 'not_drawing', ('The game started but is not drawing frames, so the companion does not answer: usually '
+                               'the display is asleep (KNOWN-ISSUES, monitors asleep at launch)%s. Next: wake the '
+                               'display and keep it on, then fnv_game quit force=true and fnv_game launch.'
+                               % ('; no input for %d s' % idle if isinstance(idle, (int, float)) and idle >= 60 else ''))
+    return 'unknown', ('The engine companion did not answer within the launch time. Next: call fnv_status, look at '
+                       'the game with fnv_screenshot (a dialog or a hang), then fnv_game quit and launch again.')
+
+
 MO2_BLOCKING_DIALOGS = ('Cannot launch program', 'Plugin error', 'Executable not found')
 
 
@@ -631,6 +676,10 @@ class Game:
                            'The engine companion did not answer (is it installed and enabled in the dev profile?)', pid)
                 break
             except GameError as e:
+                if e.code == 'COMPANION_NOT_READY':     # name the cause that fits (tool quality part 3)
+                    checks = self.not_ready_checks(layout, launched, pid)
+                    cause, sentence = not_ready_cause(checks)
+                    raise GameError('COMPANION_NOT_READY', sentence, {'cause': cause, **checks}) from e
                 # A direct start can be handed over: Steam's DRM ends the first FalloutNV.exe and starts the game
                 # again through Steam. Follow a new one that appears within HANDOVER_SECONDS.
                 successor = self._successor(pid, deadline) if direct and e.code == 'GAME_EXITED' else None
@@ -872,6 +921,31 @@ class Game:
         if ping.get('error'):
             raise GameError('COMPANION_UNREACHABLE', 'The game runs but the engine companion does not answer', ping)
         return {'phase': self.phase(ping)[0], 'pid': proc[0], 'alreadyRunning': True}
+
+    def not_ready_checks(self, layout, launched, pid):
+        """The facts not_ready_cause weighs, each best effort (None when it cannot be told)."""
+        out = {'crash_log': None, 'companion_present': None, 'pipe_exists': None, 'window_hung': None,
+               'idle_seconds': idle_seconds()}
+        try:
+            found = self.crash_since(launched)
+            out['crash_log'] = found['log'] if found and not found.get('duringShutdown') else None
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.check_companion_installed(layout)
+            out['companion_present'] = True
+        except GameError:
+            out['companion_present'] = False
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            name = self.link.pipe.rsplit('\\', 1)[-1].lower()
+            out['pipe_exists'] = name in {p.lower() for p in os.listdir('\\\\.\\pipe\\')}
+        except Exception:  # noqa: BLE001
+            pass
+        if pid and process_alive(pid):
+            out['window_hung'] = window_hung(pid)
+        return out
 
     def check_companion_installed(self, layout=None):
         layout = layout or self.layout()

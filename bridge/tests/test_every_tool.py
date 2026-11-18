@@ -121,7 +121,7 @@ class TitleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class EscapedErrorTests(unittest.IsolatedAsyncioTestCase):
-    """A refusal that escapes a tool keeps its code and sentence; a crash stays TOOL_ERROR with no detail."""
+    """A refusal that escapes a tool keeps its code and sentence; a crash is INTERNAL_ERROR with no detail."""
 
     async def test_codes(self):
         from geck_mcp.server import BridgeServer
@@ -153,7 +153,7 @@ class EscapedErrorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(value['error']['retrySafe'])
         self.assertEqual((coded['error']['code'], coded['outcome'], coded['error']['retrySafe']),
                          ('NO_SPEC', 'outcome_unknown', False))
-        self.assertEqual(crash['error']['code'], 'TOOL_ERROR')
+        self.assertEqual(crash['error']['code'], 'INTERNAL_ERROR')      # tool quality part 3 (was TOOL_ERROR)
         self.assertNotIn('secret detail', json.dumps(crash))
 
 

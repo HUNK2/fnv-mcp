@@ -41,10 +41,24 @@ TOKEN = re.compile(r'\s+|(?P<float>\d+\.\d+)|(?P<int>0[xX][0-9A-Fa-f]+|\d+)|(?P<
 I32_MIN, I32_MAX = -2 ** 31, 2 ** 31 - 1
 
 
+# Three valid forms, shown in the predicate parameters' descriptions and in every BAD_PREDICATE (part 3).
+PREDICATE_EXAMPLES = ('frame >= 500', '[0x011DEA0C]:u8 == 1', 'this.[0x08]:u32 == 0x1F and arg1:i32 > 3')
+NAMES = ('frame', 'main', 'this', 'reg', 'arg0', 'arg1', 'arg2', 'and', 'or', 'not')
+
+
 def _fail(text, pos, message):
     column = pos + 1
-    return ConvError('BAD_PREDICATE', 'Bad predicate at column %d: %s. Next: fix the text at that column and call '
-                     'again.' % (column, message), {'column': column, 'text': text})
+    end = '' if message.endswith(('.', '?')) else '.'
+    return ConvError('BAD_PREDICATE', 'Bad predicate at column %d: %s%s Valid forms: %s. Next: fix the text at that '
+                     'column and call again.' % (column, message, end, '; '.join(PREDICATE_EXAMPLES)),
+                     {'column': column, 'text': text, 'examples': list(PREDICATE_EXAMPLES)})
+
+
+def _guess(word, choices):
+    from .fnv_conv import nearest
+    hits = nearest(word, choices, 1)
+    return ". Did you mean '%s'?" % hits[0] if hits else ''
+
 
 
 def _tokenize(text):
@@ -260,7 +274,7 @@ class _Parser:
             raise self.fail("unexpected '%s'" % tok[1])
         elif tok[0] == 'name':
             raise self.fail("unknown name '%s' (values are numbers, [address]:type, this./argN./reg.X. reads, frame "
-                            "and main)" % tok[1])
+                            "and main)%s" % (tok[1], _guess(tok[1], NAMES)))
         else:
             raise self.fail('expected a value (a number, [address]:type, frame, main or "(") but found %s'
                             % self.found())
@@ -338,7 +352,8 @@ class _Parser:
         self.expect('op', ':', "':' and a type (u8 i8 u16 i16 u32 i32 f32)")
         tok = self.peek()
         if tok[0] != 'name' or tok[1] not in TYPES:
-            raise self.fail('unknown type %s (use u8 i8 u16 i16 u32 i32 f32)' % self.found())
+            raise self.fail('unknown type %s (use u8 i8 u16 i16 u32 i32 f32)%s'
+                            % (self.found(), _guess(str(tok[1]), TYPES) if tok[0] == 'name' else ''))
         self.take()
         self.code.load(base, value, offsets, tok[1])
 

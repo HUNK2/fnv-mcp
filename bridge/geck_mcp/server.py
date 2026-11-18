@@ -129,7 +129,12 @@ class BridgeServer(MCPServer):
             error = wrapped.__cause__
             code = getattr(error, 'code', None)
             if not (isinstance(code, str) and code) and not isinstance(error, ValueError):
-                raise
+                from .fnv_conv import internal_error, next_step     # a bug: no Python text to the agent
+                message, evidence = internal_error(error if isinstance(error, BaseException) else wrapped)
+                envelope = self._envelope(name, 'INTERNAL_ERROR', message, next_step('INTERNAL_ERROR'))
+                envelope['data'] = evidence
+                return CallToolResult(content=[TextContent(type='text', text=json.dumps(envelope))],
+                                      structured_content=envelope, is_error=True)
             envelope = self._envelope(name, code if isinstance(code, str) and code else 'INVALID_ARGUMENT',
                                       str(error), 'Read the message, fix what it names, and call again.')
             if getattr(error, 'uncertain', False):

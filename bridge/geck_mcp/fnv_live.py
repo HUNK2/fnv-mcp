@@ -22,7 +22,7 @@ from .fnv_facts import FACTS
 from .fnv_game import Game, GameError
 from .fnv_link import LinkError, element_value, hexs, word
 from .fnv_args import as_bool, capped, form_id, is_form_id, ranged, readable_type
-from .fnv_conv import next_step
+from .fnv_conv import did_you_mean, nearest, next_step
 from .fnv_journal import Journal
 from .fnv_state import GameIdentity
 
@@ -337,7 +337,7 @@ class LiveService:
     def _envelope_code(self, e):
         code = getattr(e, 'code', None)
         if not isinstance(code, str) or not code:
-            return 'INVALID_ARGUMENT' if isinstance(e, ValueError) else 'FNV_ERROR'
+            return 'INVALID_ARGUMENT' if isinstance(e, ValueError) else 'INTERNAL_ERROR'
         if code in self.GAME_NOT_RUNNING_CODES:
             return 'GAME_NOT_RUNNING'
         if code in self.NO_PROCESS_CODES:
@@ -373,12 +373,20 @@ class LiveService:
             outcome = 'failed_before_change'
             recovery = next_step(code) or 'Fix the input or the game state (fnv_status) and call again.'
         data = getattr(e, 'evidence', None)
+        message = str(e)
+        if code == 'INTERNAL_ERROR':           # a bug: no Python text to the agent (tool quality part 3)
+            from .fnv_conv import internal_error
+            message, data = internal_error(e)
+        elif code == 'GAME_NOT_RUNNING':       # the pipe error is evidence, the message plain words
+            message = 'The game is not running.'
+            data = dict(data, detail=str(e)) if isinstance(data, dict) else \
+                ({'detail': str(e)} if data is None else {'detail': str(e), 'evidence': data})
         if open_ids:
             data = dict(data, journalIds=open_ids) if isinstance(data, dict) else \
                 ({'journalIds': open_ids} if data is None else {'evidence': data, 'journalIds': open_ids})
         return {'ok': False, 'operationId': operation_id, 'operation': name, 'projectId': self.project.project_id,
                 'outcome': outcome, 'data': data,
-                'error': {'code': code, 'message': str(e), 'retrySafe': outcome == 'failed_before_change',
+                'error': {'code': code, 'message': message, 'retrySafe': outcome == 'failed_before_change',
                           'recovery': recovery},
                 'game': self._identity_or_none(), 'elapsedMs': round((time.monotonic() - started) * 1000)}
 
@@ -543,8 +551,11 @@ class LiveService:
             # tool (W2), and plugin commands are not in the engine map to refuse them by name (review I4).
             found = self.editor_id(ref)
             if not found:
-                raise LiveError('REF_NOT_FOUND', 'No form named %r in the EditorID index. Next: pass its form id '
-                                '(fnv_record action=find finds it by name), or a Plugin.esp:LOCALID.' % ref, {'spec': ref})
+                close = self.editor_id_nearest(ref)
+                raise LiveError('REF_NOT_FOUND', 'No form named %r in the EditorID index.%s Next: pass its form id '
+                                '(fnv_record action=find finds it by name), or a Plugin.esp:LOCALID.'
+                                % (ref, ' Did you mean %s?' % ', '.join(close) if close else ''),
+                                {'spec': ref, 'didYouMean': close})
             expr = self.form_expr(found['formId'])
         else:
             raise ValueError('Not a reference: %r (use player, crosshair, a form id or an EditorID)' % ref)
@@ -587,6 +598,17 @@ class LiveService:
 
     PREFERRED = ('QUST', 'REFR', 'ACHR', 'ACRE', 'NPC_', 'CREA', 'GLOB', 'WEAP', 'ARMO', 'ALCH', 'MISC', 'KEYM',
                  'AMMO', 'BOOK', 'CONT', 'DOOR', 'ACTI', 'STAT', 'CELL', 'PACK', 'SPEL', 'PERK', 'FACT')
+
+    def editor_id_nearest(self, edid, n=3):
+        """The EditorIDs of the loaded indexes closest to edid (for "did you mean"); [] when there are none."""
+        try:
+            self.editor_id(edid)          # loads the indexes
+        except Exception:  # noqa: BLE001 - suggestions are best effort
+            return []
+        names = set()
+        for entries in (getattr(self, '_indexes', None) or {}).values():
+            names.update(k for k in entries if isinstance(k, str))
+        return nearest(edid, names, n)
 
     def editor_id(self, edid):
         """EditorID -> runtime form id via the offline master indexes (state/index) and the live load order:
@@ -851,12 +873,12 @@ class LiveService:
                 'uses': ['Script variable list and ScriptLocals (decomp layouts; xNVSE VariableInfo)']}
 
     def actor_values(self, ref, names=None):
-        self.in_game()
-        r = self.resolve_actor(ref)
         names = names or fnv_facts.ACTOR_VALUES
         bad = [n for n in names if n not in fnv_facts.ACTOR_VALUES]
         if bad:
-            raise ValueError('Unknown actor values: %s' % ', '.join(bad))
+            raise ValueError('Unknown actor values: %s.%s' % (', '.join(bad), did_you_mean(bad[0], fnv_facts.ACTOR_VALUES)))
+        self.in_game()
+        r = self.resolve_actor(ref)
         exprs = [e % n for n in names for e in ('GetAV %s', 'GetBaseAV %s', 'GetPermanentActorValue %s')]
         v = self.values(exprs, r['ptr'])
         effects = self.effects(ref, _checked=True).get('effects', [])
@@ -1174,8 +1196,12 @@ class LiveService:
             match = next((f for f in fields if f['name'] == part), None) or \
                 next((f for f in fields if f['name'].lower() == part.lower()), None)
             if not match:
-                raise LiveError('NO_FIELD', '%s has no field %r' % (current_class, part),
-                                {'fields': [f['name'] for f in fields][:200]})
+                names = [f['name'] for f in fields]
+                close = nearest(part, names)
+                raise LiveError('NO_FIELD', '%s has no field %r.%s It has %d fields: fnv_class layout lists them.'
+                                % (current_class, part, ' Did you mean %s?' % ', '.join(close) if close else '',
+                                   len(names)),
+                                {'didYouMean': close, 'fieldCount': len(names), 'fields': names[:200]})
             steps.append({'field': match['name'], 'class': match['class'], 'offset': '0x%X' % match['absolute'],
                           'type': match['type'], 'checked': match.get('checked'), 'span': match.get('span')})
             field_address = address + match['absolute']
@@ -1390,7 +1416,14 @@ class LiveService:
             get, put = 'GetNumericGameSetting "%s"' % name, 'SetNumericGameSetting "%s" %s' % (name, float(value))
         old = fnv_link.value_of(self.link.eval(get))
         if old is None:
-            raise LiveError('NO_SETTING', 'The running game has no setting %r' % name)
+            close = []
+            try:
+                close = nearest(name, [s.get('setting') or s['name'] for s in self.engine().statics
+                                       if s.get('kind') == 'Setting'])
+            except Exception:  # noqa: BLE001 - no engine map: no suggestions
+                pass
+            raise LiveError('NO_SETTING', 'The running game has no setting %r.%s'
+                            % (name, ' Did you mean %s?' % ', '.join(close) if close else ''), {'didYouMean': close})
         self.changing('setting ' + name)
         result = self.console(put)
         new = fnv_link.value_of(self.link.eval(get))
@@ -1496,7 +1529,8 @@ class LiveService:
             # SetAV changes the base value; for NPC skills the engine derives the value from SPECIAL, so only
             # ForceAV moves them. Both are read back, and the result says whether the value changed.
             if not target or target not in fnv_facts.ACTOR_VALUES:
-                raise ValueError('%s needs target = actor value name' % action)
+                raise ValueError('%s needs target = actor value name.%s'
+                                 % (action, did_you_mean(target, fnv_facts.ACTOR_VALUES) if target else ''))
             before = self.values(['GetAV %s' % target, 'GetBaseAV %s' % target], r['ptr'])
             verb = 'SetAV' if action == 'set_av' else 'ForceAV'
             command = '%s %s %s' % (verb, target, _num(value))

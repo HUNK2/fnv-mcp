@@ -1,8 +1,13 @@
 """Shared conventions for the action-style fnv_* tools (fnv_<domain>(action=..., ...)).
 See docs/FNV-TOOL-CONVENTIONS.md. Small on purpose: dispatch, paging, verdicts, next steps, references."""
+import difflib
+import logging
 import re
+import traceback
+from pathlib import Path
 
 PAGE_MAX = 500
+log = logging.getLogger('geck_mcp')
 
 
 class ConvError(Exception):
@@ -73,7 +78,56 @@ NEXT_STEPS = {
                       'fnv_setup_check lists what else is missing.',
     'REF_NOT_FOUND': 'No such reference: check the spelling, or find it with fnv_record action=find or fnv_refs_near.',
     'UNKNOWN_ACTION': 'Call the tool again with one of the valid actions.',
+    'INTERNAL_ERROR': 'The tool hit a bug and the call changed nothing: report it with this message (the traceback '
+                      'is in the bridge log). Another tool or other arguments may do the job meanwhile.',
 }
+
+
+def nearest(name, candidates, n=3):
+    """Up to n candidates closest to name, for "did you mean": the same name in other case first, then names that
+    start with it or it starts with, then names that contain it, then the closest spellings (difflib)."""
+    key = str(name or '').strip().lower()
+    if not key:
+        return []
+    by_lower = {}
+    for c in candidates:
+        if isinstance(c, str) and c:
+            by_lower.setdefault(c.lower(), c)
+    out = []
+
+    def add(lows):
+        for low in lows:
+            if by_lower[low] not in out:
+                out.append(by_lower[low])
+    add([key] if key in by_lower else [])
+    add(sorted((low for low in by_lower if low != key and (low.startswith(key) or key.startswith(low))
+                and min(len(low), len(key)) >= 3), key=lambda low: (abs(len(low) - len(key)), low)))
+    if len(out) < n and len(key) >= 3:
+        add(sorted((low for low in by_lower if key in low and low not in (o.lower() for o in out)), key=len))
+    if len(out) < n:
+        pool = list(by_lower)
+        if len(pool) > 5000:
+            pool = [low for low in pool if low[:1] == key[:1] and abs(len(low) - len(key)) <= 3]
+        add(difflib.get_close_matches(key, pool, n=n, cutoff=0.75 if len(key) > 4 else 0.5))
+    return out[:n]
+
+
+def did_you_mean(name, candidates, n=3):
+    """' Did you mean X, Y?' or '' when nothing is close."""
+    hits = nearest(name, candidates, n)
+    return ' Did you mean %s?' % ', '.join(hits) if hits else ''
+
+
+def internal_error(e):
+    """(message, evidence) for an exception no tool meant to raise: the type and the place in the bridge code, never
+    the exception's own text (it can be a Python detail or hold a path). The traceback goes to the bridge log."""
+    frames = traceback.extract_tb(e.__traceback__) if e.__traceback__ else []
+    ours = [f for f in frames if 'geck_mcp' in f.filename.replace('\\', '/')]
+    frame = (ours or frames or [None])[-1]
+    where = '%s:%d' % (Path(frame.filename).name, frame.lineno) if frame else 'an unknown place'
+    log.error('tool bug: %s in %s', type(e).__name__, where, exc_info=(type(e), e, e.__traceback__))
+    return ('The tool hit a bug: %s in %s.' % (type(e).__name__, where),
+            {'bug': type(e).__name__, 'where': where})
 
 
 def next_step(code):
