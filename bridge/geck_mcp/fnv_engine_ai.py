@@ -4,7 +4,7 @@ fnv_detection, fnv_reaction, fnv_combat, fnv_perk_entries, fnv_pathing, fnv_rayc
 engine's own state and call its own read-only functions (on the main thread through the engine companion).
 Addresses, layouts and the safe/unsafe split come from reading the decomp; many of these functions are not
 proven names, so every result lists the functions it used ('uses') and each tool was checked in the running game
-(docs/FNV-LIVE-TOOLS.md, "Engine AI tools").
+(docs/history/live-tools-reference-2026-11-18.md, "Engine AI tools").
 """
 import math
 import struct

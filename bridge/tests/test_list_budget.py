@@ -2,9 +2,11 @@
 
 - The size budget: the whole listing (every tool as it goes on the wire) must not grow back. Measured on
   2026-11-18: 231,716 characters at 4a3dc9f (138 tools); 197,668 after dropping the output schema stub and the
-  default annotation values; 198,281 with the brief parameters. A new tool or a longer description spends from the headroom; raise BUDGET only with
-  a reason in the commit.
-- The opt-in `core` toolset: 23 everyday tools (38,298 characters, about 9,600 tokens); the default list stays every tool; fnv_guide find marks a
+  default annotation values; 198,281 with the brief parameters; 217,593 on the merged tree, where every parameter
+  has a description (187 had none, about 19,000 characters). A new tool or a longer description spends from the
+  headroom; raise BUDGET only with a reason in the commit.
+- The opt-in `core` toolset: 23 everyday tools (42,260 characters with every parameter described, about 10,600
+  tokens); the default list stays every tool; fnv_guide find marks a
   match outside the active toolsets."""
 import json
 import sys
@@ -22,8 +24,8 @@ from geck_mcp.server import make_server, toolset_list  # noqa: E402
 from geck_mcp.toolsets import ALWAYS, CORE_TOOLS, registered  # noqa: E402
 
 BEFORE = 231716          # characters at 4a3dc9f, the start of the tool quality pass
-BUDGET = 202000          # 197,668 measured after part 5, plus about 2% headroom
-CORE_BUDGET = 40000      # the core list: 38,298 measured, about 9,600 tokens
+BUDGET = 219500          # 217,593 measured with every parameter described, plus about 1% headroom
+CORE_BUDGET = 43000      # the core list: 42,260 measured, about 10,600 tokens
 
 
 def listing_size(tools):
@@ -45,7 +47,7 @@ class ListBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_whole_list_stays_within_budget(self):
         tools = await self.tools()
         size = listing_size(tools)
-        self.assertLess(BUDGET, BEFORE * 0.9)
+        self.assertLess(BUDGET, BEFORE * 0.95)                     # the list stays at least 5% under the start
         self.assertLessEqual(size, BUDGET, 'the tool list grew to %d characters' % size)
 
     async def test_no_annotation_value_equals_the_mcp_default(self):

@@ -208,6 +208,9 @@ EXAMPLES = {
 }
 
 ACTIONS = {
+    'fnv_journal': {
+        'list': 'Every change made through the act tools, with old and new values and whether it can be undone.',
+        'calls': "The bridge's own call log: calls and failures per tool and per error code, the slowest and largest answers."},
     'fnv_anim': {
         'state': 'Current and queued animation group per body section, and the sequence playing.',
         'play': 'Play an animation group or an IDLE form on the reference.',

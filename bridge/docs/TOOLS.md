@@ -373,7 +373,7 @@ Place things in the running game; every placement is journaled for fnv_author ex
 | `position` | number[3] |  |  | [x, y, z] in game units |
 | `near` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `offset` | number[3] |  |  | [x, y, z] in game units |
-| `rotation` | number[3] |  |  | [x, y, z] angles in degrees. For at and array: the new object's rotation. For rotate: degrees added to the current angles. |
+| `rotation` | number[3] |  |  | [x, y, z] angles in degrees |
 | `scale` | number | above 0, up to 10 |  | Scale factor. For action=at it sets the new object's scale; for action=scale it is the new scale of ref. |
 | `shape` | string | `row`, `grid`, `circle` |  | For action=array: row, grid or circle layout. |
 | `count` | integer | 1 to 100 |  | For action=array: how many objects to place. |
@@ -459,6 +459,7 @@ Forms at run time. create type=<STAT, MISC, ARMO, ...> makes an empty form, or c
 | `records` | string[] | each: up to 128 characters |  | For reload: optional list of records to restrict the reload to. |
 | `since` | number |  |  | For changes: only report changes after this point in time (a number); leave null for everything this session. |
 | `form` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
+| `since_seconds` | number | above 0, up to 2678400 |  | changes: only the last N seconds (instead of since) |
 
 Example:
 
@@ -476,7 +477,7 @@ Change a field of a form in memory (weapon damage, NPC data, package data...) by
 | --- | --- | --- | --- | --- |
 | `form` | string | up to 200 characters | required | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `field` | string | up to 300 characters | required | Field path in the form's class layout, such as damage or data.value; nested fields are joined with dots. |
-| `value` | any |  | required | The new value: a number, or true/false for bool. The old value is journaled. |
+| `value` | boolean \| integer \| number \| string |  | required | A number, true/false or text for the field |
 | `as_type` | string | `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `f32`, `f64`, `ptr`, `bool` |  | Write the field as this type instead of the layout's: u8, i8, u16, i16, u32, i32, f32, f64, ptr or bool. |
 
 Example:
@@ -928,11 +929,12 @@ The 3D node tree of a loaded reference: each node's class, name, hidden flag, lo
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `ref` | string | up to 200 characters | `"player"` | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
-| `depth` | integer | 0 to 30 | `6` | How many node levels below the root to read, 0 to 30. Default 6. |
-| `max_nodes` | integer | 1 to 2000 | `300` | Maximum number of nodes returned, 1 to 2000. Default 300. |
-| `first_person` | boolean |  | `false` | If true, read the player's first-person skeleton instead of ref. Default false. |
-| `name_filter` | string | up to 120 characters |  | Keep only nodes whose name contains this text (not case-sensitive). |
+| `ref` | string | up to 200 characters | `"player"` | The loaded reference: player, a form id or an EditorID |
+| `depth` | integer | 0 to 30 | `6` | Levels below the root |
+| `max_nodes` | integer | 1 to 2000 | `300` | Stop after this many nodes (capped says so) |
+| `first_person` | boolean |  | `false` | The player's first-person skeleton |
+| `name_filter` | string | up to 120 characters |  | Keep nodes whose name contains this text |
+| `brief` | boolean |  | `true` | The tree as indented lines with a count per class (default); false: every node's transforms, flags, geometry, textures, controllers and extra data |
 
 Example:
 
@@ -1178,11 +1180,12 @@ Read engine memory. With a field path (m_pBaseProcess.m_eProcessType) the fields
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `target` | string | up to 200 characters | required | 0xADDRESS, or a reference/form spec (player, form id, EditorID) |
-| `path` | string | up to 300 characters |  | Field path from the object at target, such as m_pBaseProcess.m_eProcessType; pointers are followed. Omitted reads the object itself. |
-| `as_type` | string | `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `f32`, `f64`, `ptr`, `cstr` |  | Read the value as this type instead of the layout's: u8, i8, u16, i16, u32, i32, f32, f64, ptr or cstr (a C string). |
-| `class_name` | string | up to 200 characters |  | Class to use for the layout at target, such as Actor, when the runtime class (RTTI) is unknown or wrong. |
-| `length` | integer | 1 to 4096 |  | For a struct or raw read: number of bytes to read, 1 to 4096. Default: the class size, else 64. |
+| `target` | string | up to 200 characters |  | 0xADDRESS, or a reference/form spec (player, form id, EditorID) |
+| `path` | string | up to 300 characters |  | Dotted field path from the object, e.g. m_pBaseProcess.m_eProcessType |
+| `as_type` | string | `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `f32`, `f64`, `ptr`, `cstr` |  | Read as this type instead of the layout's |
+| `class_name` | string | up to 200 characters |  | The class at target when RTTI cannot tell |
+| `length` | integer | 1 to 4096 |  | Bytes to read when there is no type |
+| `address` | string | up to 200 characters |  | Another name for target |
 
 Example:
 
@@ -1292,11 +1295,12 @@ Write engine memory at an address or field path, typed by the class layout (or a
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `target` | string | up to 200 characters | required | 0xADDRESS, or a reference or form (player, form id, EditorID) whose memory to write. |
-| `value` | any |  | required | The value to write: a number, true/false for bool, or a hex string for as_type=bytes. |
-| `path` | string | up to 300 characters |  | Field path from the object at target, such as m_fHealth; pointers are followed. Omitted writes at target itself. |
-| `as_type` | string | `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `f32`, `f64`, `ptr`, `bool`, `bytes` |  | Write as this type instead of the layout's: u8, i8, u16, i16, u32, i32, f32, f64, ptr, bool or bytes. |
-| `class_name` | string | up to 200 characters |  | Class to use for the layout at target when the runtime class (RTTI) is unknown or wrong. |
+| `value` | boolean \| integer \| number \| string |  | required | A number, true/false, or hex bytes ("0A FF 00") with as_type=bytes |
+| `target` | string | up to 200 characters |  | 0xADDRESS, or a reference/form spec (player, form id, EditorID) |
+| `path` | string | up to 300 characters |  | Dotted field path from the object, e.g. m_pBaseProcess.m_eProcessType |
+| `as_type` | string | `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `f32`, `f64`, `ptr`, `bool`, `bytes` |  | Write as this type instead of the layout's |
+| `class_name` | string | up to 200 characters |  | The class at target when RTTI cannot tell |
+| `address` | string | up to 200 characters |  | Another name for target |
 
 Example:
 
@@ -1331,7 +1335,7 @@ Set a quest stage, an objective's completed/displayed state (index), a script va
 | --- | --- | --- | --- | --- |
 | `target` | string | up to 200 characters | required | The quest (stage, objective, variable), the reference (variable) or the global, by EditorID or form id. |
 | `kind` | string | `stage`, `objective_completed`, `objective_displayed`, `variable`, `global` | required | What to set: stage, objective_completed, objective_displayed, variable or global. |
-| `value` | any |  | required | stage: the stage number. objective_*: true or false. variable and global: the number to store. |
+| `value` | boolean \| integer \| number \| string |  | required | stage: the stage number; objective_*: true/false; variable, global: the number |
 | `name` | string | up to 128 characters |  | For kind=variable: the script variable name. |
 | `index` | integer | 0 to 100000 |  | For kind=objective_completed or objective_displayed: the objective index. |
 
@@ -1352,7 +1356,7 @@ Make an actor do something now: evaluate_package, start_combat (target), stop_co
 | `ref` | string | up to 200 characters | required | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `action` | string | up to 40 characters | required | What the actor does: evaluate_package, start_combat, stop_combat, add_package, remove_package, play_idle, move_to, kill, resurrect, enable, disable, equip, unequip, add_item, remove_item, cast, look_at, say_to, set_av, force_av or set_position. |
 | `target` | string | up to 200 characters |  | What the action works on: the combat target, package, idle, move_to destination, item, spell or the actor value name (set_av, force_av). |
-| `value` | any |  | `null` | For equip, unequip, add_item, remove_item: the item count. For set_av and force_av: the number to set. For set_position: [x, y, z] in game units. |
+| `value` | boolean \| integer \| number \| string \| number[] |  |  | set_av / force_av: the number; add_item / remove_item: the count; set_position: [x, y, z] |
 
 Example:
 
@@ -1428,12 +1432,19 @@ Example:
 
 **Kind:** read · **Toolset:** game
 
-Every change made through the act tools (memory writes, engine calls, settings, console lines, actor actions, input), with old and new values and whether it can be or was undone.
+list (default): every change made through the act tools (memory writes, engine calls, settings, console lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default 100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the largest answers (limit rows each, default 10).
+
+**Actions:**
+
+- `list` (default): Every change made through the act tools, with old and new values and whether it can be undone.
+- `calls`: The bridge's own call log: calls and failures per tool and per error code, the slowest and largest answers.
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `limit` | integer | 1 to 1000 | `100` | Maximum number of entries returned, newest last, 1 to 1000. Default 100. |
+| `action` | string | `list`, `calls` | `"list"` | What to do: list (the journal of changes made through the act tools, default) or calls (a summary of the bridge's own call log). |
+| `limit` | integer | 1 to 1000 |  | Maximum number of entries returned, newest last, 1 to 1000. Default 100. |
 | `include_undone` | boolean |  | `true` | If true (default), also list changes that were already undone. |
+| `since_seconds` | integer | 0 to 2678400 |  | calls: only the calls of the last N seconds (default: the whole log, 30 days) |
 
 Example:
 
@@ -1536,7 +1547,7 @@ Block inside the game until one condition holds, in one request: frames=N (N fra
 | `frames` | integer | 1 to 10000 |  | Wait until this many frames have passed. Give exactly one condition. |
 | `seconds` | number | above 0, up to 600 |  | Wait this many seconds, measured by the clock choice. Give exactly one condition. |
 | `clock` | string | `game`, `real` | `"game"` | For seconds: game (default) counts game seconds scaled by the time multiplier, real counts wall-clock seconds. |
-| `predicate` | string | up to 2000 characters |  | Wait until this condition text is true, such as frame >= 500 or [0x011DEA0C]:u8 == 1. |
+| `predicate` | string | up to 2000 characters |  | Wait until this condition text is true, such as frame >= 500 or [0x011DEA0C]:u8 == 1. Examples: frame >= 500; [0x011DEA0C]:u8 == 1; [[0x011DEA3C]+0x24]:f32 > 0 and frame >= 100 |
 | `loaded` | boolean |  | `false` | If true, wait until the game has finished loading and is simulating. Default false. |
 | `timeout` | integer | 1 to 600 | `60` | Real seconds to wait before giving up. Default 60. |
 | `max_frames` | integer | 1 to 10000 | `3600` | Upper limit on frames run during a predicate wait. Default 3600. |
@@ -2237,7 +2248,7 @@ Test dialogue end to end: the player talks to the speaker (start), then each cho
 | --- | --- | --- | --- | --- |
 | `speaker` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `choices` | string[] | each: up to 200 characters |  | Responses to pick in order: an option index (0 = first shown), a substring of the prompt, or an INFO form id. Omitted returns the options shown. |
-| `start` | boolean |  | `true` | If true (default), the player first starts talking to speaker. False continues the conversation on screen. |
+| `start` | boolean |  | `true` | Start the conversation first (false: one is already open) |
 | `close` | boolean |  | `false` | If true, end the conversation after the last choice. Default false leaves it open. |
 | `timeout_seconds` | integer | 3 to 180 | `30` | Seconds to wait for the speaker to finish each line and for options to appear, 3 to 180. Default 30. |
 
@@ -2537,6 +2548,7 @@ The game's threads. list (default): every thread of the game, its start routine 
 | `samples` | integer | 1 to 20 | `5` | For hang: how many stack samples to take, 1 to 20. Default 5. |
 | `interval_ms` | integer | 50 to 5000 | `250` | For hang: milliseconds between samples, 50 to 5000. Default 250. |
 | `all_threads` | boolean |  | `false` | For hang: if true, sample every thread, not only the main thread. Default false. |
+| `brief` | boolean |  | `true` | A short answer (default): list without stacks; hang with one stack of names per thread. false: every sample, frame address and local |
 
 Example:
 
@@ -2845,7 +2857,7 @@ Source-level debugger for the running game. break op=set location=<function | 0x
 | `op` | string | `set`, `list`, `clear` |  | For action=break: set creates a breakpoint (needs location), list shows them, clear removes one (break_id). Omitted with no location behaves as list. |
 | `location` | string | up to 200 characters |  | For break, until and skip: a function name, 0xADDRESS, file:line, or 'fault' (break only) naming where to stop or resume. |
 | `break_id` | integer | 0 to 100000 |  | For action=break op=clear: the id of the breakpoint to remove. |
-| `when` | string | up to 500 characters |  | For break op=set: a predicate such as 'frame >= 100'; the breakpoint only counts or stops when it holds. |
+| `when` | string | up to 500 characters |  | For break op=set: a predicate such as 'frame >= 100'; the breakpoint only counts or stops when it holds. Examples: frame >= 500; [0x011DEA0C]:u8 == 1; this.[0x08]:u32 == 0x1F and arg1:i32 > 3 |
 | `hits` | integer | 1 to 100000 |  | For break op=set: stop from the Nth hit that passes the when predicate (1 stops on the first). |
 | `thread` | string | `main`, `any` |  | For break op=set: main stops only on the main thread, any stops on whichever thread hits it. |
 | `do` | string | `stop`, `log` |  | For break op=set: stop (halt the game at the breakpoint) or log (record the log expressions and keep running). |
@@ -3029,7 +3041,7 @@ Change what an engine function does, live: skip = do not run it and return value
 | --- | --- | --- | --- | --- |
 | `function` | string | up to 300 characters | required | Engine function: proven name (Actor::GetLevel) or address |
 | `action` | string | `skip`, `result`, `arg`, `script`, `read`, `remove`, `list` | `"skip"` | skip bypasses the function and returns value; result runs it and replaces its result; arg replaces one parameter; script runs a console line on each call; read shows hit info; remove deletes the hook; list shows hooks. Default skip. |
-| `value` | any |  | `null` | The value to return (skip), the replacement result (result) or the replacement parameter (arg). |
+| `value` | boolean \| integer \| number \| string |  |  | The value to return (skip), the replacement result (result) or the replacement parameter (arg). |
 | `value_type` | string | `int`, `float`, `bool`, `ptr`, `ref`, `form` |  | How to interpret value: int, float, bool, ptr, ref or form. |
 | `arg` | integer | 0 to 31 |  | For action=arg: index of the parameter to replace, starting at 0. |
 | `filter` | object |  |  | Only apply the hook to matching calls: {on: this, caller or param0..7, ref or value}. |

@@ -129,6 +129,27 @@ class ToolSearchTableTests(unittest.TestCase):
                 misses.append('%r: wanted %s, got %s' % (phrase, tool, top))
         self.assertEqual(misses, [])
 
+    def test_instructions_first_tool_lines_are_found_by_search(self):
+        """Each "problem: first tool" line of the server instructions works as a search too: the problem's words
+        find the line's first tool in the first three tools (a guide may rank above them)."""
+        import re
+        from geck_mcp.server import INSTRUCTIONS
+        lines = INSTRUCTIONS.split('First tool for each problem', 1)[1].split('): ', 1)[1]
+        lines = lines.split(' Act tools change', 1)[0].rstrip('.').split('; ')
+        self.assertGreaterEqual(len(lines), 12)
+        misses, checked = [], 0
+        for line in lines:
+            problem, answer = line.split(': ', 1)
+            named = re.findall(r'fnv_[a-z_]+', answer)
+            if not named or named[0] == 'fnv_guide':          # a guide, or "fnv_guide engine": not a tool search
+                continue
+            checked += 1
+            top = [r['name'] for r in tool_rows(self.tools.run('find', problem, limit=10))[:3]]
+            if named[0] not in top:
+                misses.append('%r: wanted %s, got %s' % (problem, named[0], top))
+        self.assertGreaterEqual(checked, 12)
+        self.assertEqual(misses, [])
+
     def test_expected_action(self):
         misses = []
         for row in TABLE:

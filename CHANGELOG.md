@@ -29,6 +29,31 @@ The first version of the fork. The entries below this one are geck-mcp-nv's own 
   reports how much sank or floats and any overhang, warns on steep ground with a suggested heading, and refuses
   ground rising more than the object's height (`TOO_STEEP`). `check` judges the footprint; `snap align=true` fits
   the slope over it and no longer sinks aligned objects a few units.
+- **Finding the right tool:** `fnv_guide find` matches whole words and word stems, finds a single action of a
+  tool and gives an example call for each match; every tool has task phrases, and a table of plain task phrases
+  is tested ("put a building on a slope" finds `fnv_place`).
+- **Errors say what to do:** a bug in a tool comes back as `INTERNAL_ERROR`, not as Python text; a misspelled
+  field, EditorID, actor value, setting, global or function name gets "did you mean"; "the game is not running"
+  is a plain sentence; `COMPANION_NOT_READY` names its likely cause (crashed, companion missing, or the game not
+  drawing frames). `fnv_mem_read` and `fnv_mem_write` accept `address` for `target`; predicate parameters show
+  valid examples.
+- **Every tool parameter has a description**, and a test keeps it so. Rotation is in degrees everywhere, `value`
+  is typed, `fnv_form` takes `since_seconds`; the old shapes still work.
+- **A call log:** every tool call adds one line to `state/fnv/calls.jsonl` (tool, action, result code, time, answer
+  size; no argument values and no answer content), kept 30 days. `fnv_journal action=calls` shows failure rates,
+  error codes and the slowest and largest calls.
+- **A smaller tool list:** the answer schema goes out on `fnv_status` only and default annotation values are left
+  out; with every parameter described the list is about 6% smaller than before (217,593 characters, was
+  231,716). An opt-in `core` toolset has 23 everyday tools (`"toolsets": ["core"]`). `fnv_threads` and
+  `fnv_scene_graph` answer briefly by default; `brief=false` gives the full answer.
+- **Documentation:** `bridge/docs/TOOLS.md` is the tool reference, generated from the live tool list and kept
+  current by a test. The live-tools document is split by purpose and its dated material moved to
+  `bridge/docs/history/`; `bridge/docs/README.md` is the index. Known issues now has the startup hang when the
+  monitors are asleep.
+- **Guidance for agents:** the server instructions give the first call, five rules, then the first tool for each
+  common problem. Six new guides (`start`, `build-a-place`, `test-a-mod`, `quest-dialogue`, `npc-ai-combat`,
+  `safety-undo`); every guide is also an MCP prompt. `bridge/docs/AGENT-GUIDE.md` is a page to copy into a mod
+  project for its own agent; `AGENTS.md` at the root points agents to `CLAUDE.md`.
 - **No private data needed:** the watch hooks find their functions by address, so an engine map built without
   the fnvsym proof table is enough; the `fnv_name_*` tools are an optional extra that needs `FNVSYM_ROOT`.
 - **A project file for the game alone** (`projects/example-fnv.json`): `plugin` and `spec` are optional.

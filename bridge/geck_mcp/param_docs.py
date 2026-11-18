@@ -13,9 +13,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                                  'unequip, add_item, remove_item, cast, look_at, say_to, set_av, force_av or '
                                  'set_position.',
                        'target': 'What the action works on: the combat target, package, idle, move_to destination, '
-                                 'item, spell or the actor value name (set_av, force_av).',
-                       'value': 'For equip, unequip, add_item, remove_item: the item count. For set_av and force_av: '
-                                'the number to set. For set_position: [x, y, z] in game units.'},
+                                 'item, spell or the actor value name (set_av, force_av).'},
  'fnv_actor_values': {'names': 'Actor value names to read, such as Health, ActionPoints or Strength. Omitted reads all '
                                '77. An unknown name is refused.'},
  'fnv_anim': {'action': 'What to do: state (current/queued groups), play (start an animation), groups (list groups '
@@ -227,8 +225,6 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                   'limit': 'For action=tree: maximum responses returned. Default 60.'},
  'fnv_dialogue_choose': {'choices': 'Responses to pick in order: an option index (0 = first shown), a substring of the '
                                     'prompt, or an INFO form id. Omitted returns the options shown.',
-                         'start': 'If true (default), the player first starts talking to speaker. False continues the '
-                                  'conversation on screen.',
                          'close': 'If true, end the conversation after the last choice. Default false leaves it open.',
                          'timeout_seconds': 'Seconds to wait for the speaker to finish each line and for options to '
                                             'appear, 3 to 180. Default 30.'},
@@ -293,7 +289,6 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                        'everything this session.'},
  'fnv_form_edit': {'field': "Field path in the form's class layout, such as damage or data.value; nested fields are "
                             'joined with dots.',
-                   'value': 'The new value: a number, or true/false for bool. The old value is journaled.',
                    'as_type': "Write the field as this type instead of the layout's: u8, i8, u16, i16, u32, i32, f32, "
                               'f64, ptr or bool.'},
  'fnv_formid_live': {'plugin': 'The plugin file name, such as MyMod.esp (5 to 100 characters).'},
@@ -367,7 +362,9 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                  'mod_name': "MO2 mod folder name to install into. Default: the plugin's name. Not used on the direct "
                              'install.'},
  'fnv_inventory': {'limit': 'Maximum number of item stacks returned, 1 to 1000. Default 300.'},
- 'fnv_journal': {'limit': 'Maximum number of entries returned, newest last, 1 to 1000. Default 100.',
+ 'fnv_journal': {'action': 'What to do: list (the journal of changes made through the act tools, default) or calls (a '
+                           "summary of the bridge's own call log).",
+                 'limit': 'Maximum number of entries returned, newest last, 1 to 1000. Default 100.',
                  'include_undone': 'If true (default), also list changes that were already undone.'},
  'fnv_leveled_roll': {'level': "The level to roll at, 1 to 255. Default: the player's level.",
                       'rolls': 'How many times to roll the list, 1 to 5000. Default 200.',
@@ -385,22 +382,6 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                       '40.',
               'include_hidden': 'When true, also include references that are in range but not currently visible. '
                                 'Default false.'},
- 'fnv_mem_read': {'path': 'Field path from the object at target, such as m_pBaseProcess.m_eProcessType; pointers are '
-                          'followed. Omitted reads the object itself.',
-                  'as_type': "Read the value as this type instead of the layout's: u8, i8, u16, i16, u32, i32, f32, "
-                             'f64, ptr or cstr (a C string).',
-                  'class_name': 'Class to use for the layout at target, such as Actor, when the runtime class (RTTI) '
-                                'is unknown or wrong.',
-                  'length': 'For a struct or raw read: number of bytes to read, 1 to 4096. Default: the class size, '
-                            'else 64.'},
- 'fnv_mem_write': {'target': '0xADDRESS, or a reference or form (player, form id, EditorID) whose memory to write.',
-                   'value': 'The value to write: a number, true/false for bool, or a hex string for as_type=bytes.',
-                   'path': 'Field path from the object at target, such as m_fHealth; pointers are followed. Omitted '
-                           'writes at target itself.',
-                   'as_type': "Write as this type instead of the layout's: u8, i8, u16, i16, u32, i32, f32, f64, ptr, "
-                              'bool or bytes.',
-                   'class_name': 'Class to use for the layout at target when the runtime class (RTTI) is unknown or '
-                                 'wrong.'},
  'fnv_memory': {'action': 'pools (default), address_space, alloc_trace (allocations by call site) or refcount (who '
                           "changes an object's reference count).",
                 'seconds': 'address_space: seconds between two samples to show growth, 0 (default) to 120. alloc_trace '
@@ -632,10 +613,6 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                       'limit': 'Maximum number of changed forms returned per page.',
                       'offset': 'Number of changed forms to skip, for paging through the table.',
                       'screenshot': "If true, also write the save's thumbnail image as a PNG file. Default false."},
- 'fnv_scene_graph': {'depth': 'How many node levels below the root to read, 0 to 30. Default 6.',
-                     'max_nodes': 'Maximum number of nodes returned, 1 to 2000. Default 300.',
-                     'first_person': "If true, read the player's first-person skeleton instead of ref. Default false.",
-                     'name_filter': 'Keep only nodes whose name contains this text (not case-sensitive).'},
  'fnv_screenshot': {'name': 'Name for the saved PNG file (letters, digits, _ and -). Default "screen".',
                     'max_width': 'The image is scaled down to at most this width in pixels, 320 to 3840. Default 1280.',
                     'method': "auto (default) tries the engine's own capture, then the window; engine or window forces "
@@ -702,8 +679,6 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
  'fnv_script_set': {'target': 'The quest (stage, objective, variable), the reference (variable) or the global, by '
                               'EditorID or form id.',
                     'kind': 'What to set: stage, objective_completed, objective_displayed, variable or global.',
-                    'value': 'stage: the stage number. objective_*: true or false. variable and global: the number to '
-                             'store.',
                     'name': 'For kind=variable: the script variable name.',
                     'index': 'For kind=objective_completed or objective_displayed: the objective index.'},
  'fnv_script_trace': {'action': 'start installs the hook, read (default) returns new statements (it starts on first '
@@ -892,6 +867,4 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                     'distance': 'For action=duplicate: distance in game units for placing the copy. Default 0.',
                     'count': 'For action=duplicate: how many copies to place, 1 to 20.'}}
 
-PARAM_FIXES: dict[str, dict[str, tuple[str, str]]] = {'fnv_place': {'rotation': ('[x, y, z] in game units',
-                            "[x, y, z] angles in degrees. For at and array: the new object's rotation. For rotate: "
-                            'degrees added to the current angles.')}}
+PARAM_FIXES: dict[str, dict[str, tuple[str, str]]] = {}
