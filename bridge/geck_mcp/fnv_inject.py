@@ -136,8 +136,11 @@ class Injector:
     def wait_frames(self, frames):
         """Run frames until a job of `frames` frames has ended. One extra frame covers the frames that passed between
         the queue request and the wait's base frame."""
+        from .fnv_time import STEP_MAX
         _, waiter = shared_time(self.live)
-        return waiter.run(frames=frames + 1, timeout_seconds=30 + frames / 20.0)
+        # bug hunt 2026-11-18: a job of FRAMES_MAX frames asked the wait for one frame more than it can run
+        # (ValueError after the job was queued)
+        return waiter.run(frames=min(frames + 1, STEP_MAX), timeout_seconds=30 + frames / 20.0)
 
     def job(self, kind, detail, frames, op, wait):
         if not 1 <= int(frames) <= FRAMES_MAX:

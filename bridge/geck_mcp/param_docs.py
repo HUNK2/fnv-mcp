@@ -303,7 +303,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
               'max_lines': 'For action=code: maximum number of source lines returned. Default 400.'},
  'fnv_game': {'action': 'launch (start the game and wait until ready), quit, or restart (quit if running, then '
                         'launch).',
-              'force': 'For quit and restart: if true (default), terminate the game when the console quit and closing '
+              'force': 'For quit: if true (default), terminate the game when the console quit and closing '
                        'the window do not end it.',
               'timeout_seconds': 'Seconds to wait. launch and restart: 20 to 600, default 240. quit: 5 to 120, default '
                                  '20.',
@@ -323,8 +323,8 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                         'the words to search for. Not used by list.',
                'limit': 'For find and engine: maximum results, 1 to 100. Default 20.',
                'offset': 'For find and engine: results to skip, for paging. Default 0.',
-               'brief': 'For find and engine: if true, each row has only its kind, name and description (find) or '
-                        'file, line and heading (engine).'},
+               'brief': 'For find and engine: if true, each row has only its kind, name, action and example call '
+                        '(find) or file, line and heading (engine).'},
  'fnv_hook_set': {'action': 'skip bypasses the function and returns value; result runs it and replaces its result; arg '
                             'replaces one parameter; script runs a console line on each call; read shows hit info; '
                             'remove deletes the hook; list shows hooks. Default skip.',
@@ -741,20 +741,22 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                  'steps': 'For action=sweep: number of values between start and stop. Default 10.'},
  'fnv_test': {'action': 'run (default) runs one scenario file or inline yaml, run_all every scenario in a folder, '
                         'steps the steps given inline.',
-              'path': 'For action=run: the scenario YAML file to run.',
+              'path': 'For action=run: the scenario YAML file to run. A relative path is looked up in fnv.tests_dir, '
+                      'then in the shipped examples (fnv-tests/hello-wasteland.yaml).',
               'yaml': 'For action=run: the scenario as YAML text, instead of a file.',
               'folder': "For action=run_all: the folder of scenarios. Default: the project's fnv.tests_dir.",
               'steps': 'The scenario steps to run in order, in the same form as a YAML scenario file (run, script, '
                        'wait, expect, set, input, move, step, call, and so on).',
-              'name': "Name of this scenario, used in the report. Default 'inline'.",
+              'name': "Name of this scenario, used in the report (with action=run it replaces the file's own "
+                      "name). Default 'inline'.",
               'plugins': 'Plugins the scenario needs; the run stops with PLUGIN_NOT_LOADED if one is not loaded in the '
                          'dev profile (install it with fnv_install first).',
               'setup': 'Steps run before the main steps, in the same step format.',
               'teardown': 'Steps run after the main steps, in the same step format.',
               'deterministic': 'When true, fixes the frame step at 60 fps and seeds the random generator so runs are '
                                'repeatable. Default false.',
-              'repeat': 'Run the whole scenario this many times and report the steps that differ between runs. Default '
-                        '1.',
+              'repeat': 'Run the whole scenario this many times and report the steps that pass in one run and fail in '
+                        'another (values that differ with the same outcome are listed apart). Default 1.',
               'timeout_seconds': 'Time limit for the scenario run, in seconds. Default 240.',
               'relaunch_on_crash': 'When true (default), the game is relaunched if it crashes during the run.'},
  'fnv_test_save': {'action': 'list (default), save (the current game), load (waits until gameplay) or delete.',
@@ -803,8 +805,8 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                'target': 'For action=click: the tile path or name to click (fnv_menu tiles lists them).',
                'label': 'For action=button: the text on the button, such as Take All or Done. For action=type: the '
                         'text to enter.',
-               'menu': 'For click, button and close: the menu to act on, by name or number, instead of the one at the '
-                       'top.',
+               'menu': 'For click, button and close: the menu to act on, by number or name (InventoryMenu or '
+                       'inventory), instead of the one at the top. An unknown name is an error.',
                'hours': 'For action=wait or sleep: number of hours to pass, 1 to 24. Default 1 when omitted.',
                'button': 'For action=message: the message box button to press, as an index or its label.'},
  'fnv_undo': {'count': 'How many of the last undoable changes to undo, 1 to 100. Default 1.',

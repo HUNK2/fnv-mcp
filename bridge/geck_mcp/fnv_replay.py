@@ -18,9 +18,13 @@ from pathlib import Path
 
 from .fnv_conv import ConvError, verdict
 from .fnv_inject import Injector, shared_time
-from .fnv_time import _frame, frame_ops
+from .fnv_time import STEP_MAX, _frame, frame_ops
 
 DEFAULT_SEED = 20261111
+
+
+def _valid_name(name):
+    return isinstance(name, str) and bool(name) and name.replace('_', '').replace('-', '').isalnum() and name.isascii()
 
 
 class ReplayTools:
@@ -42,7 +46,7 @@ class ReplayTools:
         self.live.in_game()
         if self.recording:
             raise ConvError('ALREADY_RECORDING', 'A replay (%s) is being recorded. Next: stop.' % self.recording['name'])
-        if not name or not name.replace('_', '').replace('-', '').isalnum():
+        if not _valid_name(name):
             raise ConvError('BAD_ARGUMENTS', 'name uses letters, digits, _ and - only.')
         save = 'replay_%s' % name
         self.live.game.guard_direct('write a save into your real game')
@@ -80,6 +84,8 @@ class ReplayTools:
                        'Written to %s.' % path, path=str(path), jobs=len(rec['jobs']), frames=rec['endOffset'])
 
     def play(self, name, load=True, timeout=180):
+        if not _valid_name(name):      # bug hunt 2026-11-18: "..\x" read a file outside the replays folder
+            raise ConvError('BAD_ARGUMENTS', 'name uses letters, digits, _ and - only.')
         path = self.folder / ('%s.json' % name)
         if not path.is_file():
             raise ConvError('NO_REPLAY', 'No replay %s (see list).' % name)
@@ -93,21 +99,20 @@ class ReplayTools:
             self.agent.rng(int(rec['seed']))
         control, _ = shared_time(self.live)
         control.hold()
-        injector = Injector.of(self.live)
-        injector.ensure()
         done, at = [], 0
         try:
+            # inside the try: a failed injector install used to leave the gate closed (bug hunt 2026-11-18)
+            injector = Injector.of(self.live)
+            injector.ensure()
             for job in sorted(rec['jobs'], key=lambda j: j['offset']):
                 gap = int(job['offset']) - at
                 if gap > 0:
-                    control.step(gap)
-                    at += gap
+                    at += self._step(control, gap)
                 result = injector.batch([tuple(job['op'])])[0]
                 done.append({'offset': job['offset'], 'op': ' '.join(job['op'][:2]), 'ok': bool(result.get('ok'))})
             rest = int(rec.get('endOffset') or at) - at
             if rest > 0:
-                control.step(rest)
-                at += rest
+                at += self._step(control, rest)
         except Exception:
             control.release()
             raise
@@ -115,6 +120,17 @@ class ReplayTools:
                        'Loaded %s, seeded the generator with %s, then stepped the frame gate to each job. Inspect the '
                        'state now; fnv_time release lets the game run.' % (rec['save'], rec['seed']),
                        jobs=done, frames=at)
+
+    @staticmethod
+    def _step(control, frames):
+        """Step `frames` frames in pieces the frame step accepts (it stops at STEP_MAX: a quiet stretch of a few
+        minutes was refused). Returns the frames stepped."""
+        left = frames
+        while left > 0:
+            piece = min(left, STEP_MAX)
+            control.step(piece)
+            left -= piece
+        return frames
 
     def list(self):
         rows = []

@@ -63,10 +63,13 @@ def _project_folder(project):
     return Path(folder) if folder else None
 
 
+EXAMPLES_DIR = Path(__file__).resolve().parents[1] / 'examples'
+
+
 def read_roots(project):
     """Folders a path argument may read from: the project file's folder, the state folder, the game, the MO2 root, the
-    tests folder, the decomp checkout, the crash log folders and the companion's %LOCALAPPDATA%\\fnvmcp. Unset ones are
-    left out."""
+    tests folder, the decomp checkout, the crash log folders, the companion's %LOCALAPPDATA%\\fnvmcp and the bridge's
+    examples folder. Unset ones are left out."""
     fnv = getattr(project, 'fnv', None)
     roots = [_project_folder(project), getattr(project, 'state_dir', None), getattr(project, 'game_root', None)]
     if fnv is not None:
@@ -79,6 +82,7 @@ def read_roots(project):
         roots += [layout.user_dir, layout.appdata_dir]
     if os.environ.get('LOCALAPPDATA'):
         roots.append(Path(os.environ['LOCALAPPDATA']) / 'fnvmcp')
+    roots.append(EXAMPLES_DIR)      # the shipped examples the guides name (live check 2026-11-18: refused)
     out = []
     for root in roots:
         if root and Path(root) not in out:
@@ -91,7 +95,8 @@ def write_roots(project):
     return [Path(r) for r in (getattr(project, 'state_dir', None), _project_folder(project)) if r]
 
 
-_DIRECTIVE = re.compile(r'[ \t]*#[ \t]*(include_next|include|import|embed)\b(.*)', re.DOTALL)
+# '%:' is the C digraph for '#' (bug hunt 2026-11-18: "%:include" slipped past the check)
+_DIRECTIVE = re.compile(r'[ \t]*(?:#|%:)[ \t]*(include_next|include|import|embed)\b(.*)', re.DOTALL)
 _TARGET = re.compile(r'[ \t]*(?:"([^"\n]+)"|<([^>\n]+)>)[ \t]*\Z')
 
 

@@ -116,7 +116,7 @@ ACTION_PARAMS = {
         'tiles': {'menu', 'path', 'depth', 'max_tiles', 'traits'},
     }},
     'fnv_test': {'actions': {
-        'run': {'path', 'yaml', 'relaunch_on_crash'},
+        'run': {'path', 'yaml', 'name', 'relaunch_on_crash'},
         'run_all': {'folder'},
         'steps': {'steps', 'name', 'start', 'plugins', 'setup', 'teardown', 'deterministic', 'repeat',
                   'timeout_seconds', 'relaunch_on_crash'},

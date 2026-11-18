@@ -15,6 +15,7 @@ dialogue npc      every response written for the NPC (INFO records whose conditi
 """
 import struct
 import time
+from pathlib import Path
 
 ITEM_TYPES = ('WEAP', 'ARMO', 'ALCH', 'MISC', 'BOOK', 'AMMO', 'KEYM', 'NOTE', 'IMOD', 'CHIP', 'CMNY')
 EQUIPPABLE = ('WEAP', 'ARMO')
@@ -74,7 +75,7 @@ class CrawlTools:
         target = next((e for e in entries if e['name'].lower() == str(plugin).lower()), None)
         if not target or not target.get('path'):
             raise ConvError('PLUGIN_NOT_FOUND', '%s is not in the active load order.' % plugin)
-        data = open(target['path'], 'rb').read()
+        data = Path(target['path']).read_bytes()
         cells = []
         for rec, labels in codec.iter_records(data, types=['CELL']):
             flags = rec.get('DATA')
@@ -442,7 +443,7 @@ class CrawlTools:
         if not target or not target.get('path'):
             raise ConvError('PLUGIN_NOT_FOUND', '%s is not in the active load order.' % plugin)
         found = []
-        for rec, _ in codec.iter_records(open(target['path'], 'rb').read(), types=list(ITEM_TYPES)):
+        for rec, _ in codec.iter_records(Path(target['path']).read_bytes(), types=list(ITEM_TYPES)):
             modl = rec.get('MODL')
             # An override of a master's item has the master's index in its top byte: map it through the plugin's
             # master list to the load order (None when that master is not active: the record is skipped).

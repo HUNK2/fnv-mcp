@@ -289,11 +289,13 @@ class ControlTools:
         elif nop is not None:
             data = b'\x90' * int(nop)
         elif ret is not None:
+            if not 0 <= int(ret) <= 0xFFFF:
+                raise ValueError('ret is the bytes the function pops: 0..65535')     # was a struct.error (bug hunt 2026-11-18)
             data = b'\xC3' if int(ret) == 0 else b'\xC2' + struct.pack('<H', int(ret))
         else:
             target = jmp if jmp is not None else call
             dest = int(str(target), 16) if str(target).lower().startswith('0x') else self.live.engine().resolve(str(target))
-            data = (b'\xE9' if jmp is not None else b'\xE8') + struct.pack('<i', dest - (at + 5))
+            data = (b'\xE9' if jmp is not None else b'\xE8') + struct.pack('<I', (dest - (at + 5)) & 0xFFFFFFFF)
         if not 1 <= len(data) <= 64:
             raise ValueError('A patch is 1..64 bytes')
         current = self.live.reads([(at, len(data))])[0]
@@ -304,7 +306,7 @@ class ControlTools:
                             {'live': current.hex(' '), 'expected': expect})
         clean = self.deep._clean_bytes(at, len(data)) if EXE_TEXT[0] <= at < EXE_TEXT[1] else None
         foreign = clean is not None and current != clean
-        hooks = [h for h in self.deep.hooks() if int(h['target'], 16) <= at < int(h['target'], 16) + h['stolen']]
+        hooks = [h for h in self.deep.hooks() if at < int(h['target'], 16) + h['stolen'] and at + len(data) > int(h['target'], 16)]
         if hooks:
             raise LiveError('HOOKED_HERE', 'A companion hook (%s) owns these bytes: remove it first' % hooks[0]['label'])
         if foreign and not force:
@@ -349,6 +351,8 @@ class ControlTools:
         label = TP_PREFIX + '%08X' % address
         layout, nargs = layout_args(sig) if sig else ([], 8)
         conditions = list(when or [])
+        if action not in ('start', 'read', 'stop'):
+            raise ValueError('action is start, read, stop or list')       # was silently a read (bug hunt 2026-11-18)
         if action == 'start':
             fsel, fval, fdesc = self.agent._filter(sig, layout, conditions[0]) if conditions else (0, 0, None)
             rest = [self.agent._filter(sig, layout, c) for c in conditions[1:]]

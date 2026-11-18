@@ -53,6 +53,10 @@ class CoverageTools:
         if name is not None and (not str(name).strip() or '/' in str(name) or chr(92) in str(name) or '..' in str(name)
                                  or ':' in str(name) or str(name).startswith('.')):
             raise ConvError('BAD_ARGUMENTS', 'name is a plain run name: no path separators, drive letters or "..".')
+        # bug hunt 2026-11-18: a bare string was walked letter by letter ("fnv" armed every line of every file with an
+        # f, n or v in its path)
+        files = [files] if isinstance(files, str) else files
+        functions = [functions] if isinstance(functions, str) else functions
         self.live.ready()
         if self.active:
             raise ConvError('RUNNING', 'Coverage %s is running. Next: fnv_coverage stop.' % self.active['name'])
@@ -73,6 +77,10 @@ class CoverageTools:
             skipped += out['skipped']
         self.live.changing('coverage')
         armed = self.live.link.one('cov', 'arm')
+        if not armed.get('ok'):
+            # not armed: no run is open, and the sites that were added are dropped again
+            self.live.link.one('cov', 'reset')
+            raise ConvError('COV_REFUSED', 'The companion did not arm the sites (%s).' % armed.get('error'), armed)
         self.active = {'name': name or 'coverage-%s' % time.strftime('%Y%m%d-%H%M%S'), 'sites': sites,
                        'started': time.time()}
         return verdict('Coverage %s armed at %d line starts' % (self.active['name'], armed.get('armed', added)),

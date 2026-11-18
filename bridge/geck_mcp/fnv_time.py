@@ -25,6 +25,7 @@ PRED_ID = 63                   # predicate slot of fnv_wait_for; it is cleared a
 GATE_LOCK = threading.RLock()
 FRAME_SLOT = 62                # predicate slot that reads the companion's own frame counter
 HOLD_DEFAULT_S = 120           # the gate's dead-man time (0x1D4C0 ms)
+HOLD_MAX_S = 3600              # the longest dead-man time a call may ask for
 STEP_MAX = 10000               # 0x2710 frames
 UNTIL_MAX = 0x2710             # most frames one `until` runs (the companion answers bad_arguments above it)
 FORCE_RESUME_MAX = 16          # most Enable calls one force_resume makes
@@ -44,6 +45,18 @@ FUNCTIONS = {
 
 def w(value):
     return fnv_link.word(value)
+
+
+def _whole(value, name):
+    """A whole number: 30.0 is 30, 59.5 or "x" is refused with a clear message (word() fails on a float with a
+    TypeError; bug hunt 2026-11-18)."""
+    try:
+        whole = not isinstance(value, bool) and isinstance(value, (int, float)) and value == int(value)
+    except (ValueError, OverflowError):     # nan, inf
+        whole = False
+    if not whole:
+        raise ValueError('%s must be a whole number' % name)
+    return int(value)
 
 
 def engine_functions(engine):
@@ -276,9 +289,14 @@ class TimeControl:
                        changed=bool(times), pausedByUs=False, clockCounterBefore=counter, clockCounter=counter_after)
 
     def hold(self, timeout_seconds=None):
+        seconds = HOLD_DEFAULT_S if timeout_seconds is None else timeout_seconds
+        # bug hunt 2026-11-18: a negative or fractional value reached w() as is (a TypeError, or a dead-man time of
+        # 49 days), and 0 meant "the default" without saying so
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0 < seconds <= HOLD_MAX_S:
+            raise ValueError('timeout_seconds is from 1 to %d' % HOLD_MAX_S)
+        seconds = max(1, int(round(seconds)))
         self.require_game()
         self.ensure_gate()
-        seconds = timeout_seconds or HOLD_DEFAULT_S
         before, after = self.batch([('gate',), ('hold', 'on', w(seconds * 1000))])
         if after.get('held') is not True:
             raise _refused('Closing the frame gate', after)
@@ -300,8 +318,11 @@ class TimeControl:
                        changed=bool(before.get('held')), held=bool(after.get('held')))
 
     def step(self, frames, fps=None):
+        frames = _whole(frames, 'frames')
         if not 1 <= frames <= STEP_MAX:
             raise ValueError('frames must be from 1 to %d' % STEP_MAX)
+        if fps is not None:
+            fps = _whole(fps, 'fps')
         if fps is not None and not 0 <= fps <= FPS_MAX:
             raise ValueError('fps must be from 0 (off) to %d' % FPS_MAX)
         self.require_game()
@@ -340,6 +361,7 @@ class TimeControl:
                        next='Call fnv_time release to let it run, or step again.')
 
     def fixed(self, fps, journal=True):
+        fps = _whole(fps, 'fps')
         if not 0 <= fps <= FPS_MAX:
             raise ValueError('fps must be from 0 (off) to %d' % FPS_MAX)
         self.require_game()
@@ -443,6 +465,10 @@ class WaitFor:
                              % (', '.join(given) or 'none'))
         if clock not in ('game', 'real'):
             raise ValueError('clock must be game or real')
+        if seconds is not None and not seconds > 0:
+            raise ValueError('seconds must be above 0')
+        if not float(timeout_seconds) > 0:
+            raise ValueError('timeout_seconds must be above 0')
         if frames is not None and not 1 <= frames <= STEP_MAX:
             raise ValueError('frames must be from 1 to %d' % STEP_MAX)
         if not 1 <= max_frames <= STEP_MAX:

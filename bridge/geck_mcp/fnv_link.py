@@ -156,6 +156,10 @@ class EngineLink:
                         deadline = time.monotonic()
                 if getattr(e, 'winerror', None) not in (ERROR_PIPE_BUSY, ERROR_FILE_NOT_FOUND) or time.monotonic() >= deadline:
                     self.hello = None  # the game this hello came from is gone (or not answering): never report it
+                    if getattr(e, 'winerror', None) == ERROR_PIPE_BUSY:     # bug hunt 2026-11-18: busy is not missing
+                        raise LinkError('COMPANION_UNREACHABLE', 'Engine companion pipe %s is in use by another client '
+                                        '(a second server or a test runner holds the one connection; it is released '
+                                        'after %.0f s idle): %s' % (self.pipe, self.idle_release_seconds, e))
                     raise LinkError('COMPANION_UNREACHABLE', 'Engine companion pipe %s is not available (%s)' % (self.pipe, e))
                 if e.winerror == ERROR_PIPE_BUSY:
                     try:
@@ -297,7 +301,11 @@ class EngineLink:
                 try:
                     reply = self._io(line.encode('ascii') + b'\n', timeout)
                     self._last_use = time.monotonic()
-                    return json.loads(reply.decode('utf-8', errors='replace'))
+                    try:
+                        return json.loads(reply.decode('utf-8', errors='replace'))
+                    except ValueError as e:     # bug hunt 2026-11-18: a ValueError read as the caller's bad argument
+                        self.close()
+                        raise LinkError('COMPANION_PROTOCOL', 'The engine companion sent a reply that is not JSON: %s' % e)
                 except LinkError as e:
                     self.close()
                     if e.code != 'NOT_SENT' or attempt:
@@ -325,6 +333,8 @@ class EngineLink:
             text = ' '.join(str(part) for part in op)
             if '\t' in text or '\n' in text:
                 raise ValueError('op text may not contain tabs or newlines')
+            if not text.isascii():      # the wire is ASCII (bug hunt 2026-11-18: UnicodeEncodeError escaped _exchange)
+                raise ValueError('op text must be ASCII; text arguments go as hex (hexs): %r' % text)
             parts.append(text)
         request_id = uuid.uuid4().hex[:12]
         if self.same_frame and getattr(_scope, 'reads', 0) and all(str(op[0]) in SAME_FRAME_OPS for op in ops):

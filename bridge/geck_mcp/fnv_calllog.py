@@ -79,6 +79,8 @@ class CallLog:
                 'total': len(rows), 'failed': len(failed),
                 'failureRate': round(len(failed) / len(rows), 3) if rows else None,
                 'cut': sum(1 for r in rows if r.get('cut')),
+                'cutMeans': 'answers that were too long and came back shortened (truncated: true); call those again '
+                            'with a smaller limit, brief=true or fields',
                 'perTool': tools[:max(limit, 1) * 5],
                 'perCode': [{'code': c, 'count': n} for c, n in codes.most_common()],
                 'slowest': top('ms'), 'largest': top('size'), 'path': str(self.path)}

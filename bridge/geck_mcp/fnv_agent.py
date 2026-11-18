@@ -609,7 +609,7 @@ class AgentTools:
             return {'folder': str(saves), 'saves': [{'name': p.stem[len(TEST_SAVE_PREFIX):], 'file': p.name,
                                                      'modified': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(p.stat().st_mtime)),
                                                      'bytes': p.stat().st_size} for p in files], 'changed': False}
-        if not name or not SAVE_NAME.match(name):
+        if not isinstance(name, str) or not SAVE_NAME.fullmatch(name):     # fullmatch: "$" lets a trailing newline through
             raise ValueError('name: 1-60 letters, digits, _ or -')
         self.game.guard_direct('%s a save of your real game' % action)
         full = TEST_SAVE_PREFIX + name
@@ -744,7 +744,9 @@ class AgentTools:
                 # JIP LN MoveToCell: any ref, any cell, exact coordinates (FNV has no PositionCell/PositionWorld).
                 target_cell = self.live.resolve(cell)['formId']
                 p = position
-                lines.append('MoveToCell %s %s %s %s' % (target_cell, p.get('x', 0), p.get('y', 0), p.get('z', 0)))
+                # floats, like the SetPos branch: the values go into a console line (bug hunt 2026-11-18)
+                lines.append('MoveToCell %s %s %s %s' % (target_cell, float(p.get('x', 0)), float(p.get('y', 0)),
+                                                         float(p.get('z', 0))))
             elif is_player:
                 lines.append('coc %s' % cell)
             else:
@@ -1089,6 +1091,8 @@ class AgentTools:
                                     'viaDoor': bool(doors.get(t)), 'inPlayerTargetCache': t in cached,
                                     'shown': not why, 'whyNotShown': why or None})
             o['targets'] = out_targets
+            if not out_targets:
+                o['whyNoMarker'] = 'this objective has no targets, so it can have no marker'
             o.pop('ptr')
         return {'quest': q['formId'], **quest_state, 'playerTargetCacheDirty': bool(dirty_raw and dirty_raw[0]),
                 'objectives': objectives,
@@ -1360,7 +1364,12 @@ class AgentTools:
                 (m['id'] for m in reversed(state['menuStack']) if m['id'] >= 1001), None)
             target = menu or top
             if isinstance(target, str) and not target.isdigit():
+                wanted = target
                 target = next((i for i, n in MENU_NAMES.items() if n.lower() == target.lower().replace(' ', '')), None)
+                if target is None:
+                    # bug hunt 2026-11-18: an unknown name answered "No menu is open" (and changed nothing)
+                    raise LiveError('NO_SUCH_MENU', 'No menu called %r. Known: %s' % (wanted, ', '.join(
+                        sorted(MENU_NAMES.values()))))
             target = int(target) if target else None
             if not target:
                 return {'closed': None, 'note': 'No menu is open', 'changed': False}
@@ -1458,22 +1467,27 @@ class AgentTools:
     def time_control(self, set_hour=None, advance_hours=None, timescale=None, mode='globals',
                      evaluate_packages=True, allow_unproven=False):
         self.live.in_game()
+        # Validated before anything changes: a bad hour used to raise after the timescale was already set (bug hunt
+        # 2026-11-18).
+        if mode not in ('globals', 'engine_wait'):
+            raise ValueError('mode is globals or engine_wait')
+        if set_hour is not None and not 0 <= float(set_hour) < 24:
+            raise ValueError('set_hour is 0..24')
         before = self.calendar()
+        if set_hour is not None:
+            delta = (float(set_hour) - before['hour']) % 24
+            if delta > 23.999:      # the hour asked for is the hour it is (a rounded reading): no day passes
+                delta = 0.0
+            advance_hours = (advance_hours or 0) + delta
+        if advance_hours and not 0 < float(advance_hours) <= 24 * 30:
+            raise ValueError('advance_hours is 0..720')
         changes = []
         self.live.changing('time')
         if timescale is not None:
             result = self.live.script_set('TimeScale', 'global', float(timescale))
             changes.append({'timeScale': float(timescale), 'journalId': result['journalId']})
-        if set_hour is not None:
-            hour = float(set_hour)
-            if not 0 <= hour < 24:
-                raise ValueError('set_hour is 0..24')
-            delta = (hour - before['hour']) % 24
-            advance_hours = (advance_hours or 0) + delta
         if advance_hours:
             hours = float(advance_hours)
-            if not 0 < hours <= 24 * 30:
-                raise ValueError('advance_hours is 0..720')
             if mode == 'engine_wait':
                 changes.append(self._engine_wait(hours, allow_unproven))
             else:

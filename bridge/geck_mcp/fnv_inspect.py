@@ -949,6 +949,27 @@ class PhysicsTools:
                         'query, layers.' % action)
 
 
+def _failing_conditions(lists):
+    """The conditions that make a condition list fail: in the lists that do not pass, the members of every OR group
+    where no member passed. A failed member of a group that another member rescued is not why the list fails
+    (bug hunt 2026-11-18: those were listed, and `compare` read a key the evaluation never sets)."""
+    out = []
+    for lst in lists:
+        if lst.get('passes', True):
+            continue
+        group = []
+        for c in list(lst.get('conditions') or []) + [None]:
+            if c is not None:
+                group.append(c)
+                if c.get('or'):
+                    continue
+            if group and not any(g.get('passed') for g in group):
+                out += [{'list': lst['list'], 'index': g['index'], 'function': g.get('function'),
+                         'value': g.get('value'), 'compare': g.get('compareTo')} for g in group]
+            group = []
+    return out
+
+
 class SystemsTools:
     def __init__(self, live):
         self.live = live
@@ -1016,9 +1037,7 @@ class SystemsTools:
         level, = self.live.values(['player.GetLevel'])
         have, = self.live.values(['player.HasPerk %s' % p['formId']])
         ev = self.live.agent.condition_eval(p['formId'], 'player', None, None, False)
-        failing = [{'list': lst['list'], 'index': c['index'], 'function': c.get('function'),
-                    'value': c.get('value'), 'compare': c.get('compare')}
-                   for lst in ev['lists'] for c in lst['conditions'] if not c.get('passed')]
+        failing = _failing_conditions(ev['lists'])
         reasons = []
         if not playable:
             reasons.append('not playable')

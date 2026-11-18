@@ -385,7 +385,11 @@ class EyesTools:
         self.live.in_game()
         cam = self.camera()
         cur_yaw, cur_pitch = cam.angles()
+        if position and len(position) != 3:
+            raise ValueError('position is three numbers [x, y, z]')
         pos = tuple(float(v) for v in position) if position else cam.position
+        if fov is not None and not 10 <= float(fov) <= 150:    # before the camera is touched (bug hunt 2026-11-18)
+            raise ValueError('fov is 10..150 degrees')
         if look_at:
             centre, _radius, _r_ = self.ref_bound(look_at)
             yaw, pitch = heading_to(pos, centre)
@@ -588,7 +592,7 @@ class EyesTools:
                 los = self._line_of_sight(cam.position, i)
             entry = {'formId': i['formId'], 'name': name if name and name != '<no name>' else None,
                      'type': TYPE_NAMES.get(i['baseType'], i['baseType']),
-                     'base': self.live.form_ids([i['base']])[0]['formId'] if i['base'] else None,
+                     'base': (self.live.form_ids([i['base']])[0] or {}).get('formId') if i['base'] else None,
                      'distance': _r(dist), 'rect': i['rect']['pixels'], 'centre': i['rect']['centre'],
                      'screenShare': round(i['rect']['area'], 4), 'inFrustum': True, 'lineOfSight': los,
                      'flags': [k for k, v in (('disabled', i['disabled']), ('culled', i.get('culled')),

@@ -66,7 +66,9 @@ def check_spec(spec):
     if plugin.split('.', 1)[0].strip().lower() in records.DEVICE_NAMES:
         raise SpecError('plugin', '%s is a Windows device name' % plugin)
     masters = spec.get('masters')
-    if not isinstance(masters, list) or not masters or len(set(m.lower() for m in masters)) != len(masters):
+    # bug hunt 2026-11-18: a non-string master (a number, null) raised AttributeError on .lower() before this check
+    if not isinstance(masters, list) or not masters or not all(isinstance(m, str) for m in masters) \
+            or len(set(m.lower() for m in masters)) != len(masters):
         raise SpecError('masters', 'must be a non-empty list without duplicates')
     for field in ('records', 'cells'):
         if not isinstance(spec.get(field, {}), dict):
@@ -80,7 +82,8 @@ def check_spec(spec):
             seen[edid.lower()] = field
     for edid, rec in spec.get('records', {}).items():
         kinds = set(records.BUILDERS) | generic.GENERIC_TYPES
-        if not isinstance(rec, dict) or rec.get('type') not in kinds:
+        # bug hunt 2026-11-18: a list or object as "type" is unhashable and raised TypeError on the set test
+        if not isinstance(rec, dict) or not isinstance(rec.get('type'), str) or rec.get('type') not in kinds:
             raise SpecError('records.%s.type' % edid, 'must be one of %s' % ', '.join(sorted(kinds)))
         if rec.get('override') and rec.get('type') != 'DIAL':
             raise SpecError('records.%s.override' % edid, 'only master topics (DIAL) can be overridden so far')

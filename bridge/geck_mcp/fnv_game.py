@@ -220,7 +220,10 @@ def mo2_processes(mo2_root):
                          capture_output=True, text=True, timeout=15).stdout
     pids = [int(row.split('","')[1]) for row in out.splitlines() if row.lower().startswith('"modorganizer.exe"')]
     root = str(mo2_root).lower().rstrip('\\/')
-    return [pid for pid in pids if (image_path(pid) or '').lower().startswith(root)]
+    # bug hunt 2026-11-18: a bare prefix test took C:\MO2-other\ModOrganizer.exe for an instance in C:\MO2, and
+    # close_stale_mo2 then terminated another instance; the exe must sit in the instance folder itself
+    return [pid for pid in pids
+            if (image_path(pid) or '').lower().replace('/', '\\').startswith(root.replace('/', '\\') + '\\')]
 
 
 def visible_windows(pid):
@@ -1152,7 +1155,7 @@ class Game:
             elif isinstance(since, int):
                 start = max(0, min(since, len(data)))
             lines = data[start:].decode('utf-8', errors='replace').splitlines()
-            out[name] = {'path': str(path), 'from': start, 'size': len(data), 'lines': lines[-max_lines:],
+            out[name] = {'path': str(path), 'from': start, 'size': len(data), 'lines': lines[-max_lines:] if max_lines > 0 else [],     # bug hunt 2026-11-18: [-0:] was every line
                          'truncated': len(lines) > max_lines, 'reset': since == 'last' and start == 0 and bool(previous)}
             cursors[key] = {'size': len(data), 'mtime': path.stat().st_mtime}
         mine = {k: v for k, v in cursors.items() if k in {str(p) for p in self.log_paths().values()}}
@@ -1197,7 +1200,7 @@ def parse_start(start, saves_dir):
         return 'save', saves[0].stem
     kind, _, value = start.partition(':')
     if kind == 'save':
-        if not SAVE_NAME.match(value):
+        if not SAVE_NAME.fullmatch(value):      # match: "$" let a trailing newline through (bug hunt)
             raise GameError('BAD_SAVE', 'Save names may use letters, digits, space and _ . - only')
         if not (Path(saves_dir) / (value + '.fos')).exists():
             raise GameError('SAVE_MISSING', 'No save %s.fos in %s' % (value, saves_dir))

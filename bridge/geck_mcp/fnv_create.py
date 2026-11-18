@@ -778,7 +778,7 @@ class FormTools:
             form_id = self.live.form_ids([ptr])[0]['formId']
             how = 'TESDataHandler::CreateFormForType 0x00465110 + AddFormToDataHandler 0x004603B0'
         if name:
-            self.live.console('SetName "%s" %s' % (name.replace('"', ''), form_id))
+            self.live.console('SetName "%s" %s' % (re.sub(r'["\r\n]', '', name), form_id))
         entry = {'formId': form_id, 'ptr': '0x%08X' % ptr, 'clone': clone, 'type': type_, 'name': name}
         self.created.append(entry)
         self.live.journal.add({'kind': 'form_create', **entry, 'undo': None})
@@ -900,6 +900,13 @@ class FormTools:
                         isinstance(value, (int, float)) and abs(float(current) - float(value)) < 1e-4:
                     continue
                 if field == 'name' and current == value:
+                    continue
+                if isinstance(value, str) and any(c in value for c in '"\r\n'):
+                    # plugin text inside a quoted console argument: a quote would end the string and run the rest
+                    # (W4; bug hunt 2026-11-18). Not applied, and said so.
+                    changes.append({'field': field, 'from': current, 'to': value, 'accepted': False,
+                                    'skipped': 'it contains a double quote or a line break, which a console '
+                                               'string cannot hold'})
                     continue
                 line = template % value if '%s' in template else template
                 result = self.live.console(line)
@@ -1332,9 +1339,21 @@ class PlaceTools:
             spread = max(kept) - min(kept)
             if spread < best['spread'] - 1e-6:
                 best = {'heading': h, 'spread': round(spread, 2)}
-        best['note'] = ('the narrow side facing downhill spreads least; turn it with rotation=[0, 0, %g] (or %g)'
-                        % (best['heading'], best['heading'] + 180))
+        # Live check 2026-11-18: the suggestion was the heading it already had. Say so: turning will not help.
+        best['helps'] = abs(((best['heading'] - current) + 90.0) % 180.0 - 90.0) > 1e-6
+        if best['helps']:
+            best['note'] = ('the narrow side facing downhill spreads least; turn it with rotation=[0, 0, %g] (or %g)'
+                            % (best['heading'], best['heading'] + 180))
+        else:
+            best['note'] = ('no turn helps: its heading %g already spreads least of the four tried; move it to flatter '
+                            'ground or rest it "centre" or "high"' % best['heading'])
         return best
+
+    @staticmethod
+    def _turn_hint(report):
+        """'Turn it (see suggestHeading), ' when turning helps, else ''."""
+        return 'Turn it to heading %g, ' % report['suggestHeading']['heading'] \
+            if (report.get('suggestHeading') or {}).get('helps') else ''
 
     def _snap_foot(self, base_ptr, bounds, x, y, z, rotation, scale, rest, ignore=0, reach=200.0, sink=64.0):
         """Footprint snap of one object: (ground the bottom rests on, footprint report), or (None, None) when the
@@ -1355,10 +1374,11 @@ class PlaceTools:
             report['suggestHeading'] = self._suggest_heading(bounds, x, y, z, scale, ignore, reach, sink, heading,
                                                              report['spread'], rest=rest)
         if too_deep and rest == 'low':
+            hint = self._turn_hint(report)
             raise LiveError('TOO_STEEP', 'The ground under it rises %.0f units across its footprint, more than its '
-                            '%.0f-unit height: resting it low would bury its high side. Turn it (see '
-                            'suggestHeading), move it, or pass rest="centre" or "high" to place it anyway.'
-                            % (report['spread'], height), report)
+                            '%.0f-unit height: resting it low would bury its high side. %smove it to flatter ground, '
+                            'or pass rest="centre" or "high" to place it anyway.'
+                            % (report['spread'], height, hint or 'No turn helps: '), report)
         return bottom, report
 
     def _ground(self, x, y, z, ignore=0, reach=200.0, sink=64.0):
@@ -1572,9 +1592,38 @@ class PlaceTools:
             return position, None
         return [position[0], position[1], g + self._lift(bounds, scale, rotation)], report
 
+    @staticmethod
+    def _vec3(value, what):
+        """Three numbers as floats, or None when not given. A list of another length used to place or turn on
+        some axes only, or end in a Python unpacking error (bug hunt 2026-11-18)."""
+        if value is None:
+            return None
+        try:
+            out = [float(v) for v in value]
+        except (TypeError, ValueError):
+            raise ValueError('%s is three numbers [x, y, z]' % what) from None
+        if len(out) != 3 or not all(math.isfinite(v) for v in out):
+            raise ValueError('%s is three numbers [x, y, z]' % what)
+        return out
+
+    @staticmethod
+    def _scale_value(scale):
+        if scale is None:
+            return None
+        try:
+            value = float(scale)
+        except (TypeError, ValueError):
+            raise ValueError('scale is a number above 0') from None
+        if not value > 0 or not math.isfinite(value):
+            raise ValueError('scale is a number above 0 (1 is the size the base form has)')
+        return value
+
     def at(self, base, position=None, near=None, offset=None, rotation=None, scale=None, snap=False, rest=None):
         self.live.in_game()
         rest = self._rest_mode(rest)
+        position, offset, rotation = (self._vec3(position, 'position'), self._vec3(offset, 'offset'),
+                                      self._vec3(rotation, 'rotation'))
+        scale = self._scale_value(scale)
         b = self.live.resolve(base)
         if position is None:
             anchor = self.live.resolve(near or 'player')
@@ -1597,6 +1646,7 @@ class PlaceTools:
         rest = self._rest_mode(rest)
         if not 1 <= int(count) <= 100:
             raise ValueError('count is 1..100')
+        origin, rotation = self._vec3(origin, 'position'), self._vec3(rotation, 'rotation')
         b = self.live.resolve(base)
         if origin is None:
             player = self.live.resolve('player')
@@ -1637,6 +1687,10 @@ class PlaceTools:
 
     def adjust(self, ref, move=None, rotate=None, scale=None, local=False):
         self.live.in_game()
+        move, rotate, scale = self._vec3(move, 'offset'), self._vec3(rotate, 'rotation'), self._scale_value(scale)
+        if move is None and rotate is None and scale is None:
+            raise ValueError('nothing to change: nudge needs offset=[dx, dy, dz], rotate needs rotation=[dx, dy, dz] '
+                             'degrees, scale needs scale')
         r = self.live.resolve(ref)
         before = self._pose_exact(r['ptr'])
         position = rotation = None
@@ -1779,9 +1833,9 @@ class PlaceTools:
         if too_deep and rest == 'low':
             return {'ref': r['formId'], 'snapped': False, **extra,
                     'note': 'too steep: the ground under it rises %.0f units across its footprint, more than its '
-                            '%.0f-unit height; resting it low would bury its high side. Turn it (suggestHeading), '
-                            'move it, align it (align=true), or snap with rest="centre" or "high".'
-                            % (report['spread'], height)}
+                            '%.0f-unit height; resting it low would bury its high side. %smove it, align it '
+                            '(align=true), or snap with rest="centre" or "high".'
+                            % (report['spread'], height, self._turn_hint(report))}
         if not align:
             lift = self._lift(bounds, pose['scale'], pose['rotation'])
             return {**self.adjust(ref, move=[0, 0, bottom + lift - z]), 'snapped': True, 'ground': round(bottom, 2),
@@ -1942,20 +1996,38 @@ class PlaceTools:
             out.append(row)
         return {'placed': out, 'changed': False}
 
+    @staticmethod
+    def _same_form(a, b):
+        """Two form ids that name the same form: '0xFF001234', 'ff001234' and 'FF001234' are one."""
+        try:
+            return int(str(a), 16) == int(str(b), 16)
+        except ValueError:
+            return str(a).upper() == str(b).upper()
+
     def remove(self, ref=None):
         self.live.in_game()
-        targets = [p for p in self.list()['placed'] if ref is None or p['ref'].upper() == str(ref).upper()]
+        targets = [p for p in self.list()['placed'] if ref is None or self._same_form(p['ref'], ref)]
         if ref is not None and not targets:
             raise LiveError('NOT_PLACED', '%s was not placed by this session' % ref)
         self.live.changing('place remove')
-        for p in targets:
-            r = self.live.resolve(p['ref'])
-            self.live.console('Disable', r['ptr'])
-            self.live.console('MarkForDelete', r['ptr'])
-        ids = [p['id'] for p in targets if p.get('id')]
-        if ids:
-            self.live.journal.mark_undone(ids)
-        return {'removed': [p['ref'] for p in targets]}
+        removed = []
+        try:
+            for p in targets:
+                r = self.live.resolve(p['ref'])
+                self.live.console('Disable', r['ptr'])
+                self.live.console('MarkForDelete', r['ptr'])
+                removed.append(p)
+        finally:
+            # Bug hunt 2026-11-18: a failure on the second ref left the first one deleted in the game but still
+            # listed (and exported) as placed. Every ref that was removed leaves the journal, whatever happens next.
+            ids = [p['id'] for p in removed if p.get('id')]
+            # ...and so do its pose changes: undoing one later would replay SetPos on a deleted ref (bug hunt)
+            gone = {str(p['ref']).upper() for p in removed}
+            ids += [e['id'] for e in self.live.journal.entries(process=self.live.game_identity())
+                    if e['kind'] == 'place_adjust' and not e['undone'] and str(e.get('ref')).upper() in gone]
+            if ids:
+                self.live.journal.mark_undone(ids)
+        return {'removed': [p['ref'] for p in removed]}
 
     def run(self, action, **kw):
         if action == 'at':
@@ -2000,6 +2072,17 @@ def _new_package_folder(packages, name):
     return out
 
 
+def _tidy(values, places):
+    """Numbers to `places` decimals, whole numbers as ints (74.99999 -> 75, 10.0 -> 10)."""
+    out = []
+    for v in values or []:
+        if isinstance(v, (int, float)):
+            v = round(float(v), places)
+            v = int(v) if v == int(v) else v
+        out.append(v)
+    return out
+
+
 class AuthorTools:
     """Turn the session's live work into the plugin's source spec, check a plugin, scaffold, package."""
 
@@ -2034,6 +2117,7 @@ class AuthorTools:
                 self.data._index = None
 
     def export(self, cell=None, name=None):
+        # positions and angles to 3 places: GetAngle answers 74.99999 for a ref turned to 75
         placed = self.place.list(exact=True)['placed'] if self.place else []
         mine = self.live.journal.entries(process=self.live.game_identity())
         deleted = {e.get('supersedes') for e in mine if e['kind'] == 'form_delete'}     # N4
@@ -2053,14 +2137,31 @@ class AuthorTools:
                                 'dump)' % (edid, src))
             else:
                 records[edid] = {'type': (c.get('type') or '').upper()}
+                if c.get('name'):      # bug hunt 2026-11-18: the name given at create was lost for a typed record
+                    records[edid]['fields'] = [{'tag': 'FULL', 'text': c['name']}]
             new_ids[c['formId'].upper()] = edid
+        from_game = 0
         for k, p in enumerate(placed):
             base = new_ids.get((p['base'] or '').upper())
-            base_ref = '@' + base if base else ('@' + (self._editor_id(p['base']) or '') if self._editor_id(p['base'])
-                                                 else p['base'])
-            objects.append({'ref_id': 'live.%d' % (k + 1), 'base': base_ref, 'position': p['position'],
-                            'rotation': p['rotation'], **({'scale': p['scale']} if p.get('scale') not in (None, 1, 1.0)
-                                                          else {})})
+            if base:
+                base_ref = '@' + base
+            else:
+                edid = self._editor_id(p['base'])      # once: each call reads the index again
+                base_ref = '@' + edid if edid else p['base']
+            pose = self._live_pose(p['ref'])      # moved since (fnv_move, fnv_world_edit): the game's pose wins
+            if pose:
+                from_game += 1
+                p = dict(p, **pose)
+            if len(p.get('position') or []) != 3 or len(p.get('rotation') or []) != 3:
+                # a placement the game never confirmed and can no longer answer for: no pose to write
+                problems.append('%s: no pose (the placement was not confirmed and the game does not answer); left '
+                                'out' % p.get('ref'))
+                continue
+            scale = p.get('scale')
+            objects.append({'ref_id': 'live.%d' % (k + 1), 'base': base_ref, 'position': _tidy(p['position'], 3),
+                            'rotation': _tidy(p['rotation'], 3),
+                            **({'scale': round(scale, 4)} if isinstance(scale, (int, float)) and abs(scale - 1) > 1e-4
+                               else {})})
         cell_id = cell or 'LiveSessionCell'
         spec = {'records': records, 'cells': {cell_id: {'objects': objects}} if objects else {}}
         folder = Path(self.live.project.state_dir) / 'fnv' / 'author'
@@ -2068,10 +2169,24 @@ class AuthorTools:
         path = folder / ('%s.spec-part.json' % re.sub(r'[^A-Za-z0-9_-]', '_', name or 'session'))
         path.write_text(json.dumps(spec, indent=1), encoding='utf-8')
         return {'path': str(path), 'records': len(records), 'objects': len(objects), 'problems': problems,
+                'posesFromGame': from_game,
                 'note': 'A part to merge into the project spec: records by EditorID, the placed references as objects '
-                        'of cell %s (positions are the live ones; the cell must be the plugin\'s own interior cell or '
-                        'renamed to it). Runtime form ids of vanilla bases were turned into @EditorID where the index '
-                        'knows them.' % cell_id}
+                        'of cell %s (positions read from the running game for %d of %d objects, the rest from the '
+                        'journal; the cell must be the plugin\'s own interior cell or renamed to it). Runtime form ids '
+                        'of vanilla bases were turned into @EditorID where the index knows them.'
+                        % (cell_id, from_game, len(objects))}
+
+    def _live_pose(self, ref):
+        """The pose the running game shows for a placed ref, or None when the game does not answer (closed, ref
+        gone). Live check 2026-11-18: export gave the placement pose of a barrel moved later with fnv_move."""
+        try:
+            ptr = self.live.resolve(ref)['ptr']
+            pose = self.place._pose_exact(ptr) if self.place else None
+        except Exception:  # noqa: BLE001 - best effort: the journal pose stands
+            return None
+        if not pose or any(not isinstance(v, (int, float)) for v in pose['position'] + pose['rotation']):
+            return None
+        return pose
 
     def check(self, plugin):
         report = {'plugin': plugin}

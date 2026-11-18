@@ -627,10 +627,11 @@ class ScriptDebugger:
         if mode == 'out':
             return self._step_out(stop, here)
         script_pred = compile_predicate('arg0.[%d]:u32 == %d' % (FORM_ID, self._form_of(here['script'])))['hex']
-        with self.lock:
-            self.eval.filter(SELECTORS['none'], 0)
-            self.eval.hold(script_pred)
         try:
+            # inside the try: a link error between the filter and the hold must still re-arm (bug hunt 2026-11-18)
+            with self.lock:
+                self.eval.filter(SELECTORS['none'], 0)
+                self.eval.hold(script_pred)
             cur = stop
             for _ in range(STEP_LIMIT):
                 self.dbg._resume(cur, 'run')     # the hold now passes every statement of this script
@@ -650,10 +651,10 @@ class ScriptDebugger:
                         'line.' % STEP_LIMIT)
 
     def _step_out(self, stop, here):
-        with self.lock:
-            self.eval.filter(SELECTORS['none'], 0)
-            self.eval.hold(compile_predicate('1')['hex'])
         try:
+            with self.lock:       # inside the try, as in step (bug hunt 2026-11-18)
+                self.eval.filter(SELECTORS['none'], 0)
+                self.eval.hold(compile_predicate('1')['hex'])
             cur, last = stop, here['offset']
             for _ in range(STEP_LIMIT):
                 self.dbg._resume(cur, 'run')

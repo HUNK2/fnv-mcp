@@ -486,7 +486,11 @@ class Debugger:
         """Compile text and store it in a new slot; returns the slot."""
         program = compile_predicate(text)['hex']
         slot = self.claim_pred_slot()
-        stored = self.link.one('pred', 'set', word(slot), program)
+        try:
+            stored = self.link.one('pred', 'set', word(slot), program)
+        except BaseException:        # a link error must not keep the claim (bug hunt 2026-11-18)
+            self._claimed_slots.discard(slot)
+            raise
         if not stored.get('ok'):
             self._claimed_slots.discard(slot)
             raise ConvError('PREDICATE_REFUSED', 'The companion refused the condition (%s).' % stored.get('error'),
@@ -558,6 +562,12 @@ class Debugger:
                 if hold_slot is not None:
                     self.release_pred_slot(hold_slot)
                 record['hookRefused'] = str(e)
+            except BaseException:
+                # A link error (the game stopped answering) is not a refusal: give the slot back, do not fall through
+                # to a trap break (bug hunt 2026-11-18: the slot stayed claimed for the rest of the session).
+                if hold_slot is not None:
+                    self.release_pred_slot(hold_slot)
+                raise
         pred, pred_slot = 'ff', None
         if when:
             pred_slot = self._store_pred(when)
@@ -588,7 +598,7 @@ class Debugger:
                 if hits and hits > 1:
                     self.link.one('bp', 'after', word(bp_id), '0')    # drop the pending count
                 raise
-        except ConvError:
+        except BaseException:        # not only ConvError: a LinkError must not keep the slot (bug hunt 2026-11-18)
             if pred_slot is not None:
                 self.release_pred_slot(pred_slot)
             raise

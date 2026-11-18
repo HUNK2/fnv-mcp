@@ -208,6 +208,8 @@ class Save:
         out = []
         for _ in range(n):
             gtype, size = struct.unpack_from('<II', self.data, p)
+            if p + 8 + size > len(self.data):     # bug hunt 2026-11-18: same cut-off check as the change forms
+                raise SaveFormatError('global data %d runs past the end of the save (truncated or still being written)' % gtype)
             out.append((gtype, self.data[p + 8:p + 8 + size]))
             p += 8 + size
         return out
@@ -224,6 +226,9 @@ class Save:
             width = (1, 2, 4)[tbyte >> 6]
             length = int.from_bytes(d[p:p + width], 'little')
             p += width
+            if p + length > len(d):      # bug hunt 2026-11-18: a cut-off last body was kept short without an error
+                raise SaveFormatError('change form %d: its body of %d bytes runs past the end of the save (truncated '
+                                      'or still being written)' % (len(out), length))
             index = tbyte & 0x3F
             rtype = CHANGE_TYPES[index] if index < len(CHANGE_TYPES) else 'type%d' % index
             out.append({'form': Buffer(b'', self.ids).resolve(three), 'type': rtype, 'flags': flags,

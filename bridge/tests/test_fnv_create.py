@@ -254,6 +254,34 @@ class PlaceAndExportTests(unittest.TestCase):
             self.assertEqual(obj['base'], '@Wine')
             self.assertEqual(obj['position'], [10, 20, 30])
 
+    def test_remove_retires_the_pose_changes_too(self):
+        # bug hunt 2026-11-18: an adjust of a removed ref stayed undoable; fnv_undo all then replayed SetPos on it
+        with tempfile.TemporaryDirectory() as d:
+            live = FakeLive(d)
+            place = PlaceTools(live)
+            ref = place.at('0003404A', position=[0, 0, 0])['ref']
+            adjust = place.adjust(ref, move=[10, 0, 0])['journalId']
+            place.remove(ref)
+            self.assertTrue(live.journal.get(adjust)['undone'])
+
+    def test_export_takes_the_pose_the_game_shows(self):
+        # live check 2026-11-18: a barrel moved with fnv_move after placement was exported where it was placed,
+        # and a heading of 75 came out as 74.99999
+        with tempfile.TemporaryDirectory() as d:
+            live = FakeLive(d)
+            place = PlaceTools(live)
+            out = place.at('0003404A', position=[10, 20, 30], rotation=[0, 0, 90])
+            ptr = live.resolve(out['ref'])['ptr']
+            live.refs[ptr]['pose'][0:3] = [500.0, 20.0, 30.0]          # moved by another tool, not journaled here
+            live.refs[ptr]['pose'][5] = 74.99999
+            author = AuthorTools(live, place=place)
+            author._editor_id = lambda form_id: None
+            exported = author.export(name='t')
+            obj = json.loads(Path(exported['path']).read_text())['cells']['LiveSessionCell']['objects'][0]
+            self.assertEqual(obj['position'], [500, 20, 30])
+            self.assertEqual(obj['rotation'][2], 75)
+            self.assertEqual(exported['posesFromGame'], 1)
+
     def test_remove_marks_the_placement_undone(self):
         with tempfile.TemporaryDirectory() as d:
             live = FakeLive(d)

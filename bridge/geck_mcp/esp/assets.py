@@ -99,6 +99,15 @@ def nif_block_types(data):
 
 def bsa_names(path):
     """Return the set of lower-case 'folder\\file' paths stored in a BSA."""
+    try:
+        return _bsa_names(path)
+    except (struct.error, IndexError) as e:
+        # bug hunt 2026-11-18: a truncated archive (a download still running) raised struct.error or IndexError, which
+        # the tools reported as INTERNAL_ERROR on every asset check; now one clear error
+        raise AssetError('%s is truncated or damaged (%s)' % (path, e))
+
+
+def _bsa_names(path):
     with open(path, 'rb') as stream:
         header = stream.read(36)
         if len(header) != 36 or header[:4] != b'BSA\0':

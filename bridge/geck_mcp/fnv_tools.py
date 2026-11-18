@@ -59,7 +59,8 @@ class FnvService:
             code = code if isinstance(code, str) and code else \
                 'INVALID_ARGUMENT' if isinstance(e, ValueError) else 'INTERNAL_ERROR'
             message, data = str(e), getattr(e, 'evidence', None)
-            recovery = 'Read-only tool: fix the input or configuration and call again.'
+            from .fnv_conv import recovery_for
+            recovery = recovery_for(code)
             if code == 'INTERNAL_ERROR':
                 from .fnv_conv import internal_error, next_step
                 (message, data), recovery = internal_error(e), next_step('INTERNAL_ERROR')
@@ -596,8 +597,13 @@ class FnvService:
                     (s['name'].lower() == key or (s.get('setting') or '').lower() == key or
                      (s.get('setting') or '').split(':')[0].lower() == key)]
             if not hits:
-                raise EngineMapError('NOT_FOUND', 'No proven setting named %r' % name,
-                                     {'similar': [s.get('setting') or s['name'] for s in e.statics_find(name, 'Setting', 15)]})
+                from .fnv_conv import nearest
+                names = sorted({s.get('setting') or s['name'] for s in e.statics if s['kind'] == 'Setting'})
+                close = nearest(name.strip().split(':')[0], [n.split(':')[0] for n in names])
+                similar = [s.get('setting') or s['name'] for s in e.statics_find(name, 'Setting', 15)]
+                similar = close + [s for s in similar if s not in close]
+                raise EngineMapError('NOT_FOUND', 'No proven setting named %r.%s' % (
+                    name, ' Did you mean %s?' % ', '.join(close) if close else ''), {'similar': similar[:15]})
             results = []
             for s in hits:
                 r = dict(s)
@@ -713,7 +719,15 @@ class FnvService:
                 folder = Path(self.project.state_dir) / 'fnv' / 'screenshots'
                 folder.mkdir(parents=True, exist_ok=True)
                 shot = folder / (path.stem + '.save.png')
-            return fnv_save.inspect(path, types, forms, limit, offset, shot, namer=self._namer())
+            # a filter asks for those change forms: every global variable with them was noise (live check
+            # 2026-11-18); types with GLOB keeps them
+            wants_globals = not (types or forms) or any(str(t).upper() in ('GLOB', 'GLOBAL') for t in types or [])
+            out = fnv_save.inspect(path, types, forms, limit, offset, shot, include_globals=wants_globals,
+                                   namer=self._namer())
+            if not wants_globals:
+                out['globalVariablesNote'] = 'left out because types or forms filters the answer; add GLOB to types ' \
+                                             'to see them'
+            return out
         return self.run('fnv_save_inspect', action)
 
     def save_diff(self, before, after, types=None, forms=None, limit=200):

@@ -111,7 +111,7 @@ def setup_check(project):
         'Install Yvile\'s Crash Logger %s (the crash doctor reads its logs).' % how)
     ini = (layout.user_dir if direct else profile) / 'Fallout.ini'
     text = ini.read_text(encoding='utf-8', errors='replace') if ini.exists() else ''
-    add('keep running unfocused', bool(re.search(r'^bAlwaysActive=1', text, re.M | re.I)), str(ini),
+    add('keep running unfocused', bool(re.search(r'^\s*bAlwaysActive\s*=\s*1\b', text, re.M | re.I)), str(ini),
         'Set bAlwaysActive=1 under [General] in %s.' % ('Fallout.ini' if direct else 'the dev profile\'s Fallout.ini'),
         required=not direct)
 

@@ -55,7 +55,8 @@ def default_appdata_dir():
 def ini_value(path, section, key):
     """One value from an ini file ([section] key=value, names without case), or None."""
     try:
-        text = Path(path).read_text(encoding='utf-8', errors='replace')
+        # bug hunt 2026-11-18: utf-8-sig, a BOM made the first "[section]" line unmatchable
+        text = Path(path).read_text(encoding='utf-8-sig', errors='replace')
     except OSError:
         return None
     current = None

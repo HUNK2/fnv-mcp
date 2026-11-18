@@ -54,6 +54,40 @@ The first version of the fork. The entries below this one are geck-mcp-nv's own 
   common problem. Six new guides (`start`, `build-a-place`, `test-a-mod`, `quest-dialogue`, `npc-ai-combat`,
   `safety-undo`); every guide is also an MCP prompt. `bridge/docs/AGENT-GUIDE.md` is a page to copy into a mod
   project for its own agent; `AGENTS.md` at the root points agents to `CLAUDE.md`.
+- **Fixes from the live check of the tool quality pass** (2026-11-18, 9 failed checks and the rough edges):
+  an argument outside its bounds is a plain `INVALID_ARGUMENT` naming the parameter, not the schema library's
+  text; each error code has its own recovery line. `fnv_test` runs the shipped examples
+  (`fnv-tests/hello-wasteland.yaml`), takes `name` with `run`, says when `fnv.tests_dir` does not exist, and with
+  `repeat` flags only steps that pass in one run and fail in another (value noise is listed apart) and keeps the
+  debug bundle. `fnv_dialogue` numbers choices from 0 like `fnv_dialogue_choose` and reports `new`; the dialogue
+  tree's `goodbye` comes from the goodbye flag. `fnv_place` and every other ref parameter accept `@EditorID`;
+  export writes the pose the game shows (after `fnv_move`) rounded to 3 places; a suggested heading that is the
+  current one says no turn helps. `fnv_scene_graph` counts children cut by `depth` and gives the rotation;
+  `fnv_threads` names functions without a glued address, groups driver threads and shows no -1 lock owner.
+  `fnv_setting_info`, `fnv_globals query` and every unknown actor value get "did you mean"; `set_position` with a
+  bad value says what it needs. `fnv_guide find` finds `fnv_time` for "make it night time" and `fnv_threads hang`
+  for "the game froze". `fnv_health` reports object growth since the last mark and not across a cell change;
+  memory writes (and `fnv_globals set`) journal readable values.
+- **Bug hunt** (2026-11-18, about 80 fixes, each with a test in `tests/test_bughunt_*.py`):
+  - Safety: `fnv_anim events`, `fnv_audio log` and `subtitles`, and `fnv_physics triggers` install engine hooks and
+    now need `fnv.engine_control` full. A test teardown after a failed start no longer reverts every change of the
+    game (the user's own included). The stale-MO2 cleanup no longer takes another MO2 install in a sibling folder
+    (`C:\MO2-other`) for this one. Plugin text with a quote is not put into a console line by `fnv_form reload`.
+    Replay names stay inside the replays folder, and save names refuse a trailing newline. A digraph `%:include`
+    is checked like `#include`.
+  - Nothing left behind after an error: debugger condition slots, watch debug registers, the script stepping hook,
+    a script trace on a script that no longer resolves, a native hook whose attach failed, the first perk-recording
+    hook, and the frame gate after a `step` step in a test.
+  - Wrong results: `fnv_undo` with count 0 undid everything; objective value "false" completed it; `add_item`
+    with 0 added one; a removed placement's pose changes stayed undoable; a typed form lost its name on export;
+    `fnv_inspect perk` listed OR-group members another member rescued; a dotted profile name reported a file that
+    did not exist; a watched object's shared pointer was reported once per field; "100" did not equal 100 in an
+    expect; a failed teardown still passed the test.
+  - Clear errors instead of Python ones: a raw-address memory write without `as_type`, set_av without a value, a
+    missing global in `fnv_script_set`, bad scenario steps and timeouts (refused when the file loads), bad
+    positions, scales and menu names in `fnv_place`, `fnv_world_edit` and clicks, a truncated save, BSA or spec
+    field, a non-JSON companion reply, and more. `fnv_hook_set action=list` needs no `function`; `fnv_input`
+    refuses a `key` and `key_name` that disagree; `fnv_scene_graph` says when a node has more than 128 children.
 - **No private data needed:** the watch hooks find their functions by address, so an engine map built without
   the fnvsym proof table is enough; the `fnv_name_*` tools are an optional extra that needs `FNVSYM_ROOT`.
 - **A project file for the game alone** (`projects/example-fnv.json`): `plugin` and `spec` are optional.

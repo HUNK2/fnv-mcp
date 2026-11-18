@@ -194,8 +194,23 @@ class ScenarioRunTests(unittest.TestCase):
         self.assertEqual(report['repeat'], 2)
         self.assertTrue(report['passed'])
         self.assertEqual(report['comparison']['runs'], 2)
+        # step 2 passes both times with other frame counts: the same outcome, so the runs are identical and the
+        # value change is listed apart (live check 2026-11-18: "steps differ" for clock noise)
+        self.assertTrue(report['comparison']['identical'])
+        self.assertEqual(report['comparison']['differences'], [])
+        self.assertEqual([d['step'] for d in report['comparison']['values']], [2])
+        self.assertIn('same outcomes', report['summary'])
+        self.assertNotIn('differently', report['summary'])
+
+    def test_repeat_flags_a_step_that_passes_once_and_fails_once(self):
+        runs = [{'passed': True, 'summary': 'a', 'failures': [], 'steps': [{'action': 'expect', 'passed': True}]},
+                {'passed': False, 'summary': 'b', 'failures': [{'step': 1}], 'debug': {'consoleTail': ['x']},
+                 'steps': [{'action': 'expect', 'passed': False}]}]
+        with mock.patch.object(self.runner, '_run_once', side_effect=runs):
+            report = self.runner.run(data={'name': 'r', 'allow_menus': True, 'repeat': 2, 'steps': [{'wait': 0}]})
         self.assertFalse(report['comparison']['identical'])
-        self.assertEqual([d['step'] for d in report['comparison']['differences']], [2])
+        self.assertIn('pass or fail differently', report['summary'])
+        self.assertEqual(report['debug'], [{'run': 2, 'consoleTail': ['x']}])      # the failed run's bundle is kept
 
     @property
     def link(self):

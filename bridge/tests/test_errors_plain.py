@@ -126,7 +126,42 @@ class DidYouMeanTests(unittest.TestCase):
     def test_unknown_actor_value(self):
         with self.assertRaises(ValueError) as caught:
             self.live.actor_values('player', ['Helth'])
-        self.assertIn('Did you mean Health', str(caught.exception))
+        self.assertIn('Helth (did you mean Health', str(caught.exception))
+
+    def test_every_unknown_actor_value_gets_a_suggestion(self):
+        # live check 2026-11-18: only the first of two misspelt names had a suggestion
+        with self.assertRaises(ValueError) as caught:
+            self.live.actor_values('player', ['Helth', 'Strenght'])
+        self.assertIn('Helth (did you mean Health', str(caught.exception))
+        self.assertIn('Strenght (did you mean Strength', str(caught.exception))
+
+    def test_no_field_evidence_has_no_full_field_list(self):
+        layout = {'size': 16, 'bases': [], 'fields': [{'name': 'flags1', 'offset': 8, 'type': 'UInt32'}]}
+        with mock.patch.object(self.live, '_layout', lambda cls: layout):
+            with self.assertRaises(LiveError) as caught:
+                self.live.locate('0x01000000', 'flags', cls='TESObjectREFR')
+        self.assertNotIn('fields', caught.exception.evidence)
+        self.assertEqual(caught.exception.evidence['fieldCount'], 1)
+
+    def test_at_editor_id_is_an_editor_id(self):
+        # fnv_spec lookup answers "@Barrel03static"; fnv_place refused it (live check 2026-11-18)
+        self.live._indexes = {'FalloutNV.esm': {'DocMitchell': '00104C0C'}}
+        with self.assertRaises(LiveError) as caught:
+            self.live.resolve('@DocMitchel')
+        self.assertEqual(caught.exception.code, 'REF_NOT_FOUND')
+        self.assertIn('Did you mean DocMitchell', str(caught.exception))
+        with self.assertRaises(ValueError) as caught:
+            self.live.resolve('not a ref!')
+        self.assertIn('@EditorID', str(caught.exception))
+
+    def test_set_position_needs_three_numbers(self):
+        # live check 2026-11-18: value=[1, 2] answered "not enough values to unpack (expected 3, got 2)"
+        with mock.patch.object(self.live, 'in_game', lambda: None), \
+                mock.patch.object(self.live, 'resolve', lambda ref: {'ptr': 1, 'formId': '00000014'}):
+            for value in ([1, 2], None, 'here', [1, 2, 'x'], '123'):
+                with self.assertRaises(ValueError) as caught:
+                    self.live.actor_control('player', 'set_position', value=value)
+                self.assertIn('set_position needs value=[x, y, z]', str(caught.exception))
 
     def test_unknown_editor_id(self):
         self.live._indexes = {'FalloutNV.esm': {'DocMitchell': '00104C0C', 'DocMitchellRef': '00104C0D'}}
@@ -230,7 +265,36 @@ class AddressAliasTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(one.structured_content['error']['code'], 'GAME_NOT_RUNNING')      # past argument checks
         self.assertEqual(both.structured_content['error']['code'], 'INVALID_ARGUMENT')
         self.assertEqual(none.structured_content['error']['code'], 'INVALID_ARGUMENT')
-        self.assertNotEqual(write.structured_content['error']['code'], 'INVALID_ARGUMENTS')
+        self.assertFalse((write.structured_content.get('data') or {}).get('schema'))      # the schema took it
+
+
+class SchemaRefusalTests(unittest.IsolatedAsyncioTestCase):
+    """Live check 2026-11-18: an argument outside the schema's bounds came back as pydantic's own text (a type code
+    and a link); now INVALID_ARGUMENT names the parameter, the bound and the value in plain words."""
+
+    async def test_out_of_range_is_plain_invalid_argument(self):
+        from geck_mcp.server import schema_problems
+        fixture = project_fixture.ProjectFixture()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        async with Client(make_server(fixture.p)) as client:
+            low = await client.call_tool('fnv_wait_for', {'frames': 0})
+            high = await client.call_tool('fnv_time', {'action': 'step', 'frames': 20000})
+            missing = await client.call_tool('fnv_ref', {})
+        for result, parameter in ((low, 'frames'), (high, 'frames'), (missing, 'ref')):
+            error = result.structured_content['error']
+            self.assertEqual(error['code'], 'INVALID_ARGUMENT')
+            self.assertTrue(error['message'].startswith('Invalid argument: %s ' % parameter), error['message'])
+            text = ' '.join(getattr(c, 'text', '') for c in result.content)
+            for library in ('pydantic', 'type=', 'validation error', 'Arguments'):
+                self.assertNotIn(library, text)
+            self.assertTrue(result.structured_content['data']['schema'])
+        self.assertIn('frames should be greater than or equal to 1 (got 0)', low.structured_content['error']['message'])
+        self.assertIn('ref is required', missing.structured_content['error']['message'])
+        self.assertEqual(schema_problems('Error executing tool x: 1 validation error for xArguments\nlimit\n'
+                                         '  Input should be less than or equal to 5 [type=less_than_equal, '
+                                         'input_value=9, input_type=int]\n    For further information visit u'),
+                         [{'parameter': 'limit', 'text': 'limit should be less than or equal to 5 (got 9)'}])
 
 
 class PredicateDescriptionTests(unittest.IsolatedAsyncioTestCase):

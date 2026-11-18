@@ -8,7 +8,7 @@ import time
 
 from .fnv_conv import ConvError, dispatch, verdict
 from .fnv_inject import DETERMINISTIC_FPS, DETERMINISTIC_SEED, shared_time
-from .fnv_link import word
+from .fnv_link import hexs, value_of, word
 from .fnv_setup import setup_check
 from .fnv_warnings import for_live as warnings_for_live
 
@@ -23,6 +23,17 @@ def _refs(live):
     if not result.get('ok'):
         return None
     return int.from_bytes(bytes.fromhex(result['hex']), 'little')
+
+
+def _cell(live):
+    """The player's cell now (a form id or name), or None when it cannot be read."""
+    try:
+        player = live.resolve('player')['ptr']
+        result = live.link.batch([('eval', hexs('GetParentCell'), word(player))])[0]
+        value = value_of(result)
+        return value if isinstance(value, (str, int)) else None
+    except Exception:  # noqa: BLE001 - the cell only decides whether a rise in objects is expected
+        return None
 
 
 def _runner(live):
@@ -102,7 +113,7 @@ class SessionTools:
                 deterministic_state = {'fps': DETERMINISTIC_FPS, 'seed': DETERMINISTIC_SEED}
             snap = control.snapshot(measure=True)
             mark = runner.mark()
-            baseline = {'realFps': snap.get('realFps'), 'refs': _refs(self.live)}
+            baseline = {'realFps': snap.get('realFps'), 'refs': _refs(self.live), 'cell': _cell(self.live)}
         except Exception:
             # No session will be open, so nothing could undo these later: take back what this start turned on (and
             # only that: a capture that was already running stays; R12).
@@ -139,6 +150,7 @@ class SessionTools:
         mark = _runner(self.live).mark()
         warnings_for_live(self.live).clear()
         state['mark'] = mark
+        state['markBaseline'] = {'refs': _refs(self.live), 'cell': _cell(self.live)}   # the object count "since" this mark
         state['marks'].append({'label': label, **mark})
         return verdict('Marked "%s"' % label, 'fnv_health reports from this point on.', changed=True, label=label,
                        marks=len(state['marks']))
@@ -260,7 +272,12 @@ class HealthTools:
                           'next': 'Call fnv_profile action=frame.'})
 
     def _objects(self, state, items):
-        now, base = _refs(self.live), state['baseline'].get('refs')
+        baseline = state.get('markBaseline') or state['baseline']
+        now, base = _refs(self.live), baseline.get('refs')
+        since = state['marks'][-1]['label'] if state.get('markBaseline') and state.get('marks') else 'the session start'
         if now is not None and base is not None and now - base > REF_GROWTH:
-            items.append({'kind': 'objects', 'what': 'NiRefObject count up by %d since the session start' % (now - base),
+            was, cell = baseline.get('cell'), _cell(self.live)
+            if was is not None and cell is not None and was != cell:
+                return      # a cell change loads and frees objects: the rise is expected
+            items.append({'kind': 'objects', 'what': 'NiRefObject count up by %d since %s' % (now - base, since),
                           'next': 'Call fnv_memory action=address_space.'})

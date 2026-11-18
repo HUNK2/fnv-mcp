@@ -216,6 +216,9 @@ class CodeTools:
         copy = Path(meta['copy'])
         text = copy.read_text(encoding='utf-8', errors='replace')
         start, end = self._range(text, address)
+        if start is None:
+            raise ConvError('NOT_IN_COPY', 'The copy has no "@fnv 0x%08x" tag for %s, so its lines are unknown.'
+                            % (address, function))
         lines = text.splitlines(keepends=True)
         body = ''.join(lines[start - 1:end])
         if not find or body.count(find) != 1:

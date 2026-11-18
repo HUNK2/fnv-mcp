@@ -50,9 +50,9 @@ class PositionSchemaTests(unittest.IsolatedAsyncioTestCase):
             for arguments in ({'position': [100, None, 5]}, {'position': {'x': 100}},
                               {'position': [1, 2, 3], 'rotation': [None, None, 90]}):
                 answer = (await client.call_tool('fnv_move', arguments)).structured_content
-                self.assertNotEqual(answer['error']['code'], 'INVALID_ARGUMENTS', arguments)
+                self.assertFalse((answer.get('data') or {}).get('schema'), arguments)
             answer = (await client.call_tool('fnv_raycast', {'start': [0, 0, 0], 'end': {'x': 1, 'y': 0, 'z': 0}}))
-            self.assertNotEqual(answer.structured_content['error']['code'], 'INVALID_ARGUMENTS')
+            self.assertFalse((answer.structured_content.get('data') or {}).get('schema'))
 
 
 if __name__ == '__main__':

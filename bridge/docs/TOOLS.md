@@ -77,7 +77,7 @@ Which tool to use for a problem. list: the guides (for example "the game crashed
 | `words` | string | up to 300 characters |  | For topic: a guide name (crash, start) or words describing the problem. For find and engine: the words to search for. Not used by list. |
 | `limit` | integer | 1 to 100 | `20` | For find and engine: maximum results, 1 to 100. Default 20. |
 | `offset` | integer | 0 or more | `0` | For find and engine: results to skip, for paging. Default 0. |
-| `brief` | boolean |  | `false` | For find and engine: if true, each row has only its kind, name and description (find) or file, line and heading (engine). |
+| `brief` | boolean |  | `false` | For find and engine: if true, each row has only its kind, name, action and example call (find) or file, line and heading (engine). |
 
 Example:
 
@@ -123,7 +123,7 @@ The game process. launch: start Fallout: New Vegas and wait until it is ready: a
 | --- | --- | --- | --- | --- |
 | `action` | string | `launch`, `quit`, `restart` | required | launch (start the game and wait until ready), quit, or restart (quit if running, then launch). |
 | `start` | string | pattern `^(menu\|continue\|save:[A-Za-z0-9_. \-]{1,120}\|coc:[A-Za-z0-9_]{1,120})$` | `"menu"` | menu \| continue (newest dev save) \| save:<name> \| coc:<cell EditorID> |
-| `force` | boolean |  | `true` | For quit and restart: if true (default), terminate the game when the console quit and closing the window do not end it. |
+| `force` | boolean |  | `true` | For quit: if true (default), terminate the game when the console quit and closing the window do not end it. |
 | `timeout_seconds` | integer | 5 to 600 |  | Seconds to wait. launch and restart: 20 to 600, default 240. quit: 5 to 120, default 20. |
 | `via` | string | `auto`, `mo2`, `direct` | `"auto"` | For launch and restart: mo2 (the MO2 dev profile), direct (nvse_loader.exe in the game folder) or auto (default: mo2 when the project names an MO2 instance). |
 
@@ -819,7 +819,7 @@ Menus by meaning, on the menu at the top. click target=<tile path or name> (fnv_
 | `action` | string | `click`, `button`, `wait`, `sleep`, `fast_travel`, `message`, `close`, `back`, `type`, `close_all` | required | click a tile, press a button by label, wait hours, sleep, fast_travel to a marker, message (press a message box button), close or back the top menu, or type text into the text entry menu. |
 | `target` | string | up to 200 characters |  | For action=click: the tile path or name to click (fnv_menu tiles lists them). |
 | `label` | string | up to 120 characters |  | For action=button: the text on the button, such as Take All or Done. For action=type: the text to enter. |
-| `menu` | string | up to 40 characters |  | For click, button and close: the menu to act on, by name or number, instead of the one at the top. |
+| `menu` | string | up to 40 characters |  | For click, button and close: the menu to act on, by number or name (InventoryMenu or inventory), instead of the one at the top. An unknown name is an error. |
 | `hours` | integer | 1 to 24 |  | For action=wait or sleep: number of hours to pass, 1 to 24. Default 1 when omitted. |
 | `marker` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `button` | string | up to 120 characters |  | For action=message: the message box button to press, as an index or its label. |
@@ -1491,17 +1491,17 @@ Scenario tests in the game. run (default): one scenario test (a YAML file at pat
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
 | `action` | string | `run`, `run_all`, `steps` | `"run"` | run (default) runs one scenario file or inline yaml, run_all every scenario in a folder, steps the steps given inline. |
-| `path` | string | up to 1000 characters |  | For action=run: the scenario YAML file to run. |
+| `path` | string | up to 1000 characters |  | For action=run: the scenario YAML file to run. A relative path is looked up in fnv.tests_dir, then in the shipped examples (fnv-tests/hello-wasteland.yaml). |
 | `yaml` | string | up to 100000 characters |  | For action=run: the scenario as YAML text, instead of a file. |
 | `folder` | string | up to 1000 characters |  | For action=run_all: the folder of scenarios. Default: the project's fnv.tests_dir. |
 | `steps` | any[] | at most 200 items |  | The scenario steps to run in order, in the same form as a YAML scenario file (run, script, wait, expect, set, input, move, step, call, and so on). |
-| `name` | string | up to 80 characters | `"inline"` | Name of this scenario, used in the report. Default 'inline'. |
+| `name` | string | up to 80 characters | `"inline"` | Name of this scenario, used in the report (with action=run it replaces the file's own name). Default 'inline'. |
 | `start` | string | pattern `^(menu\|continue\|save:[A-Za-z0-9_. \-]{1,120}\|coc:[A-Za-z0-9_]{1,120})$` |  | menu \| continue (newest dev save) \| save:<name> \| coc:<cell EditorID> |
 | `plugins` | string[] | at most 20 items |  | Plugins the scenario needs; the run stops with PLUGIN_NOT_LOADED if one is not loaded in the dev profile (install it with fnv_install first). |
 | `setup` | any[] | at most 200 items |  | Steps run before the main steps, in the same step format. |
 | `teardown` | any[] | at most 200 items |  | Steps run after the main steps, in the same step format. |
 | `deterministic` | boolean |  | `false` | When true, fixes the frame step at 60 fps and seeds the random generator so runs are repeatable. Default false. |
-| `repeat` | integer | 1 to 20 | `1` | Run the whole scenario this many times and report the steps that differ between runs. Default 1. |
+| `repeat` | integer | 1 to 20 | `1` | Run the whole scenario this many times and report the steps that pass in one run and fail in another (values that differ with the same outcome are listed apart). Default 1. |
 | `timeout_seconds` | integer | 20 to 900 | `240` | Time limit for the scenario run, in seconds. Default 240. |
 | `relaunch_on_crash` | boolean |  | `true` | When true (default), the game is relaunched if it crashes during the run. |
 
@@ -3039,7 +3039,7 @@ Change what an engine function does, live: skip = do not run it and return value
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `function` | string | up to 300 characters | required | Engine function: proven name (Actor::GetLevel) or address |
+| `function` | string | up to 300 characters |  | Engine function: proven name (Actor::GetLevel) or address. Not needed for list. |
 | `action` | string | `skip`, `result`, `arg`, `script`, `read`, `remove`, `list` | `"skip"` | skip bypasses the function and returns value; result runs it and replaces its result; arg replaces one parameter; script runs a console line on each call; read shows hit info; remove deletes the hook; list shows hooks. Default skip. |
 | `value` | boolean \| integer \| number \| string |  |  | The value to return (skip), the replacement result (result) or the replacement parameter (arg). |
 | `value_type` | string | `int`, `float`, `bool`, `ptr`, `ref`, `form` |  | How to interpret value: int, float, bool, ptr, ref or form. |

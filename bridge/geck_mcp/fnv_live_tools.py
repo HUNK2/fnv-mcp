@@ -361,7 +361,9 @@ USE_WHEN = {
     'fnv_menu': ['which menu is open', 'state: message box buttons', 'tiles: ui tile tree of a menu'],
     'fnv_rng': ['seed the random number generator', 'repeatable random rolls'],
     'fnv_time': ['set the time of day', 'pause: pause the game clock', 'step: step frames one by one',
-                 'speed: slow motion or time multiplier', 'calendar: what day and hour is it'],
+                 'speed: slow motion or time multiplier', 'calendar: what day and hour is it',
+                 # live check 2026-11-18: "make it night time" found fnv_actor_control first
+                 'calendar: make it night, day, morning, noon or evening', 'calendar: night time, daytime, hour'],
     'fnv_leveled_roll': ['roll a leveled list', 'chances of a leveled list item'],
     # engine AI
     'fnv_detection': ['the npc does not see the player', 'why was I detected', 'sneak and stealth detection'],
@@ -430,7 +432,10 @@ USE_WHEN = {
     'fnv_code': ['replace an engine function with edited decomp code', 'swap: swap an engine function'],
     'fnv_plugin_build': ['ship native code as its own xnvse plugin dll', 'scaffold: start an nvse plugin'],
     'fnv_profile': ['the game is slow, low frame rate', 'sample: where does the time go', 'frame: frame time by system'],
-    'fnv_threads': ['list: game threads and locks', 'hang: the game is frozen and hangs', 'hang: deadlock'],
+    'fnv_threads': ['list: game threads and locks', 'hang: the game is frozen and hangs', 'hang: deadlock',
+                    # live check 2026-11-18: "the game froze" did not find it
+                    'hang: the game froze, freezes, is stuck or stopped responding',
+                    'hang: game not responding, unresponsive, locked up'],
     'fnv_memory': ['memory keeps growing, a leak', 'out of memory', 'address_space: address space use'],
     'fnv_object': ['what is this pointer', 'find every live object of a class', 'referrers: who points to this'],
     'fnv_coverage': ['which decomp source lines ran', 'code coverage of a scenario'],
@@ -770,7 +775,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
             if action == 'run':
                 if not path and not yaml:
                     raise ValueError('run needs path or yaml')
-                return ScenarioRunner(live).run(path, yaml, relaunch_on_crash)
+                return ScenarioRunner(live).run(path, yaml, relaunch_on_crash,
+                                                name=name if name != 'inline' else None)
             if not steps:
                 raise ValueError('steps needs steps (a list of scenario steps)')
             data = {'name': name, 'steps': steps, 'deterministic': deterministic, 'repeat': repeat,
@@ -1041,6 +1047,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
             if key_name is not None:          # inside the envelope: an unknown name is INVALID_ARGUMENT (T2)
                 from .fnv_hands import scan_code
                 code = scan_code(key_name)
+                if key is not None and key != code:   # bug hunt 2026-11-18: key was dropped without a word
+                    raise ValueError('key %d and key_name %r name different keys (%r is %d): give one of them'
+                                     % (key, key_name, key_name, code))
             return live.input(action, control, code, duration_ms, target, frames=frames, button=button, mouse=mouse)
         return await invoke('fnv_input', press, 'act')
 
@@ -1587,7 +1596,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
 
     @server.tool(annotations=act)
     async def fnv_hook_set(function: Annotated[str, Field(min_length=1, max_length=300, description=(
-            'Engine function: proven name (Actor::GetLevel) or address'))],
+            'Engine function: proven name (Actor::GetLevel) or address. Not needed for list.'))] | None = None,
                            action: Literal['skip', 'result', 'arg', 'script', 'read', 'remove', 'list'] = 'skip',
                            value: Scalar | None = None,
                            value_type: Literal['int', 'float', 'bool', 'ptr', 'ref', 'form'] | None = None,
@@ -1604,10 +1613,15 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         (only matching calls), limit (only the first N calls), script (also run a line). read = the calls it
         changed so far; remove = take it out. Journaled: fnv_undo removes it. Proven functions only unless
         allow_unproven."""
-        if action in ('read', 'list'):
-            return await invoke('fnv_hook_set', lambda: control_tools.hook_set(function, action, allow_unproven=allow_unproven))
-        return await invoke('fnv_hook_set', lambda: control_tools.hook_set(function, action, value, value_type, arg, filter,
-                                                                           limit, script, pop_bytes, allow_unproven), 'act')
+        def hook():
+            if action != 'list' and not function:
+                # bug hunt 2026-11-18: function was required even for list, which takes none
+                raise ValueError('%s needs function (a proven name such as Actor::GetLevel, or an address)' % action)
+            if action in ('read', 'list'):
+                return control_tools.hook_set(function, action, allow_unproven=allow_unproven)
+            return control_tools.hook_set(function, action, value, value_type, arg, filter, limit, script, pop_bytes,
+                                          allow_unproven)
+        return await invoke('fnv_hook_set', hook, 'read' if action in ('read', 'list') else 'act')
 
     @server.tool(annotations=act)
     async def fnv_patch(address: Annotated[str, Field(min_length=1, max_length=300, description=(
@@ -2549,7 +2563,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         modifier and phoneme values. events ref seconds: animation actions started (equip, attack, reload...)."""
         return await invoke('fnv_anim', lambda: anim_tools.run(action, ref=ref, group=group, idle=idle, target=target,
                                                                rebuild=rebuild, seconds=seconds),
-                            'act' if action == 'play' or rebuild else 'read')
+                            # bug hunt 2026-11-18: events installs a code hook (record_hooks), so it needs full
+                            'act' if action in ('play', 'events') or rebuild else 'read')
 
     @server.tool(annotations=act)
     async def fnv_audio(action: Literal['log', 'play', 'playing', 'stop', 'music', 'radio', 'subtitles', 'hear',
@@ -2572,7 +2587,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         (text, sound id). hear sound position=[x,y,z]: whether the engine would play it there (its distance test).
         voice_check ref: for each line of an NPC the voice and lip files the engine asks for, and whether they
         exist (same as fnv_crawl dialogue)."""
-        acts = ('play', 'stop') + (('music',) if file or stop else ()) + (('radio',) if enable is not None else ()) \
+        # bug hunt 2026-11-18: log and subtitles install code hooks in the engine, so they always need full
+        acts = ('play', 'stop', 'log', 'subtitles') + (('music',) if file or stop else ()) + (('radio',) if enable is not None else ()) \
             + (('subtitles',) if enable else ())
         return await invoke('fnv_audio', lambda: audio_tools.run(action, seconds=seconds, sound=sound, ref=ref,
                                                                  sound_id=sound_id, file=file, stop=stop,
@@ -2595,7 +2611,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         return await invoke('fnv_physics', lambda: physics_tools.run(action, ref=ref, velocity=velocity,
                                                                      seconds=seconds, position=position,
                                                                      radius=radius),
-                            'act' if action == 'set' else 'read')
+                            # bug hunt 2026-11-18: triggers installs a code hook (record_hooks)
+                            'act' if action in ('set', 'triggers') else 'read')
 
     @server.tool(annotations=act)
     async def fnv_systems(action: Literal['formulas', 'formula', 'sweep', 'progression', 'needs', 'perk', 'barter',

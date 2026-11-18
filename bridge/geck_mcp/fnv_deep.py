@@ -23,6 +23,7 @@ from pathlib import Path
 from . import fnv_engine, fnv_procmem, fnv_symdb
 from .fnv_facts import SCRIPT_BLOCKS, WATCH_TARGETS
 from .fnv_args import capped
+from .fnv_brief import clean_name
 from .fnv_link import hexs, quoted, word
 from .fnv_live import LiveError, _fid, _num
 
@@ -513,13 +514,19 @@ class DeepTools:
 
     def script_trace(self, script, action='read', source=None, limit=200):
         self.live.in_game()
-        ptr, info, owner = self.script_form(script)
-        label = 'trace@%08X' % ptr
         if action == 'stop':
+            # Remove the hook first: a script that no longer resolves (a reference gone after a load) must not keep the
+            # trace hook armed (bug hunt 2026-11-18).
             h = self.hook('script_line')
             if h:
                 self.remove(h['id'])
+            try:
+                info = self.script_form(script)[1]
+            except Exception:  # noqa: BLE001 - the name of the script is only for the answer
+                info = None
             return {'removed': bool(h), 'script': info}
+        ptr, info, owner = self.script_form(script)
+        label = 'trace@%08X' % ptr
         current = self.hook('script_line')
         switching = not current or int(current.get('filterValue', '0'), 16) != ptr
         h = self.ensure('script_line', ptr)
@@ -801,7 +808,7 @@ class DeepTools:
             stacks = defaultdict(list)
             for k in range(max(1, min(int(samples), 20))):
                 if k:
-                    time.sleep(max(0.05, min(interval_ms, 5000)) / 1000)
+                    time.sleep(max(50, min(interval_ms, 5000)) / 1000)     # a 50 ms floor: 0.05 was milliseconds (bug hunt 2026-11-18)
                 for tid in wanted:
                     regs = proc.thread_context(tid)
                     if regs:
@@ -814,7 +821,9 @@ class DeepTools:
         def name(address, frame=None, return_address=False):
             sym = engine.symbolize(address, modmap, return_address=return_address)
             if sym.get('kind') == 'function':
-                out = {'address': '0x%08X' % address, 'function': sym.get('name'), 'status': sym.get('status'),
+                out = {'address': '0x%08X' % address,
+                       'function': clean_name(sym.get('name'), sym.get('functionAddress')),
+                       'status': sym.get('status'),
                        'offset': sym.get('offset')}
                 if sym.get('source'):
                     out['source'] = sym['source']

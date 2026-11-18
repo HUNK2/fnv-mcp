@@ -203,6 +203,9 @@ class NativeTools:
         if not source or not name:
             raise ConvError('BAD_ARGUMENTS', 'build needs source (C text or a .c path) and name.')
         name = c_name(name)
+        if not name:
+            raise ConvError('BAD_ARGUMENTS', 'build needs a name with letters or digits (it names the module and its '
+                            'files).')
         src_dir = self.modules / 'src'
         src_dir.mkdir(parents=True, exist_ok=True)
         path = source_path(source)
@@ -262,6 +265,7 @@ class NativeTools:
         from .fnv_deep import decode_prologue
         for req in mod.get('hooks', []):
             target = int(req['target'], 16)
+            hid = None
             try:
                 raw = self.live.reads([(target, 24)])[0]
                 stolen, relocs = decode_prologue(raw)
@@ -274,10 +278,16 @@ class NativeTools:
                 attach = self.live.link.one('hooknative', word(hid), word(mod['id']), word(req['request']))
                 if not attach.get('ok'):
                     self.live.link.one('unhook', word(hid))
+                    hid = None
                     raise ConvError('HOOK_REFUSED', str(attach.get('error')))
                 installed.append({'request': req['request'], 'target': req['target'],
                                   'function': self._fname(target), 'hook': hid})
             except Exception as e:  # noqa: BLE001 - report each request
+                if hid is not None and not any(i['hook'] == hid for i in installed):
+                    try:        # a hook installed but not attached (the attach call raised) goes back
+                        self.live.link.one('unhook', word(hid))
+                    except Exception:  # noqa: BLE001
+                        pass
                 failed.append({'request': req['request'], 'target': req['target'], 'error': str(e)[:200]})
         exports = {e['name']: e['address'] for e in out.get('exports', [])}
         self.loaded[key] = {'id': mod['id'], 'dll': str(dll), 'exports': exports, 'hooks': installed}
@@ -322,7 +332,9 @@ class NativeTools:
         listed = self.live.link.one('mod', 'list').get('modules', [])
         for m in listed:
             if c_name(m['name'].rsplit('-', 1)[0]) == key or str(m['id']) == str(name):
-                return key, m['id']
+                # By id the key above is the number: name the module by its own name, so unload forgets its
+                # record in self.loaded (bug hunt 2026-11-18: load then said ALREADY_LOADED after an unload by id).
+                return c_name(str(m['name']).rsplit('-', 1)[0]), m['id']
         raise ConvError('NOT_LOADED', 'No loaded module %s. Next: fnv_native list.' % name)
 
     def reload(self, name, source=None):

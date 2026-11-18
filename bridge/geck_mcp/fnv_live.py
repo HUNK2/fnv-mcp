@@ -371,7 +371,8 @@ class LiveService:
                         'before calling again.')
         else:
             outcome = 'failed_before_change'
-            recovery = next_step(code) or 'Fix the input or the game state (fnv_status) and call again.'
+            from .fnv_conv import recovery_for
+            recovery = recovery_for(code)
         data = getattr(e, 'evidence', None)
         message = str(e)
         if code == 'INTERNAL_ERROR':           # a bug: no Python text to the agent (tool quality part 3)
@@ -534,6 +535,8 @@ class LiveService:
         Accepts: player | crosshair | form id hex (0x00000014, 14, 000A3E7C) | Plugin.esp:LOCALID |
         an EditorID from the record index (looked up, never evaluated: W2)."""
         ref = (ref or '').strip()
+        if ref.startswith('@') and EDITOR_ID.match(ref[1:]):     # fnv_spec's "@EditorID" form (live check 2026-11-18)
+            ref = ref[1:]
         if not ref:
             raise ValueError('ref is required')
         if ref.lower() in ('player', 'playerref'):
@@ -558,7 +561,8 @@ class LiveService:
                                 {'spec': ref, 'didYouMean': close})
             expr = self.form_expr(found['formId'])
         else:
-            raise ValueError('Not a reference: %r (use player, crosshair, a form id or an EditorID)' % ref)
+            raise ValueError('Not a form or reference: %r (use player, crosshair, a form id such as 0x0001F2B4, '
+                             'Plugin.esp:LOCALID, an EditorID or @EditorID)' % ref)
         result = self.link.eval(expr)
         element = result.get('result') or {}
         if not result.get('ok') or element.get('type') != 'form' or not element.get('ptr'):
@@ -876,7 +880,11 @@ class LiveService:
         names = names or fnv_facts.ACTOR_VALUES
         bad = [n for n in names if n not in fnv_facts.ACTOR_VALUES]
         if bad:
-            raise ValueError('Unknown actor values: %s.%s' % (', '.join(bad), did_you_mean(bad[0], fnv_facts.ACTOR_VALUES)))
+            hints = []
+            for n in bad:
+                close = nearest(n, fnv_facts.ACTOR_VALUES)
+                hints.append('%s (did you mean %s?)' % (n, ', '.join(close)) if close else n)
+            raise ValueError('Unknown actor value%s: %s.' % ('s' if len(bad) > 1 else '', '; '.join(hints)))
         self.in_game()
         r = self.resolve_actor(ref)
         exprs = [e % n for n in names for e in ('GetAV %s', 'GetBaseAV %s', 'GetPermanentActorValue %s')]
@@ -1201,7 +1209,7 @@ class LiveService:
                 raise LiveError('NO_FIELD', '%s has no field %r.%s It has %d fields: fnv_class layout lists them.'
                                 % (current_class, part, ' Did you mean %s?' % ', '.join(close) if close else '',
                                    len(names)),
-                                {'didYouMean': close, 'fieldCount': len(names), 'fields': names[:200]})
+                                {'didYouMean': close, 'fieldCount': len(names), 'class': current_class})
             steps.append({'field': match['name'], 'class': match['class'], 'offset': '0x%X' % match['absolute'],
                           'type': match['type'], 'checked': match.get('checked'), 'span': match.get('span')})
             field_address = address + match['absolute']
@@ -1256,6 +1264,9 @@ class LiveService:
         return out
 
     def _encode(self, kind, value):
+        if not kind:     # bug hunt 2026-11-18: a raw address with no as_type has no type: .endswith on None crashed
+            raise ValueError('No type is known at this address: give as_type (u8/i8/u16/i16/u32/i32/f32/f64/ptr/'
+                             'bool/bytes)')
         if kind in SIMPLE_TYPES or kind.endswith('*'):
             fmt, _ = SIMPLE_TYPES.get(kind, ('<I', 4))
             if fmt == '<?':
@@ -1269,6 +1280,16 @@ class LiveService:
                 raise ValueError('value: expected hex bytes such as "0A FF 00" for bytes, got %r' % (value,)) from None
         raise ValueError('Cannot write a value of type %s (give as_type: u8/u16/u32/i32/f32/f64/ptr/bytes)'
                          % readable_type(kind))
+
+    @staticmethod
+    def _decoded(kind, data):
+        """The value of bytes written as a simple type, for the journal (live check 2026-11-18: a global's change
+        read "0000f041" -> "0000a040"); None for other types."""
+        fmt, size = SIMPLE_TYPES.get(kind, ('<I', 4) if (kind or '').endswith('*') else (None, 0))
+        if not fmt or len(data) != size:
+            return None
+        v = struct.unpack(fmt, data)[0]
+        return round(v, 6) if isinstance(v, float) else v
 
     def mem_write(self, target, value, path=None, as_type=None, cls=None, note=None):
         self.ready()
@@ -1284,6 +1305,7 @@ class LiveService:
         seen = self.link.read(address, len(data))
         entry = self.journal.add({'kind': 'memory', 'state': 'pending', 'address': '0x%08X' % address, 'type': kind,
                                   'old': seen.hex(), 'new': data.hex(), 'target': target, 'path': path, 'note': note,
+                                  'oldValue': self._decoded(kind, seen), 'newValue': self._decoded(kind, data),
                                   'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': seen.hex()}})
         try:
             old = self.link.write(address, data)
@@ -1291,7 +1313,7 @@ class LiveService:
             if e.code == 'MEMORY_UNWRITABLE':     # refused: nothing landed, nothing to undo (S3 review I2)
                 self.journal.mark_undone([entry['id']])
             raise
-        self.journal.confirm(entry['id'], {'old': old.hex(),
+        self.journal.confirm(entry['id'], {'old': old.hex(), 'oldValue': self._decoded(kind, old),
                                            'undo': {'op': 'write', 'address': '0x%08X' % address, 'hex': old.hex()}})
         return {'address': '0x%08X' % address, 'type': kind, 'old': old.hex(), 'new': data.hex(), 'path': steps,
                 'journalId': entry['id'], 'changed': old != data}
@@ -1330,7 +1352,9 @@ class LiveService:
             this_ptr = int(this, 16) if isinstance(this, str) and this.lower().startswith('0x') else self.resolve(str(this))['ptr']
         for arg in args or []:
             kind, value = (arg.get('type', 'int'), arg.get('value')) if isinstance(arg, dict) else ('int', arg)
-            if kind in ('int', 'uint', 'bool'):
+            if kind == 'bool':      # bug hunt 2026-11-18: the text "true" or "false" was not a number
+                words.append(int(as_bool('value', value)))
+            elif kind in ('int', 'uint'):
                 words.append(int(value, 0) if isinstance(value, str) else int(value))
             elif kind == 'ptr':
                 words.append(int(str(value), 16) if str(value).lower().startswith('0x') else int(value))
@@ -1446,7 +1470,14 @@ class LiveService:
             if not EDITOR_ID.match(target):
                 raise ValueError('A global is given by its EditorID')
             old = fnv_link.value_of(self.link.eval('GetGlobalValue %s' % target))
-            line, undo = 'set %s to %s' % (target, value), 'set %s to %s' % (target, old)
+            if old is None:     # bug hunt 2026-11-18: no such global: the undo line read "set X to None"
+                raise LiveError('NO_GLOBAL', 'The running game has no global %r. Next: fnv_globals query=<part of the '
+                                'name> lists them.' % target)
+            try:
+                value = float(value)    # a global holds a number; text would be run as part of the console line
+            except (TypeError, ValueError):
+                raise ValueError('value for a global must be a number (got %r)' % (value,)) from None
+            line, undo = 'set %s to %s' % (target, _num(value)), 'set %s to %s' % (target, _num(old))
         elif kind == 'stage':
             q = self.resolve(target)
             old = fnv_link.value_of(self.link.eval('GetStage %s' % q['expr']))
@@ -1455,7 +1486,9 @@ class LiveService:
             q = self.resolve(target)
             fn = 'Completed' if kind == 'objective_completed' else 'Displayed'
             old = fnv_link.value_of(self.link.eval('GetObjective%s %s %d' % (fn, q['expr'], int(index))))
-            line = 'SetObjective%s %s %d %d' % (fn, q['formId'], int(index), 1 if value else 0)
+            # bug hunt 2026-11-18: the text "false" or "0" is true in Python: read it as a bool
+            flag = as_bool('value', value) if isinstance(value, str) else bool(value)
+            line = 'SetObjective%s %s %d %d' % (fn, q['formId'], int(index), 1 if flag else 0)
             undo = 'SetObjective%s %s %d %d' % (fn, q['formId'], int(index), 1 if old else 0)
         elif kind == 'variable':
             if not name or not EDITOR_ID.match(name):
@@ -1468,7 +1501,13 @@ class LiveService:
             if not EDITOR_ID.match(target):
                 raise LiveError('NEEDS_EDITOR_ID', 'Setting a variable needs the quest or reference EditorID (console '
                                 '"set X.var to")', {'formId': r['formId']})
-            line, undo = 'set %s.%s to %s' % (target, name, value), 'set %s.%s to %s' % (target, name, old)
+            try:
+                value = int(value, 0) if isinstance(value, str) and re.match(r'^-?0[xX]', value.strip())                     else float(value)
+            except (TypeError, ValueError):
+                raise ValueError('value for a variable must be a number (got %r)' % (value,)) from None
+            line = 'set %s.%s to %s' % (target, name, _num(value))
+            # no readable old value (a ref variable shows as a form id, an unset one as None): no undo line to give
+            undo = 'set %s.%s to %s' % (target, name, _num(old)) if isinstance(old, (int, float)) else None
         else:
             raise ValueError('kind must be stage, objective_completed, objective_displayed, variable or global')
         self.changing('script_set')
@@ -1517,21 +1556,36 @@ class LiveService:
                 raise ValueError('%s needs a target' % action)
             t = target if EDITOR_ID.match(target) and not FORM_ID.match(target) else self.resolve(target)['formId']
             command = self.TARGET_ACTIONS[action] % t
+            count = 1
+            if action in ('add_item', 'remove_item') and value is not None:
+                try:
+                    count = int(value)
+                except (TypeError, ValueError):
+                    count = 0
+                if count < 1:       # bug hunt 2026-11-18: 0 added one item (value or 1)
+                    raise ValueError('%s needs value = a whole number of at least 1 (got %r)' % (action, value))
             if action == 'add_item':
-                command = 'AddItem %s %d' % (t, int(value or 1))
+                command = 'AddItem %s %d' % (t, count)
                 before = self.values(['GetItemCount %s' % t], r['ptr'])[0]
                 if before is not None:
                     # the item by form id, so its undo meets one of the same item named by form id (round 4 M2)
                     undo = {'op': 'item_count', 'ref': r['formId'], 'item': self._item_form_id(t), 'count': int(before)}
             elif action == 'remove_item':
-                command = 'RemoveItem %s %d' % (t, int(value or 1))
+                command = 'RemoveItem %s %d' % (t, count)
         elif action in ('set_av', 'force_av'):
             # SetAV changes the base value; for NPC skills the engine derives the value from SPECIAL, so only
             # ForceAV moves them. Both are read back, and the result says whether the value changed.
             if not target or target not in fnv_facts.ACTOR_VALUES:
                 raise ValueError('%s needs target = actor value name.%s'
                                  % (action, did_you_mean(target, fnv_facts.ACTOR_VALUES) if target else ''))
+            try:        # bug hunt 2026-11-18: no value (or text) reached _num as a TypeError: INTERNAL_ERROR
+                float(value)
+            except (TypeError, ValueError):
+                raise ValueError('%s needs value = a number (got %r)' % (action, value)) from None
             before = self.values(['GetAV %s' % target, 'GetBaseAV %s' % target], r['ptr'])
+            if None in before:      # its undo line would read "SetAV <name> None"
+                raise LiveError('AV_UNREADABLE', 'Cannot read the actor value %s of %s now, so the change was not '
+                                'made' % (target, r['formId']))
             verb = 'SetAV' if action == 'set_av' else 'ForceAV'
             command = '%s %s %s' % (verb, target, _num(value))
             undo = '%s %s %s' % (verb, target, _num(before[1] if action == 'set_av' else before[0]))
@@ -1547,7 +1601,15 @@ class LiveService:
                 out['hint'] = 'The current value did not change (NPC skills follow SPECIAL); use force_av'
             return out
         elif action == 'set_position':
-            x, y, z = value
+            if isinstance(value, dict) and all(k in value for k in 'xyz'):
+                value = [value['x'], value['y'], value['z']]
+            try:
+                if isinstance(value, (str, bytes)):      # "123" would read as 1, 2, 3
+                    raise TypeError
+                x, y, z = (float(v) for v in value)
+            except (TypeError, ValueError):
+                raise ValueError('set_position needs value=[x, y, z]: three numbers (got %r)' % (value,)) from None
+            value = [x, y, z]
             old = self.values(['GetPos X', 'GetPos Y', 'GetPos Z'], r['ptr'])
             self.changing('actor_control')
             # Journaled before the moves: if a later axis fails, the axes already moved can still be undone.
@@ -1719,6 +1781,8 @@ class LiveService:
             if not entries:
                 raise LiveError('NOT_FOUND', 'No undoable journal entry %s' % journal_id)
         else:
+            if int(count) < 1:      # bug hunt 2026-11-18: [-0:] is the whole list: count=0 undid everything
+                raise ValueError('count must be at least 1')
             entries = self.journal.entries(process=self.game_identity(), undoable=True)[-int(count):]
         results = self._apply_undos(reversed(entries))
         return {'results': results, 'changed': any(r['undone'] for r in results)}

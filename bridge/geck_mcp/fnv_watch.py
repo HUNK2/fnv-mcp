@@ -120,7 +120,7 @@ class FieldWatchTools:
             cands = sorted({w for w in words if 0x01000000 <= w < 0x7FFF0000 and not w & 3})
             classes = self.live.rtti(cands) if cands else {}
             for k, w in enumerate(words):
-                if w in classes and (classes[w] or {}).get('class') and w not in pointers.values():
+                if w in classes and (classes[w] or {}).get('class') and w not in {p[0] for p in pointers.values()}:
                     try:
                         pointers[k * 4] = (w, classes[w]['class'], self._read(w, follow))
                     except LinkError:
@@ -166,10 +166,11 @@ class FieldWatchTools:
         except BaseException:
             release_debug_register(self.link, slot)
             raise
-        seq = r['seq']
-        entry = self.live.journal.add({'kind': 'watchpoint', 'address': hx(address),
-                                       'undo': {'op': 'dbg_clear', 'slot': slot, 'address': hx(address)}})
         try:
+            # inside the try: a reply without seq or a journal error must still free the register (bug hunt 2026-11-18)
+            seq = r['seq']
+            entry = self.live.journal.add({'kind': 'watchpoint', 'address': hx(address),
+                                           'undo': {'op': 'dbg_clear', 'slot': slot, 'address': hx(address)}})
             ran = self._lines(trigger, self._ptr(trigger_ref) if trigger_ref else (self._ptr(ref) if ref else 0))
             if seconds:
                 time.sleep(float(seconds))

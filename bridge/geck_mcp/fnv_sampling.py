@@ -129,7 +129,14 @@ class SinkTools:
         for name in names:
             key = str(name).strip().lower()
             if key.startswith('msg:'):
-                result = self.live.link.one('sink', 'add', 'msg', word(int(key[4:], 0)))
+                try:      # msg:abc was a bare ValueError (bug hunt 2026-11-18)
+                    message = int(key[4:], 0)
+                    if not 0 <= message <= 0xFFFFFFFF:
+                        raise ValueError(key)
+                except ValueError:
+                    raise ConvError('BAD_ARGUMENTS', 'A window message sink is msg:<number>, for example msg:0x0100, '
+                                    'not %r. Next: give the message number.' % name) from None
+                result = self.live.link.one('sink', 'add', 'msg', word(message))
             else:
                 if key not in NVSE_EVENTS:
                     raise ConvError('UNKNOWN_EVENT', 'No xNVSE event %r. Next: use one of %s.'

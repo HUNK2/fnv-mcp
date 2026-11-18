@@ -2,6 +2,7 @@
 import argparse
 import inspect
 import json
+import re
 import sys
 import time
 import uuid
@@ -254,13 +255,51 @@ class BridgeServer(MCPServer):
         result = self._capped(result, params)
         if isinstance(result, CallToolResult) and result.is_error and result.structured_content is None:
             text = ' '.join(getattr(c, 'text', '') for c in result.content).strip()
-            code = ('INVALID_ARGUMENTS' if 'validation error' in text else
-                    'UNKNOWN_TOOL' if text.startswith('Unknown tool') else 'TOOL_ERROR')
-            envelope = self._envelope(params.name, code, text,
-                                      'Fix the arguments (the message names each field) and call again.'
-                                      if code == 'INVALID_ARGUMENTS' else 'Check the tool name and arguments.')
-            result = CallToolResult(content=result.content, structured_content=envelope, is_error=True)
+            if 'validation error' in text:      # the input schema refused it: plain words, no library text
+                problems = schema_problems(text)
+                message = ('Invalid argument%s: %s' % ('s' if len(problems) > 1 else '',
+                                                        '; '.join(p['text'] for p in problems))
+                           if problems else 'The arguments do not match the tool\'s parameters.')
+                envelope = self._envelope(params.name, 'INVALID_ARGUMENT', message,
+                                          'Change the argument%s named above and call again.'
+                                          % ('s' if len(problems) > 1 else ''))
+                envelope['data'] = {'schema': True, 'problems': problems}
+            else:
+                code = 'UNKNOWN_TOOL' if text.startswith('Unknown tool') else 'TOOL_ERROR'
+                envelope = self._envelope(params.name, code, text, 'Check the tool name and arguments.')
+            result = CallToolResult(content=[TextContent(type='text', text=json.dumps(envelope))],
+                                    structured_content=envelope, is_error=True)
         return result
+
+
+_PYDANTIC_TYPE = re.compile(r'\s*\[type=([^,\]]+)(?:, input_value=(.*?))?(?:, input_type=[^\]]*)?\]\s*$')
+
+
+def schema_problems(text):
+    """[{parameter, text}] from the SDK's argument validation text (pydantic): each failing parameter with what is
+    wrong in plain words and the value given, without the library's type codes and links."""
+    lines = [line.rstrip() for line in text.splitlines()]
+    problems, field = [], None
+    for line in lines[1:]:
+        if not line.strip() or line.strip().startswith('For further information'):
+            continue
+        if not line.startswith(' '):
+            field = line.strip()
+            continue
+        if field is None:
+            continue
+        match = _PYDANTIC_TYPE.search(line)
+        sentence = line[:match.start()].strip() if match else line.strip()
+        kind = match.group(1) if match else None
+        value = match.group(2) if match and match.group(2) is not None and kind != 'missing' else None
+        sentence = 'is required' if kind == 'missing' else \
+            (sentence[0].lower() + sentence[1:] if sentence else 'is not valid')
+        sentence = sentence.replace('input should be', 'should be').replace('Input should be', 'should be')
+        name = field.replace('Arguments.', '').split('.')[0] if field else 'argument'
+        shown = '%s %s' % (name, sentence) + (' (got %s)' % value if value not in (None, '') else '')
+        problems.append({'parameter': name, 'text': shown})
+        field = None
+    return problems
 
 
 # Seconds between progress notifications while a tool call runs (Task 6.2).
@@ -354,6 +393,7 @@ INSTRUCTIONS = ('Start with fnv_status: it says whether the game is running and 
                 'an NPC\'s AI or combat: fnv_actor_ai, fnv_ai_packages (guide "npc-ai-combat"); '
                 'what changed, undo it: fnv_journal, fnv_undo (guide "safety-undo"); '
                 'the game crashed: fnv_crash (guide "crash"); '
+                'the game froze or stopped responding: fnv_threads action=hang; '
                 'a script does not run: fnv_script_errors (guide "script"); '
                 'engine warnings (missing files, wrong form types): fnv_warnings; '
                 'what is this object or record: fnv_ref, fnv_record; '

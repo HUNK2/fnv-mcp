@@ -88,7 +88,11 @@ class BriefShapeTests(unittest.TestCase):
         self.assertLess(size(brief), 10000)
         self.assertEqual(brief['verdict'], full['verdict'])
         self.assertEqual(brief['locks'], full['locks'])
-        self.assertEqual([r['threadId'] for r in brief['threads']], [r['threadId'] for r in full['threads']])
+        # threads with no game function are one row per start module (live check 2026-11-18)
+        grouped = [i for g in brief['threadsWithoutGameFunction'] for i in g['threadIds']]
+        self.assertEqual(sorted([r['threadId'] for r in brief['threads']] + grouped),
+                         sorted(r['threadId'] for r in full['threads']))
+        self.assertEqual(sum(g['count'] for g in brief['threadsWithoutGameFunction']), len(grouped))
         self.assertEqual(brief['threads'][1]['gameFunction'], 'BSTaskManagerThread::ThreadProc')
         self.assertNotIn('stack', brief['threads'][1])
         self.assertIn('brief=false', brief['brief'])
@@ -129,7 +133,7 @@ class BriefShapeTests(unittest.TestCase):
             self.assertEqual(brief[key], full[key])
         tree = brief['tree']
         self.assertEqual(len(tree), 300)
-        self.assertEqual(tree[0], 'NiNode "Bip01 Bone 000" 0x10000000 (sequences: Idle*, Walk; extra: BSX=194)')
+        self.assertEqual(tree[0], 'NiNode "Bip01 Bone 000" 0x10000000 (2 sequences, active: Idle; extra: BSX=194)')
         self.assertEqual(tree[1], '  NiNode "Bip01 Bone 001" 0x10000001')
         self.assertEqual(tree[2], '    NiNode "Bip01 Bone 004" 0x10000004')             # depth first
         self.assertIn('  NiTriShape "Bip01 Bone 002" 0x10000002 1200 tris, skinned', tree)

@@ -25,6 +25,12 @@ from .fnv_link import hexs, word
 from .fnv_live import LiveError
 
 
+def _transform(t):
+    """NiTransform as 13 floats (3x3 rotation row by row, translate, scale) to a readable dict."""
+    return {'rotationMatrix3x3': [[_r(v, 4) for v in t[i:i + 3]] for i in (0, 3, 6)],
+            'translate': [_r(v, 2) for v in t[9:12]], 'scale': _r(t[12], 3)}
+
+
 def did_you_mean_global(name, editor_ids):
     """' Did you mean GameHour?' for an unknown global name, or ''."""
     from .fnv_conv import did_you_mean
@@ -57,7 +63,7 @@ MENU_IDS = {'message': 1001, 'inventory': 1002, 'stats': 1003, 'hud': 1004, 'loa
             'textedit': 1051, 'barter': 1053, 'surgery': 1054, 'hacking': 1055, 'vats': 1056, 'computers': 1057,
             'repairservices': 1058, 'tutorial': 1059, 'specialbook': 1060, 'itemmod': 1061, 'lovetester': 1074,
             'companionwheel': 1075, 'traitselect': 1076, 'recipe': 1077, 'slotmachine': 1080, 'blackjack': 1081,
-            'roulette': 1082, 'caravan': 1083, 'trait': 1084}
+            'roulette': 1082, 'caravan': 1083, 'trait': 1084, 'hudmain': 1004, 'credits': 1047}   # the last two: as fnv_menu names them
 DIALOG_STATES = ['camera zoom in', 'load speech', 'speech idle', 'play speech', 'camera zoom out', 'service fade out']
 GOODBYE_STATES = ['in dialogue', 'natural goodbye', 'forced goodbye', 'invalid choice list']
 LIMBS = ['Torso', 'Head 1', 'Head 2', 'Left Arm 1', 'Left Arm 2', 'Right Arm 1', 'Right Arm 2', 'Left Leg 1',
@@ -231,7 +237,15 @@ class WorldTools:
                             else _r(value, 6)
         for e in out:
             e.pop('ptr', None)
+        hint = {}
+        if query and not out:
+            from .fnv_conv import nearest
+            close = nearest(query, [e['editorId'] for e in by_name.values() if e['editorId']])
+            hint['didYouMean'] = close
+            hint['note'] = ('no global matches %r.%s' % (query, ' Nearest names: %s.' % ', '.join(close) if close
+                                                          else ' No global has a similar name.'))
         return {'count': len(out), 'globals': out[:limit], 'more': len(out) > limit, 'changed': changed or None,
+                **hint,
                 'uses': ['TESDataHandler 0x011C3F2C, global list tList +0xE8',
                          'TESGlobal: editor id BSString +0x18, type char +0x20, float value +0x24 (the game stores '
                          'shorts and longs as floats too; set writes +0x24, as script "set" does)']}
@@ -273,11 +287,12 @@ class WorldTools:
                 if not t:
                     continue
                 info, topic, quest = (struct.unpack_from('<I', t, o)[0] for o in (0x18, 0x28, 0x14))
-                entries.append({'index': k, 'prompt': prompt, 'topic': names.get(topic), 'info': names.get(info),
-                                'quest': names.get(quest), 'alreadyHeard': bool(t[0x25]), 'refusal': bool(t[0x09]),
+                # Choices count from 0 like fnv_dialogue_choose (node 0 is the spoken topic, not a choice).
+                entries.append({'index': k - 1 if k else None, 'prompt': prompt, 'topic': names.get(topic), 'info': names.get(info),
+                                'quest': names.get(quest), 'new': bool(t[0x25]), 'refusal': bool(t[0x09]),
                                 'responseNode': '0x%08X' % struct.unpack_from('<I', t, 0x20)[0]})
-            out['spokenTopic'] = entries[0] if entries else None
-            out['choices'] = entries[1:]
+            out['spokenTopic'] = next((e for e in entries if e['index'] is None), None)
+            out['choices'] = [e for e in entries if e['index'] is not None]
             out['speakerInManager'] = self._describe([struct.unpack_from('<I', mraw, 0x0C)[0]]).get(
                 struct.unpack_from('<I', mraw, 0x0C)[0]) if len(mraw) >= 0x10 else None
         out['whyOthersAreHidden'] = [
@@ -289,7 +304,7 @@ class WorldTools:
             'fnv_dialogue action=tree evaluates every info of a topic for this speaker and shows which condition failed']
         out['uses'] = ['DialogMenu 0x011D9510 (state +0x28, goodbye +0x2C, tiles +0x30, speaker +0x80, label +0x84)',
                        'current TESTopicInfo 0x011D9518', 'MenuTopicManager 0x011DDDE4: topic-list stack +4, node 0 = '
-                       'spoken topic, nodes 1.. = choices (MenuTopic: prompt +0, quest +0x14, info +0x18, read +0x25, '
+                       'spoken topic, nodes 1.. = choices, numbered from 0 as fnv_dialogue_choose does (MenuTopic: prompt +0, quest +0x14, info +0x18, new +0x25, '
                        'topic +0x28), built by BuildMenuTopics 0x0083ED50']
         return out
 
@@ -300,9 +315,11 @@ class WorldTools:
         if seconds and seconds > 0:
             time.sleep(min(float(seconds), 120.0))
             second = self._heap_sample()
+            if first['addressSpaceMB'] is None or second['addressSpaceMB'] is None:
+                first['addressSpaceMB'] = second['addressSpaceMB'] = None
             growth = {k: (second['counts'][k] - first['counts'][k]) if isinstance(first['counts'].get(k), int) and
                       isinstance(second['counts'].get(k), int) else None for k in first['counts']}
-            space = {k: second['addressSpaceMB'][k] - first['addressSpaceMB'][k] for k in ('committed', 'reserved', 'free')}
+            space = {k: second['addressSpaceMB'][k] - first['addressSpaceMB'][k] for k in ('committed', 'reserved', 'free')}                 if second['addressSpaceMB'] else None      # no process handle: no address space to compare
             pools = []
             before = {p['address']: p for p in first['pools']}
             for p in second['pools']:
@@ -367,6 +384,16 @@ class WorldTools:
         if action in ('move', 'rotate', 'scale', 'enable', 'disable', 'delete', 'duplicate', 'transform'):
             if not ref:
                 raise ValueError('ref is required')
+            # Bug hunt 2026-11-18: a move without position (and rotate, scale) did nothing and still answered with a
+            # journal entry and a before/after that looked like a change.
+            given = {'move': ('position', position), 'rotate': ('rotation', rotation), 'scale': ('scale', scale)}
+            if action in given and given[action][1] in (None, [], ()):
+                raise ValueError('%s needs %s' % (action, given[action][0]))
+            if action == 'transform' and not position and not rotation and scale is None:
+                raise ValueError('transform needs position, rotation or scale')
+            for what, vec in (('position', position), ('rotation', rotation)):
+                if vec and len(vec) != 3:
+                    raise ValueError('%s is three numbers [x, y, z] (null leaves an axis as it is)' % what)
             r = self.live.resolve(ref)
             p = r['ptr']
             raw = self.live.reads([(p, 0x68)])[0]
@@ -529,7 +556,7 @@ class WorldTools:
         if not root:
             return {'ref': self._describe([p]).get(p), 'model': model, 'loaded': False,
                     'note': 'The reference has no 3D loaded (not in a loaded cell, disabled, or not drawn yet).'}
-        nodes, level, seen, total = [], [(root, 0, None)], {root}, 0
+        nodes, level, seen, total, depth_cut, wide_cut = [], [(root, 0, None)], {root}, 0, 0, 0
         while level and total < max_nodes:
             ptrs = [n for n, _, _ in level]
             raws = self.live.reads([(n, 0xC0) for n in ptrs])
@@ -546,8 +573,7 @@ class WorldTools:
                 item = {'node': '0x%08X' % n, 'class': cls, 'name': name, 'depth': d, 'parent': parent,
                         'flags': '0x%X' % struct.unpack_from('<I', rw, 0x30)[0],
                         'hidden': bool(struct.unpack_from('<I', rw, 0x30)[0] & 1),
-                        'local': {'translate': [_r(v, 2) for v in local[9:12]], 'scale': _r(local[12], 3)},
-                        'world': {'translate': [_r(v, 2) for v in world[9:12]], 'scale': _r(world[12], 3)}}
+                        'local': _transform(local), 'world': _transform(world)}
                 ctrl = struct.unpack_from('<I', rw, 0x0C)[0]
                 if ctrl:
                     item['controllers'] = ctrl
@@ -559,7 +585,11 @@ class WorldTools:
                 if 'Node' in cls or cls in ('NiSwitchNode', 'NiBillboardNode', 'NiLODNode'):
                     data, cap, size = struct.unpack_from('<IHH', rw, 0xA0)
                     item['childCount'] = size
+                    if d + 1 > depth and size:
+                        depth_cut += size
                     if d + 1 <= depth and data and size:
+                        if size > 128:      # only the first 128 children are read (bug hunt 2026-11-18: said nothing)
+                            wide_cut += size - 128
                         kids = self.live.reads([(data, 4 * min(size, 128))])[0] or b''
                         for c in struct.unpack('<%dI' % (len(kids) // 4), kids):
                             if c and c not in seen:
@@ -576,7 +606,14 @@ class WorldTools:
             nodes = [n for n in nodes if name_filter.lower() in (n.get('name') or '').lower()]
         textures = sorted({t for n in nodes for t in (n.get('textures') or {}).values() if t})
         return {'ref': self._describe([p]).get(p), 'model': model, 'root': '0x%08X' % root, 'nodeCount': len(nodes),
-                'capped': total >= max_nodes, 'nodes': nodes, 'textures': textures,
+                'capped': total >= max_nodes or depth_cut > 0 or wide_cut > 0, 'depthCut': depth_cut,
+                **({'wideCut': wide_cut} if wide_cut else {}),
+                'note': ' '.join(s for s in (
+                    '%d children of nodes at depth %d are not shown: raise depth to see them.' % (depth_cut, depth)
+                    if depth_cut else '',
+                    '%d children past the first 128 of a node are not shown.' % wide_cut if wide_cut else '') if s)
+                or None,
+                'nodes': nodes, 'textures': textures,
                 'uses': ['ref +0x64 loaded data, +0x14 root node (player first person +0x694)',
                          'NiObjectNET name +0x08, controllers +0x0C, extra data +0x10; NiAVObject flags +0x30, local '
                          'transform +0x34, world +0x68; NiNode children +0xA0', 'NiGeometry properties +0x9C..+0xB0, '
@@ -1011,6 +1048,8 @@ class WorldTools:
     def window(self, action='status', persist=None):
         """status | release_mouse | capture_mouse | unpause; persist true/false writes bBackground Mouse to the
         dev profile's Fallout.ini so every launch starts that way."""
+        if action not in ('status', 'release_mouse', 'capture_mouse', 'unpause'):
+            raise ValueError('action is status, release_mouse, capture_mouse or unpause')    # before persist writes
         out = {'action': action}
         if persist is not None:
             out['ini'] = self._persist_background_mouse(bool(persist))
@@ -1072,7 +1111,7 @@ class WorldTools:
         from . import fnv_layout
         fnv_layout.guard(self._layout(), 'change your real Fallout.ini')   # LayoutError carries a code
         path = self._ini_path()
-        lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+        lines = path.read_text(encoding='utf-8', errors='surrogateescape').splitlines()   # bug hunt 2026-11-18: non-UTF-8 bytes stay as they were
         value = 'bBackground Mouse=%d' % (1 if on else 0)
         idx = next((i for i, l in enumerate(lines) if l.strip().lower().startswith('bbackground mouse=')), None)
         if idx is not None and lines[idx].strip() == value:
@@ -1088,7 +1127,7 @@ class WorldTools:
                 lines += ['[Controls]', value]
             else:
                 lines.insert(section + 1, value)
-        path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        path.write_text('\n'.join(lines) + '\n', encoding='utf-8', errors='surrogateescape')
         return {'path': str(path), 'changed': True, 'value': value, 'backup': str(backup),
                 'note': 'Takes effect at the next launch (release_mouse applies it to the running game now).'}
 

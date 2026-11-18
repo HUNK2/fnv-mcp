@@ -428,6 +428,8 @@ class EngineAITools:
             out['uses'] = uses
             return out
         raw = self.live.reads([(ctrl + 0x80, 0x78)])[0]
+        if raw is None:
+            raise LiveError('UNREADABLE', 'Cannot read the combat controller at 0x%08X (the actor left combat?)' % ctrl)
         group, proc, queued = struct.unpack_from('<III', raw, 0)
         action, goal = struct.unpack_from('<II', raw, 0x28)
         me, target = struct.unpack_from('<II', raw, 0x3C)
@@ -448,7 +450,7 @@ class EngineAITools:
         act = {'type': kind(action, 'CombatAction')} if action else None
         targets, members = [], []
         if group:
-            graw = self.live.reads([(group, 0x30)])[0]
+            graw = self.live.reads([(group, 0x30)])[0] or b'\0' * 0x30
             tbuf, tsize = struct.unpack_from('<II', graw, 0x0C)
             mbuf, msize = struct.unpack_from('<II', graw, 0x1C)
             if tbuf and 0 < tsize < 64:
@@ -496,7 +498,11 @@ class EngineAITools:
             # and snapshot the first-filter-argument case so the value before is known for 1-, 2- and 3-filter points.
             h1 = self._hook(APPLY_PERK_MODIFIERS, labels[0], 6, deref=(SEL_ARG[3], SEL_ARG[4]), snap=(SEL_ARG[2], 4),
                             filt=filt)
-            h2 = self._hook(APPLY_FUNCTION, labels[1], 6)
+            try:
+                h2 = self._hook(APPLY_FUNCTION, labels[1], 6)
+            except Exception:
+                self._unhook(h1)        # the first hook does not stay behind when the second cannot be placed
+                raise
             self._perk_since = (self._seq(h1), self._seq(h2))
             return {'started': True, 'entryPoint': entry_point,
                     'note': 'Recording every perk entry-point check. Let the game run (fire, barter, talk...), then call '
@@ -607,7 +613,8 @@ class EngineAITools:
                     data = struct.unpack_from('<I', e, 0x0C)[0]
                     if not data:
                         continue
-                    vals = self.live.reads([(data, 12)])[0] or b''
+                    vals = (self.live.reads([(data, 12)])[0] or b'')
+                    vals += b'\0' * (12 - len(vals))      # an unreadable entry shows 0.0, not a struct error
                     two = e[9] in (4, 5)  # add range / add actor value mult carry two values (TwoValue data)
                     out[data] = {'perk': names(perk), 'rank': rank, 'function': e[9],
                                  'values': [_r(_f(struct.unpack_from('<I', vals, 4)[0]), 4)] +
@@ -630,6 +637,8 @@ class EngineAITools:
             out['uses'] = uses
             return out
         m = self.live.reads([(mover, 0x88)])[0]
+        if m is None:
+            raise LiveError('UNREADABLE', 'Cannot read the actor mover at 0x%08X' % mover)
         req, sol, handler = struct.unpack_from('<III', m, 0x1C)
         mstate = struct.unpack_from('<i', m, 0x6C)[0]
         failed, waiting = bool(m[0x70]), bool(m[0x74])
@@ -645,7 +654,9 @@ class EngineAITools:
                 x, y, z = struct.unpack_from('<3f', r, off + 4)
                 navmesh, cands, cell, world, key = struct.unpack_from('<5I', r, off + 0x10)
                 tri = struct.unpack_from('<H', r, off + 0x24)[0]
-                return {'position': {'x': _r(x, 1), 'y': _r(y, 1), 'z': _r(z, 1)}, 'navmesh': navmesh,
+                none = all(not math.isfinite(v) or abs(v) >= 1e30 for v in (x, y, z))  # FLT_MAX: no goal (a flee request)
+                return {'position': None if none else {'x': _r(x, 1), 'y': _r(y, 1), 'z': _r(z, 1)},
+                        **({'positionNote': 'no goal position (flee request)'} if none else {}), 'navmesh': navmesh,
                         'triangle': None if tri == 0xFFFF else tri, 'cell': cell, 'world': world,
                         'hasNavmeshCandidates': bool(cands)}
             origin, dest = loc(0x0C), loc(0x34)
@@ -660,7 +671,7 @@ class EngineAITools:
             for lo in (origin, dest):
                 lo.pop('triangle')  # the request keeps unresolved copies; the path builder resolves its own
             for label, lo in (('start', origin), ('goal', dest)):
-                if lo['navmesh'] is None and not lo['hasNavmeshCandidates']:
+                if lo['position'] is not None and lo['navmesh'] is None and not lo['hasNavmeshCandidates']:
                     why.append('The path %s has no navmesh at all (its cell or worldspace has none there).' % label)
             if r[0x98]:
                 why.append('The request cannot open doors.')

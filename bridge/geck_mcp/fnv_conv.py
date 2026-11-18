@@ -134,6 +134,32 @@ def next_step(code):
     return NEXT_STEPS.get(code)
 
 
+# The recovery line of a failure whose code has no NEXT_STEPS entry (live check 2026-11-18: every one of these said
+# "Fix the input or the game state (fnv_status) and call again."). Recovery only: ConvError messages are unchanged.
+RECOVERY = {
+    'INVALID_ARGUMENT': 'Change the argument the message names and call again.',
+    'NO_FIELD': 'Use one of the names the message suggests (fnv_class layout lists every field) and call again.',
+    'NO_GLOBAL': 'Use the name the message suggests (fnv_globals query=<part of the name> lists them) and call '
+                 'again.',
+    'NOT_FOUND': 'Check the name: use a suggestion from the message, or search for it (fnv_guide find, fnv_record '
+                 'action=find) and call again.',
+    'BAD_PREDICATE': 'Rewrite the predicate in one of the example forms the message shows and call again.',
+    'WAIT_TIMEOUT': 'Call fnv_time action=status (a paused clock or held gate never advances), then call again with '
+                    'a larger timeout or a condition that can become true.',
+    'GAME_RUNNING': 'Quit the game first (fnv_game action=quit), call this again, then fnv_game action=launch.',
+    'TOO_STEEP': 'Do what the message says: turn it (only when it names a heading), move it to flatter ground, or '
+                 'pass rest="centre" or "high".',
+}
+DEFAULT_RECOVERY = 'Read the message: it says what to change. Change that and call again (fnv_status if the game ' \
+                   'state is in doubt).'
+
+
+def recovery_for(code):
+    """The recovery line of a failure that changed nothing: the code's next step, else its recovery, else the
+    default."""
+    return NEXT_STEPS.get(code) or RECOVERY.get(code) or DEFAULT_RECOVERY
+
+
 # ---------------------------------------------------------------- references
 class Aliases:
     """In-memory `$name` -> reference spec. Lives as long as the server process; a name is letters, digits, _."""

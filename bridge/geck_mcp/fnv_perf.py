@@ -123,8 +123,10 @@ class Namer:
         if hit is None:
             sym = self.engine.symbolize(address, self.mods, return_address=return_address)
             if sym.get('kind') == 'function':
-                hit = {'function': sym.get('name'), 'start': sym.get('functionAddress'),
-                       'line': sym.get('source')}
+                # "E7CCD0Renderer::PresentFrame": the address glued in front of the name (live check 2026-11-18)
+                from .fnv_brief import clean_name
+                hit = {'function': clean_name(sym.get('name'), sym.get('functionAddress')),
+                       'start': sym.get('functionAddress'), 'line': sym.get('source')}
             elif sym.get('kind') == 'module':
                 hit = {'function': '%s!%s' % (sym['module'], sym.get('offset')), 'start': None, 'line': None,
                        'module': sym['module']}
@@ -180,15 +182,16 @@ class ProfileTools:
                 f.write('%s %d\n' % (line, count))
         report.update(seconds=round(took, 2), rate=int(rate), framesRun=frames_run,
                       fps=round(frames_run / took, 1) if frames_run and took else None, folded=str(folded))
-        (base.parent / (base.name + '.json')).write_text(json.dumps(report, indent=1), encoding='utf-8')
+        saved = base.parent / (base.name + '.json')      # not with_suffix: it cuts a name such as my.run (bug hunt 2026-11-18)
+        saved.write_text(json.dumps(report, indent=1), encoding='utf-8')
         top_main = (report['threads'][0]['gameFunctions'] or [{}])[0] if report['threads'] else {}
         return verdict('%d samples over %.1f s; on the main thread the game was mostly in %s (%s%%)' % (
             report['samples'], took, top_main.get('function'), top_main.get('percent')),
             'gameFunctions: the innermost game function of each sample (a wait in a system DLL counts for the game '
             'function that called it); selfFunctions: where the thread was; inclusive: every function on the stack. '
             'Saved as %s '
-            '(diff two profiles with fnv_profile diff).' % base.with_suffix('.json').name,
-            profile=str(base.with_suffix('.json')), **report)
+            '(diff two profiles with fnv_profile diff).' % saved.name,
+            profile=str(saved), **report)
 
     def _report(self, stacks, namer, main, top):
         threads, folded, total = [], Counter(), 0
@@ -324,13 +327,15 @@ class ThreadTools:
 
     @staticmethod
     def _locks(proc):
+        # an owner or count of 0xFFFFFFFF is no lock state: no thread id 4294967295 (live check 2026-11-18)
+        from .fnv_brief import _lock
         out = []
         for name, address in LOCKS.items():
             raw = proc.read(address, 8)
             if raw:
                 owner, count = struct.unpack('<II', raw)
-                out.append({'lock': name, 'address': '0x%08X' % address, 'ownerThread': owner or None,
-                            'count': count})
+                out.append(_lock({'lock': name, 'address': '0x%08X' % address, 'ownerThread': owner or None,
+                                  'count': count}))
         return out
 
 

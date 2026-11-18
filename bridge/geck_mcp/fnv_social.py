@@ -353,10 +353,15 @@ class SocialTools:
                      'questName': names.get(qh['formId']) if qh else None, 'questPriority': info['priority'],
                      'order': info['order'], 'engineSays': 'available' if info['available'] else 'blocked',
                      'prompt': prompt or None, 'flags': _bits(flags, INFO_FLAGS) + _bits(flags2, INFO_FLAGS2),
-                     'goodbye': bool(raw[0x22]),
+                     # One source: the goodbye flag (INFO_FLAGS bit 0x01). Byte +0x22 is the say-once "already said" mark.
+                     'goodbye': bool(flags & 0x01), 'alreadySaid': bool(raw[0x22]),
                      # The level is kept on every response; it only applies with the speech-challenge flag.
                      'speechChallenge': CHALLENGE.get(difficulty, difficulty) if flags & 0x80 else None,
                      'conditions': conditions['conditions'], 'conditionsPass': conditions['result']}
+            if scope == 'speaker':
+                # A negated speaker test (GetIsVoiceType X == 0, GetIsID X != 1) never names a speaker: a line kept
+                # only because the engine allows it now says so here.
+                entry['writtenForSpeaker'] = bool(info.get('forSpeaker'))
             if info['available'] != conditions['result']:
                 entry['note'] = ('the per-condition check says %s, the engine says %s: say-once, quest conditions or '
                                  'the dummy-node rules decide' % ('pass' if conditions['result'] else 'fail',

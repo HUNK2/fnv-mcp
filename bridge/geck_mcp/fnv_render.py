@@ -11,6 +11,7 @@ fnv_overlay  text: words drawn on screen by the engine's debug text layer (Debug
              collision volumes are shown with fnv_render toggle primitives / collision.
 """
 import math
+import re
 import struct
 
 from .fnv_conv import ConvError, verdict
@@ -37,6 +38,7 @@ SCENE_LIGHTS = 0xB4
 NODE_WORLD_POS = 0x8C
 SCENE_LIGHT_SOURCE = 0xF8            # ShadowSceneLight -> its NiPointLight (checked live)
 DEBUG_TEXT_INSTANCE, DEBUG_TEXT_PRINT = 0x00A0D9E0, 0x00A0F8B0
+PLAIN_WORD = re.compile(r'[A-Za-z0-9_.\-]{1,120}')     # an EditorID, a form id or a toggle argument: never console text
 DEFAULT_MARKER = '0011C532'        # GomorrahSphereHangingLight: a small glowing sphere from FalloutNV.esm
 
 
@@ -49,6 +51,9 @@ class RenderTools:
         if name not in TOGGLES:
             raise ConvError('BAD_ARGUMENTS', 'toggle is one of %s.' % ', '.join(sorted(TOGGLES)))
         command, flag, what = TOGGLES[name]
+        if arg is not None and not PLAIN_WORD.fullmatch(str(arg)):
+            # the argument goes into a console line (bug hunt 2026-11-18)
+            raise ConvError('BAD_ARGUMENTS', 'arg is a plain word or number, not console text.')
         before = (self.live.reads([(flag, 1)])[0] or b'\0')[0] if flag else None
         self.live.changing('render toggle')
         out = self.live.console('%s%s' % (command, ' %s' % arg if arg else ''))
@@ -67,6 +72,8 @@ class RenderTools:
         self.live.in_game()
         if not modifier:
             raise ConvError('BAD_ARGUMENTS', 'imagespace needs modifier (an IMAD form).')
+        if not PLAIN_WORD.fullmatch(str(modifier)):
+            raise ConvError('BAD_ARGUMENTS', 'modifier is an IMAD EditorID or form id, not console text.')
         line = ('rimod %s' if remove else 'imod %s') % modifier
         self.live.changing('render imagespace')
         out = self.live.console(line)

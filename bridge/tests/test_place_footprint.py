@@ -278,6 +278,26 @@ class AtTests(unittest.TestCase):
         # along the slope the narrow side (632) faces downhill: less spread than heading 90
         self.assertEqual(fp['suggestHeading']['heading'] % 180, 0)
         self.assertLess(fp['suggestHeading']['spread'], fp['spread'] + 1e-6)
+        # it already faces 0: turning will not help, and the answer says so (live check 2026-11-18)
+        self.assertFalse(fp['suggestHeading']['helps'])
+        self.assertIn('no turn helps', fp['suggestHeading']['note'])
+
+    def test_a_turned_object_on_a_steep_slope_is_told_to_turn_back(self):
+        steep = math.tan(math.radians(20))
+        t, _ = tools(SHACK, TerrainRays(a=steep, c=100.0))
+        out = t.at('BASE', position=[0, 0, 400], rotation=[0, 0, 90], snap=True)
+        suggestion = out['footprint']['suggestHeading']
+        self.assertTrue(suggestion['helps'])
+        self.assertEqual(suggestion['heading'] % 180, 0)
+        self.assertIn('rotation=[0, 0, 0]', suggestion['note'])
+
+    def test_too_steep_names_the_turn_only_when_it_helps(self):
+        cliff = math.tan(math.radians(50))
+        t, _ = tools(SHACK, TerrainRays(a=cliff, c=100.0))
+        with self.assertRaises(fnv_create.LiveError) as cm:
+            t.at('BASE', position=[0, 0, 400], snap=True)
+        self.assertIn('No turn helps', str(cm.exception))
+        self.assertNotIn('Turn it to heading', str(cm.exception))
 
     def test_a_slope_deeper_than_the_object_is_refused(self):
         cliff = math.tan(math.radians(50))

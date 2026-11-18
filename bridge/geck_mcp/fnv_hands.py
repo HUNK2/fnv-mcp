@@ -77,6 +77,24 @@ def scan_code(name):
     return code
 
 
+def menu_id_of(menu):
+    """A menu id from a number, a name as fnv_menu lists it (InventoryMenu, HUDMainMenu) or the short one (inventory).
+    An unknown name is an error: it used to give no id, and the click went to whichever menu was on top (bug hunt
+    2026-11-18)."""
+    text = str(menu).strip()
+    if text.isdigit():
+        return int(text)
+    key = text.lower().replace(' ', '')
+    short = key[:-len('menu')] if key.endswith('menu') and len(key) > 4 else key
+    found = MENU_IDS.get(short) or MENU_IDS.get(key)
+    if not found:
+        from .fnv_agent import MENU_NAMES
+        found = next((i for i, n in MENU_NAMES.items() if n.lower() == key or n.lower() == short + 'menu'), None)
+    if not found:
+        raise ValueError('menu %r is not a menu name or id; names: %s' % (menu, ', '.join(sorted(MENU_IDS))))
+    return found
+
+
 def ref_arrive_radius(player, floor):
     """How close across the floor goto must come to a reference so it is inside the activation reach in 3D (N16):
     a target raised above the player's feet needs a closer stand. At least 30 units, at most ARRIVE."""
@@ -688,7 +706,7 @@ class HandsTools:
         """True when menu mode ends within `seconds` (a message box closed by the runner or by itself)."""
         deadline = self.clock() + seconds
         while self.clock() < deadline:
-            time.sleep(0.1)
+            self.sleep(0.1)
             if not self._menus().get('inMenuMode'):
                 return True
         return False
@@ -821,7 +839,7 @@ class HandsTools:
 
     def click(self, target=None, label=None, menu=None):
         self.live.ready()
-        menu_id = MENU_IDS.get(str(menu).lower()) if menu and not str(menu).isdigit() else (int(menu) if menu else None)
+        menu_id = menu_id_of(menu) if menu else None
         menu_id = menu_id or self._top_menu()
         if not menu_id:
             raise LiveError('NO_MENU', 'No menu is open')

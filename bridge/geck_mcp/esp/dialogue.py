@@ -81,8 +81,10 @@ def check_lines(topic, rec, where):
         keys.add(key)
         if not line.get('quest'):
             raise SpecError(w + '.quest', 'every line belongs to a quest ("@QuestEditorID")')
+        if not isinstance(line.get('flags', []), list):   # bug hunt 2026-11-18: 5 raised TypeError, "goodbye" read as letters
+            raise SpecError(w + '.flags', 'expected a list of flag names (%s)' % ', '.join(FLAGS))
         for flag in line.get('flags', []):
-            if flag not in FLAGS:
+            if not isinstance(flag, str) or flag not in FLAGS:
                 raise SpecError(w + '.flags', 'unknown flag %r (%s)' % (flag, ', '.join(FLAGS)))
     return lines
 

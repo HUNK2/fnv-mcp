@@ -44,6 +44,12 @@ SCENARIO_KEYS = {'name', 'start', 'plugins', 'plugin', 'steps', 'setup', 'teardo
 # the main thread, which the scenario runner itself needs to drive the next step; use fnv_debug / fnv_flow directly.
 NOT_AVAILABLE_YET = {'break', 'flow'}
 PLAY_CHECKS = {'goto': 'arrived', 'talk': 'dialogue', 'look_at': 'onTarget'}
+# Every step action _dispatch / _agent_step know. A bad step is refused at load: found in step 40 it would cost a
+# game launch and 39 steps of play first (bug hunt 2026-11-18).
+STEP_ACTIONS = {'run', 'console', 'script', 'wait', 'expect', 'set', 'actor', 'step', 'input', 'move', 'mem_write',
+                'call', 'revert_all', 'quit', 'snapshot', 'photo', 'play', 'ui', 'dialogue', 'spawn', 'save', 'load',
+                'menu', 'screenshot', 'watch', 'trace', 'time', 'rng'}
+STEP_NOTES = ('note', 'name', 'as')
 
 
 class ScenarioError(Exception):
@@ -259,7 +265,10 @@ def compare(actual, spec):
         elif key == 'not_equals':
             ok = not _equal(actual, want)
         elif key == 'approx':
-            ok = actual is not None and abs(float(actual) - float(want)) <= float(spec.get('tolerance', 0.01))
+            try:
+                ok = actual is not None and abs(float(actual) - float(want)) <= float(spec.get('tolerance', 0.01))
+            except (TypeError, ValueError):     # a text value is not "close" to a number (bug hunt 2026-11-18)
+                ok = False
         elif key == 'contains':
             ok = actual is not None and str(want).lower() in (
                 '\n'.join(actual) if isinstance(actual, list) else str(actual)).lower()
@@ -270,6 +279,11 @@ def compare(actual, spec):
         else:
             if actual is None:
                 return False, '%s %s (value missing)' % (key, want)
+            if isinstance(actual, str) and isinstance(want, (int, float)):
+                try:
+                    actual = float(actual.strip())
+                except ValueError:
+                    return False, '%s %s (the value %r is not a number)' % (key, want, actual)
             ok = {'gt': actual > want, 'ge': actual >= want, 'lt': actual < want, 'le': actual <= want}[key]
         if not ok:
             return False, '%s %r' % (key, want)
@@ -279,6 +293,12 @@ def compare(actual, spec):
 def _equal(actual, want):
     if isinstance(want, bool):
         return bool(actual) == want
+    if isinstance(want, (int, float)) and isinstance(actual, str):
+        # console output and text values come back as strings: "100" equals 100 (bug hunt 2026-11-18)
+        try:
+            actual = float(actual.strip())
+        except ValueError:
+            return False
     if isinstance(want, (int, float)) and isinstance(actual, (int, float)):
         return math.isclose(actual, want, rel_tol=0, abs_tol=1e-6)
     if isinstance(want, str) and isinstance(actual, str):
@@ -316,11 +336,18 @@ class ScenarioRunner:
             if text is None:
                 p = no_unc(path, 'path')
                 if not p.is_file():
+                    from .safe_paths import EXAMPLES_DIR
                     tests = getattr(self.live.project.fnv, 'tests_dir', None)
-                    if tests and (Path(tests) / path).is_file():
-                        p = Path(tests) / path
-                    else:
-                        raise ScenarioError('NOT_FOUND', 'No scenario file %s' % path)
+                    # a relative path: the tests folder, then the shipped examples (examples/fnv-tests/x.yaml or
+                    # fnv-tests/x.yaml, as the test-a-mod guide names them)
+                    tried = [Path(tests) / path] if tests else []
+                    tried += [EXAMPLES_DIR / path, EXAMPLES_DIR.parent / path] if not Path(path).is_absolute() else []
+                    found = next((c for c in tried if c.is_file()), None)
+                    if found is None:
+                        raise ScenarioError('NOT_FOUND', 'No scenario file %s (looked in: %s). The shipped examples '
+                                            'are in %s.' % (path, ', '.join(str(c.parent) for c in tried) or
+                                                            'the path as given', EXAMPLES_DIR / 'fnv-tests'))
+                    p = found
                 p = inside(p, read_roots(self.live.project), 'path')     # H5
                 text = p.read_text(encoding='utf-8')
                 source = str(p)
@@ -347,13 +374,30 @@ class ScenarioRunner:
                     if later:
                         raise ScenarioError('NOT_AVAILABLE_YET', '%s step %d uses %s, which is not available yet '
                                             '(planned; see fnv_guide)' % (phase, number, ', '.join(later)))
+        for phase in ('setup', 'steps', 'teardown'):
+            if data.get(phase) is not None and not isinstance(data[phase], list):
+                raise ScenarioError('BAD_SCENARIO', '%s is a list of steps' % phase)
+            for number, step in enumerate(data.get(phase) or [], 1):
+                actions = [k for k in step if k not in STEP_NOTES] if isinstance(step, dict) else []
+                if len(actions) != 1:
+                    raise ScenarioError('BAD_SCENARIO', '%s step %d: each step is a mapping with one action key (plus '
+                                        'note, name or as), got %s' % (phase, number, step if not isinstance(step, dict)
+                                                                       else 'keys %s' % (sorted(map(str, step)) or 'none')))
+                if actions[0] not in STEP_ACTIONS:
+                    raise ScenarioError('BAD_SCENARIO', '%s step %d: unknown step %r (%s)' % (
+                        phase, number, actions[0], ', '.join(sorted(STEP_ACTIONS))))
+        timeout = data.get('timeout', 240)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 3600:
+            raise ScenarioError('BAD_SCENARIO', 'timeout is a number of seconds from 1 to 3600')
         data.setdefault('name', Path(source).stem if source != '<inline>' else 'inline scenario')
         data['_source'] = source
         return data
 
     # ------------------------------------------------------------ run
-    def run(self, path=None, text=None, relaunch=True, data=None):
+    def run(self, path=None, text=None, relaunch=True, data=None, name=None):
         scenario = self.load(path, text, data)
+        if name:
+            scenario['name'] = name
         repeat = int(scenario.get('repeat', 1))
         if repeat <= 1:
             return self._run_once(scenario, relaunch)
@@ -364,23 +408,34 @@ class ScenarioRunner:
                   'comparison': self._compare(runs), 'failures': [f for r in runs for f in r['failures']][:20],
                   'summary': '%s: %d runs, %s' % (scenario['name'], repeat,
                                                   'all passed' if all(r['passed'] for r in runs) else 'some failed')}
-        report['summary'] += '' if report['comparison']['identical'] else ', steps differ'
+        # the debug bundle of each failed run, as a single run reports it (live check 2026-11-18: missing with repeat)
+        debug = [dict(run=k + 1, **r['debug']) for k, r in enumerate(runs) if r.get('debug')]
+        if debug:
+            report['debug'] = debug[:3]
+        if not report['comparison']['identical']:
+            report['summary'] += ', steps pass or fail differently'
+        elif report['comparison']['valuesDiffer']:
+            report['summary'] += ', same outcomes (some values differ slightly)'
         self.save_report(report)
         return report
 
     def _compare(self, runs):
-        """The steps whose result (passed, actual value) differs between runs. Identical runs are the goal."""
-        differences = []
+        """The steps that pass in one run and fail in another (differences: what makes runs not identical), and the
+        steps with the same outcome but other actual values (values: a clock read 13.610 then 13.627 is noise, not a
+        difference; live check 2026-11-18). Identical runs are the goal."""
+        differences, values = [], []
         for i in range(max(len(r['steps']) for r in runs)):
             rows = [r['steps'][i] if i < len(r['steps']) else None for r in runs]
-            signature = [None if row is None else (row.get('passed'), json.dumps(row.get('actual'), sort_keys=True,
-                                                                                  default=str)) for row in rows]
-            if len(set(signature)) > 1:
-                first = next(row for row in rows if row is not None)
-                differences.append({'step': i + 1, 'action': first.get('action'),
-                                    'passedPerRun': [None if row is None else row.get('passed') for row in rows],
-                                    'actualPerRun': [None if row is None else row.get('actual') for row in rows]})
-        return {'runs': len(runs), 'identical': not differences, 'differences': differences[:20]}
+            first = next(row for row in rows if row is not None)
+            passed = [None if row is None else row.get('passed') for row in rows]
+            actual = [None if row is None else row.get('actual') for row in rows]
+            entry = {'step': i + 1, 'action': first.get('action'), 'passedPerRun': passed, 'actualPerRun': actual}
+            if len(set(passed)) > 1:
+                differences.append(entry)
+            elif len({json.dumps(a, sort_keys=True, default=str) for a in actual}) > 1:
+                values.append(entry)
+        return {'runs': len(runs), 'identical': not differences, 'differences': differences[:20],
+                'valuesDiffer': len(values), 'values': values[:10]}
 
     def _run_once(self, scenario, relaunch):
         started = time.time()
@@ -389,6 +444,7 @@ class ScenarioRunner:
         unpause = None
         self.vars = {}
         self._marker = None
+        self._gate_touched = False
         traced = None
         deterministic = bool(scenario.get('deterministic'))
         try:
@@ -456,12 +512,21 @@ class ScenarioRunner:
                         break
                     result['step'] = number
                     report['teardown'].append(result)
+                    if not result['passed']:
+                        # bug hunt 2026-11-18: a failed teardown step (a revert that did not happen) was only listed
+                        # in report['teardown']; the run still said passed with no failure.
+                        report['failures'].append({'phase': 'teardown', 'step': number, 'spec': step,
+                                                   'reason': result.get('reason'), 'actual': result.get('actual')})
+                        report['passed'] = False
         except Exception as e:  # noqa: BLE001 - a broken teardown must not skip the cleanup below
             report['failures'].append({'phase': 'teardown', 'reason': '%s: %s' % (type(e).__name__, e)})
+            report['passed'] = False
         finally:
             try:
                 if deterministic:
                     self._settle()
+                elif self._gate_touched:
+                    self._release_gate()
             finally:
                 if not report['crash']:
                     self.game.stop_task(unpause)
@@ -476,6 +541,12 @@ class ScenarioRunner:
 
     def run_all(self, folder=None, pattern='*.yaml'):
         root = Path(folder or getattr(self.live.project.fnv, 'tests_dir', None) or '.')
+        if not root.is_dir():
+            from .safe_paths import EXAMPLES_DIR
+            raise ScenarioError('NO_TESTS', 'The folder %s does not exist%s. Create it and put scenario files in it, or '
+                                'pass folder= (the shipped examples are in %s).'
+                                % (root, '' if folder else " (the project's fnv.tests_dir)",
+                                   EXAMPLES_DIR / 'fnv-tests'))
         files = sorted(p for ext in ('*.yaml', '*.yml', '*.json') for p in root.glob(ext)) if pattern == '*.yaml' \
             else sorted(root.glob(pattern))
         if not files:
@@ -666,6 +737,7 @@ class ScenarioRunner:
             # {frames: N, fps: F}: exact frames, held between them; fps (optional) sets the fixed frame step first
             spec = arg if isinstance(arg, dict) else {'frames': arg}
             control, _ = shared_time(live)
+            self._gate_touched = True       # a step leaves the frame gate closed: the run's end opens it
             out = control.step(int(spec['frames']), spec.get('fps'))
             advanced = out.get('advanced')
             passed = advanced is None or advanced == int(spec['frames'])
@@ -699,7 +771,14 @@ class ScenarioRunner:
             return {'passed': passed, 'actual': out['result'], 'reason': None if passed else 'result not ' + why}
         if action == 'revert_all':
             # Only this test's changes: entries after the journal position marked when the steps began.
-            since = (getattr(self, '_marker', None) or {}).get('journal') if arg != 'process' else None
+            marker = getattr(self, '_marker', None)
+            if arg and arg != 'process' and not marker:
+                # bug hunt 2026-11-18: with no marker (the run never got as far as its first step) the old code asked
+                # for every journal entry of the game process and undid the user's own changes too. Only
+                # revert_all: process means everything.
+                return {'passed': True, 'actual': {'reverted': 0},
+                        'note': 'skipped: the test did not start, so it has no changes of its own to undo'}
+            since = marker.get('journal') if arg != 'process' else None
             out = live.revert_all(since) if arg else {'reverted': 0}
             return {'passed': True, 'actual': {'reverted': out['reverted']}}
         if action == 'quit':
@@ -778,7 +857,12 @@ class ScenarioRunner:
         if 'for' in arg:
             return self._wait_for(arg)
         if 'seconds' in arg:
-            time.sleep(min(float(arg['seconds']), 120))
+            seconds = float(arg['seconds'])
+            if not 0 <= seconds <= 120:
+                # bug hunt 2026-11-18: more than 120 was cut to 120 and the step still passed
+                raise ScenarioError('BAD_STEP', 'wait seconds is from 0 to 120 (got %s); use several wait steps or '
+                                    'wait until' % arg['seconds'])
+            time.sleep(seconds)
             return {'passed': True}
         if 'frames' in arg:
             start = self.live.link.ping()['frame']
@@ -831,12 +915,23 @@ class ScenarioRunner:
 
     def _settle(self):
         """Back to a running game: the fixed step off and the frame gate open (errors here are not test failures)."""
-        control, _ = shared_time(self.live)
-        for action in (lambda: control.fixed(0), control.release):
+        try:
+            control, _ = shared_time(self.live)
+        except Exception:  # noqa: BLE001 - nothing to settle
+            return
+        # journal=False: this put-back is not a change of the user's (it would leave an open "restore 60 fps" entry)
+        for action in (lambda: control.fixed(0, journal=False), control.release):
             try:
                 action()
             except Exception:
                 pass
+
+    def _release_gate(self):
+        """Open the frame gate a `step` step closed (errors here are not test failures)."""
+        try:
+            shared_time(self.live)[0].release()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _expect(self, arg, marker):
         live = self.live

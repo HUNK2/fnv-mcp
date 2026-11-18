@@ -8,8 +8,10 @@ Use this before the first change to the running game or to the user's files, and
 
 1. **What may run.** The project setting `fnv.engine_control` decides. At `"read"` (the default) the tools look,
    start and stop the dev game and install the engine companion; at `"full"` they may also change the running
-   game and run code in it, as the user's Windows account. Every tool's description says its kind: read, control
-   or act. An act tool at `"read"` refuses and names the setting. Only the user changes it.
+   game and run code in it, as the user's Windows account. `fnv_guide find` shows each tool's kind (`toolKind`:
+   read, control or act), and read tools are marked read-only in their annotations. Some tools change kind by
+   action (`fnv_time action=status` reads, `action=pause` acts). An act call at `"read"` refuses and names the
+   setting. Only the user changes it.
 2. **Read before you change.** Look at the thing first (`fnv_ref`, `fnv_record`, `fnv_form_live_diff`,
    `fnv_globals`), so you know the old value and can tell whether your change took.
 3. **Mark a point.** `fnv_session action=start` opens a journal scope; `fnv_session action=mark label=<name>`
