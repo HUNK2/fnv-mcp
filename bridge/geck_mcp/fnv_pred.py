@@ -43,6 +43,8 @@ I32_MIN, I32_MAX = -2 ** 31, 2 ** 31 - 1
 
 # Three valid forms, shown in the predicate parameters' descriptions and in every BAD_PREDICATE (part 3).
 PREDICATE_EXAMPLES = ('frame >= 500', '[0x011DEA0C]:u8 == 1', 'this.[0x08]:u32 == 0x1F and arg1:i32 > 3')
+# fnv_wait_for runs on the frame, not in a hook: no this, argN or reg
+WAIT_EXAMPLES = ('frame >= 500', '[0x011DEA0C]:u8 == 1', '[[0x011DEA3C]+0x24]:f32 > 0 and frame >= 100')
 NAMES = ('frame', 'main', 'this', 'reg', 'arg0', 'arg1', 'arg2', 'and', 'or', 'not')
 
 

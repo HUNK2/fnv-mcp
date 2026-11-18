@@ -29,11 +29,14 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
             by_name = {tool.name: tool for tool in tools}
             # one family: the GECK editor and legacy tools (geck_*) were removed on 2026-11-18
             self.assertEqual(set(by_name), ALL)
+            def hint(name, key, default):          # a hint equal to MCP's default is left out (part 5)
+                value = getattr(by_name[name].annotations, key, None) if by_name[name].annotations else None
+                return default if value is None else value
             for name in FNV_TOOLS:
-                self.assertTrue(by_name[name].annotations.read_only_hint, name)
+                self.assertTrue(hint(name, 'read_only_hint', False), name)
             for name, (kind, _) in {**FNV_LIVE_TOOLS, **FNV_SPEC_TOOLS}.items():
-                self.assertEqual(by_name[name].annotations.read_only_hint, kind == 'read', name)
-                self.assertEqual(by_name[name].annotations.destructive_hint, kind == 'act', name)
+                self.assertEqual(hint(name, 'read_only_hint', False), kind == 'read', name)
+                self.assertEqual(hint(name, 'destructive_hint', True), kind == 'act', name)
             result = await client.call_tool('fnv_func', {'query': 'anything'})
             self.assertTrue(result.is_error)
             self.assertEqual(result.structured_content['error']['code'], 'ENGINE_MAP_UNAVAILABLE')

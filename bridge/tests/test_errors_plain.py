@@ -243,7 +243,7 @@ class PredicateDescriptionTests(unittest.IsolatedAsyncioTestCase):
             tools = {t.name: t for t in (await client.list_tools()).tools}
         for tool, param in (('fnv_debug', 'when'), ('fnv_wait_for', 'predicate')):
             text = tools[tool].input_schema['properties'][param]['description']
-            examples = re.search(r'for example: (.*)$', text).group(1).split('; ')
+            examples = re.search(r'Examples: (.*)$', text).group(1).split('; ')
             self.assertEqual(len(examples), 3, text)
             for example in examples:
                 compile_predicate(example)

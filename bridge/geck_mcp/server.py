@@ -78,8 +78,25 @@ def slim_schema(node):
 
 
 ENVELOPE_SCHEMA_TOOLS = ('fnv_status',)
-ENVELOPE_NOTE = ('The envelope every tool answers with: ok, operation, data (the answer), error (code, message, '
-                 'recovery), outcome. Its full schema is the outputSchema of fnv_status.')
+
+
+def _param_examples():
+    """(tool, parameter) -> examples appended to the parameter's description (tool quality part 3: the predicate
+    parameters show three valid forms, whatever text describes them)."""
+    from .fnv_pred import PREDICATE_EXAMPLES, WAIT_EXAMPLES
+    return {('fnv_debug', 'when'): PREDICATE_EXAMPLES, ('fnv_wait_for', 'predicate'): WAIT_EXAMPLES}
+# MCP's defaults for the tool annotations: a value equal to its default is left out of the list (part 5).
+ANNOTATION_DEFAULTS = {'read_only_hint': False, 'destructive_hint': True, 'idempotent_hint': False,
+                       'open_world_hint': True}
+
+
+def lean_annotations(annotations):
+    """The annotations without the values that equal MCP's defaults (None when nothing is left)."""
+    if annotations is None:
+        return None
+    kept = {k: v for k, v in annotations.model_dump(exclude_none=True).items()
+            if k not in ANNOTATION_DEFAULTS or ANNOTATION_DEFAULTS[k] != v}
+    return ToolAnnotations(**kept) if kept else None
 
 
 class BridgeServer(MCPServer):
@@ -112,12 +129,18 @@ class BridgeServer(MCPServer):
                 schema = (props or {}).get(param)
                 if isinstance(schema, dict) and not schema.get('description'):
                     schema['description'] = text
-        # The envelope is every tool's answer: its full schema goes out on the entry tools only, the others name
-        # them (about a third of the listing). The tool manager keeps the full schema for checking results.
-        envelope = next((t.output_schema for t in tools if t.name in ENVELOPE_SCHEMA_TOOLS and t.output_schema), None)
+            for (name, param), examples in _param_examples().items():
+                schema = ((tool.input_schema or {}).get('properties') or {}).get(param) if name == tool.name else None
+                if isinstance(schema, dict):
+                    schema['description'] = ('%s Examples: %s' % (schema.get('description') or '',
+                                                                   '; '.join(examples))).strip()
+        # The envelope is every tool's answer: its full schema goes out on fnv_status only, and the other tools list
+        # no output schema (tool quality part 5: a client still gets their structured answers, MCP SDK 2.2 checks
+        # an answer only against a listed schema). The tool manager keeps the full schema for checking results.
         for tool in tools:
-            if envelope and tool.name not in ENVELOPE_SCHEMA_TOOLS and tool.output_schema == envelope:
-                tool.output_schema = {'type': 'object', 'description': ENVELOPE_NOTE}
+            if tool.name not in ENVELOPE_SCHEMA_TOOLS:
+                tool.output_schema = None
+            tool.annotations = lean_annotations(tool.annotations)
         return tools
 
     async def call_tool(self, name, arguments, context=None):

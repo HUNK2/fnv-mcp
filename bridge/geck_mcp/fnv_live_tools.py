@@ -926,10 +926,15 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     @server.tool(annotations=read)
     async def fnv_mem_read(target: Annotated[str, Field(min_length=1, max_length=200, description=(
                                '0xADDRESS, or a reference/form spec (player, form id, EditorID)'))] | None = None,
-                           path: Annotated[str, Field(max_length=300)] | None = None,
-                           as_type: Literal['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64', 'ptr', 'cstr'] | None = None,
-                           class_name: Annotated[str, Field(max_length=200)] | None = None,
-                           length: Annotated[int, Field(ge=1, le=4096)] | None = None,
+                           path: Annotated[str, Field(max_length=300, description=(
+                               'Dotted field path from the object, e.g. m_pBaseProcess.m_eProcessType'))] | None = None,
+                           as_type: Annotated[Literal['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64', 'ptr',
+                                                      'cstr'], Field(description=(
+                               'Read as this type instead of the layout\'s'))] | None = None,
+                           class_name: Annotated[str, Field(max_length=200, description=(
+                               'The class at target when RTTI cannot tell'))] | None = None,
+                           length: Annotated[int, Field(ge=1, le=4096, description=(
+                               'Bytes to read when there is no type'))] | None = None,
                            address: Annotated[str, Field(min_length=1, max_length=200, description=(
                                'Another name for target'))] | None = None) -> result_type:
         """Read engine memory. With a field path (m_pBaseProcess.m_eProcessType) the fields are found in the
@@ -954,10 +959,15 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     @server.tool(annotations=act)
     async def fnv_mem_write(value: Annotated[Scalar, Field(description=(
                                 'A number, true/false, or hex bytes ("0A FF 00") with as_type=bytes'))],
-                            target: Annotated[str, Field(min_length=1, max_length=200)] | None = None,
-                            path: Annotated[str, Field(max_length=300)] | None = None,
-                            as_type: Literal['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64', 'ptr', 'bool', 'bytes'] | None = None,
-                            class_name: Annotated[str, Field(max_length=200)] | None = None,
+                            target: Annotated[str, Field(min_length=1, max_length=200, description=(
+                                '0xADDRESS, or a reference/form spec (player, form id, EditorID)'))] | None = None,
+                            path: Annotated[str, Field(max_length=300, description=(
+                                'Dotted field path from the object, e.g. m_pBaseProcess.m_eProcessType'))] | None = None,
+                            as_type: Annotated[Literal['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64', 'ptr',
+                                                       'bool', 'bytes'], Field(description=(
+                                'Write as this type instead of the layout\'s'))] | None = None,
+                            class_name: Annotated[str, Field(max_length=200, description=(
+                                'The class at target when RTTI cannot tell'))] | None = None,
                             address: Annotated[str, Field(min_length=1, max_length=200, description=(
                                 'Another name for target'))] | None = None) -> result_type:
         """Write engine memory at an address or field path, typed by the class layout (or as_type). The old
@@ -1579,9 +1589,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_hook_set(function: Annotated[str, Field(min_length=1, max_length=300, description=(
             'Engine function: proven name (Actor::GetLevel) or address'))],
                            action: Literal['skip', 'result', 'arg', 'script', 'read', 'remove', 'list'] = 'skip',
-                           value: Annotated[Scalar, Field(description=(
-                               'skip, result: the value returned; arg: the new argument value (a number, true/false, '
-                               'or a 0xADDRESS or form for ptr, ref, form)'))] | None = None,
+                           value: Scalar | None = None,
                            value_type: Literal['int', 'float', 'bool', 'ptr', 'ref', 'form'] | None = None,
                            arg: Annotated[int, Field(ge=0, le=31)] | None = None,
                            filter: Filter | None = None,
@@ -1668,10 +1676,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_world_edit(action: Literal['move', 'rotate', 'scale', 'transform', 'enable', 'disable', 'delete',
                                              'duplicate', 'weather', 'imagespace', 'imagespace_stop'],
                              ref: Ref | None = None,
-                             position: Annotated[list[float | None], Field(description=(
-                                 '[x, y, z] in game units; null keeps that axis'))] | None = None,
-                             rotation: Annotated[list[float | None], Field(description=(
-                                 '[x, y, z] angles in degrees; null keeps that axis'))] | None = None,
+                             position: list[float | None] | None = None,
+                             rotation: list[float | None] | None = None,
                              scale: Annotated[float, Field(gt=0, le=10)] | None = None,
                              fade: bool = False,
                              weather: Annotated[str, Field(max_length=200)] | None = None,
@@ -1722,8 +1728,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_probe(action: Literal['plan', 'install', 'status', 'read', 'remove', 'clear', 'config', 'harvest',
                                         'harvests'] = 'status',
                         statuses: list[str] | None = None, functions: list[str] | None = None,
-                        start: Annotated[str, Field(description=(
-                            'plan: first address of a range (0x00401000), with end'))] | None = None,
+                        start: str | None = None,
                         end: str | None = None, cls: str | None = None,
                         callees_of: list[str] | None = None, limit: int | None = None, part: str | None = None,
                         samples: int = 8, exit_samples: int = 4, every: int = 64, dry_run: bool = False,
@@ -1926,9 +1931,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_wait_for(frames: Annotated[int, Field(ge=1, le=10000)] | None = None,
                            seconds: Annotated[float, Field(gt=0, le=600)] | None = None,
                            clock: Literal['game', 'real'] = 'game',
-                           predicate: Annotated[str, Field(min_length=1, max_length=2000, description=(
-                               'A condition over memory and the frame counter, for example: frame >= 500; '
-                               '[0x011DEA0C]:u8 == 1; [[0x011DEA3C]+0x24]:f32 > 0 and frame >= 100'))] | None = None,
+                           predicate: Annotated[str, Field(min_length=1, max_length=2000)] | None = None,
                            loaded: bool = False,
                            timeout: Annotated[int, Field(ge=1, le=600)] = 60,
                            max_frames: Annotated[int, Field(ge=1, le=10000)] = 3600) -> result_type:
@@ -1982,7 +1985,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         def answer():
             from .fnv_guide import GuideTools
             research = getattr(project.fnv, 'research_dir', None) if project.fnv else None
-            schemas = {t.name: t.parameters for t in server._tool_manager.list_tools()}
+            manager = getattr(server, '_tool_manager', None)
+            schemas = {t.name: t.parameters for t in manager.list_tools()} if manager is not None else None
             return GuideTools(str(research) if research else None, toolsets=project.active_toolsets(),
                               schemas=schemas).run(action, words, limit, offset, brief)
         return await invoke('fnv_guide', answer)
@@ -2001,9 +2005,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                         op: Literal['set', 'list', 'clear'] | None = None,
                         location: Annotated[str, Field(max_length=200)] | None = None,
                         break_id: Annotated[int, Field(ge=0, le=100000)] | None = None,
-                        when: Annotated[str, Field(max_length=500, description=(
-                            'break: stop only when this holds, for example: frame >= 500; '
-                            '[0x011DEA0C]:u8 == 1; this.[0x08]:u32 == 0x1F and arg1:i32 > 3'))] | None = None,
+                        when: Annotated[str, Field(max_length=500)] | None = None,
                         hits: Annotated[int, Field(ge=1, le=100000)] | None = None,
                         thread: Literal['main', 'any'] | None = None,
                         do: Literal['stop', 'log'] | None = None,
@@ -2135,8 +2137,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_overlay(action: Literal['text', 'marker', 'clear'],
                           text: Annotated[str, Field(max_length=250)] | None = None,
                           x: float | None = None, y: float | None = None,
-                          position: Annotated[list[float], Field(description='[x, y, z] in game units')]
-                          | None = None,
+                          position: list[float] | None = None,
                           ref: Ref | None = None,
                           base: Ref | None = None,
                           scale: Annotated[float, Field(gt=0, le=20)] = 1.0) -> result_type:
@@ -2332,8 +2333,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                        name: Annotated[str, Field(max_length=100)] | None = None,
                        plugin: Annotated[str, Field(max_length=200)] | None = None,
                        records: list[Annotated[str, Field(max_length=128)]] | None = None,
-                       since: Annotated[float, Field(description=(
-                           'changes: only entries at or after this time (Unix seconds)'))] | None = None,
+                       since: float | None = None,
                        form: Ref | None = None,
                        since_seconds: Annotated[float, Field(gt=0, le=31 * 86400, description=(
                            'changes: only the last N seconds (instead of since)'))] | None = None) -> result_type:
@@ -2537,8 +2537,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                         stop: bool = False,
                         fade_ms: Annotated[int, Field(ge=0, le=20000)] = 1000,
                         enable: bool | None = None,
-                        position: Annotated[list[float], Field(description='[x, y, z] in game units')]
-                        | None = None) -> result_type:
+                        position: list[float] | None = None) -> result_type:
         """Sound. log seconds: every sound the engine creates meanwhile, with its sound form or file and the
         function that asked (footsteps, weapons, scripts...). play sound [ref]: a SOUN form, 2D or from a
         reference. playing: every sound the audio manager holds (file, form, 2D/3D, loop, volume, position, state).
@@ -2560,8 +2559,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                           ref: Ref | None = None,
                           velocity: list[float] | None = None,
                           seconds: Annotated[float, Field(gt=0, le=60)] = 5.0,
-                          position: Annotated[list[float], Field(description='[x, y, z] in game units')]
-                          | None = None,
+                          position: list[float] | None = None,
                           radius: Annotated[float, Field(gt=0, le=4096)] = 64.0) -> result_type:
         """Physics. controller ref: the actor's character controller, state (on ground, in air, swimming...), fall
         time and fall distance (the engine's GetFallDistance). body ref: 3D root to collision object to Havok body,
@@ -2580,8 +2578,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                           name: Annotated[str, Field(max_length=200)] | None = None,
                           args: list[Any] | None = None,
                           index: Annotated[int, Field(ge=0, le=15)] | None = None,
-                          start: Annotated[float, Field(description='sweep: the first value of the argument')]
-                          | None = None, stop: float | None = None,
+                          start: float | None = None, stop: float | None = None,
                           steps: Annotated[int, Field(ge=1, le=100)] = 10) -> result_type:
         """Game systems. formulas: the catalog (skill value, XP for a level, walk and run speed, item
         value by condition, force-lock chance). formula name args: call it (or any engine function by name) with

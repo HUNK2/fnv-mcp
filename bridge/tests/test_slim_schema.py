@@ -100,27 +100,21 @@ class SlimListingTests(unittest.IsolatedAsyncioTestCase):
         raw = server._tool_manager.get_tool('fnv_ref').parameters
         self.assertEqual(raw.get('title'), 'fnv_refArguments')
 
-    async def test_the_envelope_schema_is_emitted_once_per_entry_tool(self):
+    async def test_the_envelope_schema_is_emitted_once_on_fnv_status(self):
         """The envelope (ok, operation, data, error, outcome) is every tool's answer. Its full schema is emitted on
-        fnv_status; the other tools emit a short object schema that names them. The tool manager
-        keeps the full schema on every tool, so structured results are still checked against it."""
+        fnv_status only; the other tools list no output schema (tool quality part 5) and their structured answers
+        still reach the client. The tool manager keeps the full schema on every tool, so results are still checked
+        against it."""
         server = make_server(self.fixture.p)
         async with Client(server) as client:
             tools = {t.name: t for t in (await client.list_tools()).tools}
+            answer = await client.call_tool('fnv_guide', {'action': 'list'})
         full = tools['fnv_status'].output_schema
         self.assertIn('error', full.get('properties', {}))
-        wrong = []
-        for name, tool in tools.items():
-            out = tool.output_schema
-            raw = slim_schema(server._tool_manager.get_tool(name).output_schema or {})
-            if name == 'fnv_status' or raw != full:
-                if out != raw:
-                    wrong.append((name, 'changed'))
-                continue
-            if out.get('type') != 'object' or 'fnv_status' not in out.get('description', '') or len(json.dumps(out)) > 400:
-                wrong.append((name, out))
-        self.assertEqual(wrong, [])
-        self.assertLess(sum(len(json.dumps(t.output_schema or {})) for t in tools.values()), 80000)
+        self.assertEqual(full, slim_schema(server._tool_manager.get_tool('fnv_status').output_schema))
+        self.assertEqual(sorted(n for n, t in tools.items() if t.output_schema), ['fnv_status'])
+        self.assertIsNone(tools['fnv_guide'].output_schema)
+        self.assertTrue(answer.structured_content['ok'])           # no listed schema: the answer still arrives
         self.assertIn('error', server._tool_manager.get_tool('fnv_ref').output_schema.get('properties', {}))
 
     async def test_null_for_an_optional_parameter_still_validates(self):
