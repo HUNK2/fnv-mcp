@@ -469,6 +469,12 @@ Xyz = Annotated[list[float | None], Field(min_length=3, max_length=3,
                                           description='[x, y, z]; null keeps that axis. The old {x, y, z} object works '
                                                       'too.')]
 XyzFull = Annotated[list[float], Field(min_length=3, max_length=3, description='[x, y, z] in game units')]
+# Rotation is its own type (tool quality part 4): angles in degrees, never game units.
+Rotation = Annotated[list[float], Field(min_length=3, max_length=3, description='[x, y, z] angles in degrees')]
+RotationAxes = Annotated[list[float | None], Field(min_length=3, max_length=3, description=(
+    '[x, y, z] angles in degrees; null keeps that axis. The old {x, y, z} object works too.'))]
+# One type for the five `value` parameters that took anything: a number, true/false or text (what each tool reads).
+Scalar = bool | int | float | str
 
 
 def xyz_dict(value):
@@ -946,7 +952,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         return await invoke('fnv_run_script', lambda: live.run_script(source, ref), 'act')
 
     @server.tool(annotations=act)
-    async def fnv_mem_write(value: Any,
+    async def fnv_mem_write(value: Annotated[Scalar, Field(description=(
+                                'A number, true/false, or hex bytes ("0A FF 00") with as_type=bytes'))],
                             target: Annotated[str, Field(min_length=1, max_length=200)] | None = None,
                             path: Annotated[str, Field(max_length=300)] | None = None,
                             as_type: Literal['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64', 'ptr', 'bool', 'bytes'] | None = None,
@@ -973,7 +980,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                                                                         allow_unproven), 'act')
 
     @server.tool(annotations=act)
-    async def fnv_form_edit(form: Ref, field: Annotated[str, Field(min_length=1, max_length=300)], value: Any,
+    async def fnv_form_edit(form: Ref, field: Annotated[str, Field(min_length=1, max_length=300)],
+                            value: Annotated[Scalar, Field(description='A number, true/false or text for the field')],
                             as_type: Literal['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64', 'ptr', 'bool'] | None = None) -> result_type:
         """Change a field of a form in memory (weapon damage, NPC data, package data...) by field path in the
         form's class layout. Journaled and undoable; the plugin file is not changed."""
@@ -989,7 +997,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     @server.tool(annotations=act)
     async def fnv_actor_control(ref: Ref, action: Annotated[str, Field(min_length=3, max_length=40)],
                                 target: Annotated[str, Field(max_length=200)] | None = None,
-                                value: Any = None) -> result_type:
+                                value: Annotated[Scalar | list[float], Field(description=(
+                                    'set_av / force_av: the number; add_item / remove_item: the count; '
+                                    'set_position: [x, y, z]'))] | None = None) -> result_type:
         """Make an actor do something now: evaluate_package, start_combat (target), stop_combat, add_package /
         remove_package, play_idle (target idle), move_to (target), kill, resurrect, enable, disable, equip /
         unequip / add_item / remove_item (target item, value count), cast (target spell), look_at, say_to,
@@ -1027,7 +1037,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     @server.tool(annotations=act)
     async def fnv_script_set(target: Annotated[str, Field(min_length=1, max_length=200)],
                              kind: Literal['stage', 'objective_completed', 'objective_displayed', 'variable', 'global'],
-                             value: Any, name: Annotated[str, Field(max_length=128)] | None = None,
+                             value: Annotated[Scalar, Field(description=(
+                                 'stage: the stage number; objective_*: true/false; variable, global: the number'))],
+                             name: Annotated[str, Field(max_length=128)] | None = None,
                              index: Annotated[int, Field(ge=0, le=100000)] | None = None) -> result_type:
         """Set a quest stage, an objective's completed/displayed state (index), a script variable (name; target is
         the quest or reference EditorID) or a global (target = EditorID). The old value is journaled."""
@@ -1230,7 +1242,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     @server.tool(annotations=act)
     async def fnv_dialogue_choose(speaker: Ref | None = None,
                                   choices: list[Annotated[str, Field(max_length=200)]] | None = None,
-                                  start: bool = True, close: bool = False,
+                                  start: Annotated[bool, Field(description=(
+                                      'Start the conversation first (false: one is already open)'))] = True,
+                                  close: bool = False,
                                   timeout_seconds: Annotated[int, Field(ge=3, le=180)] = 30) -> result_type:
         """Test dialogue end to end: the player talks to the speaker (start), then each choice is picked in order
         once the speaker has finished talking. A choice is an option index (0 = first shown), a prompt substring, or
@@ -1385,7 +1399,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_move(ref: Ref = 'player', to: Ref | None = None,
                        cell: Annotated[str, Field(pattern=r'^[A-Za-z0-9_]{1,120}$')] | None = None,
                        position: Xyz | dict[str, float] | None = None,
-                       rotation: Xyz | dict[str, float] | None = None,
+                       rotation: RotationAxes | dict[str, float] | None = None,
                        timeout_seconds: Annotated[int, Field(ge=10, le=600)] = 180) -> result_type:
         """Teleport the player or any ref: to another ref (MoveTo), to a cell (the player by coc; other refs need a
         position in it, PositionCell), or to a position [x, y, z] in its current cell (null keeps an axis);
@@ -1565,7 +1579,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_hook_set(function: Annotated[str, Field(min_length=1, max_length=300, description=(
             'Engine function: proven name (Actor::GetLevel) or address'))],
                            action: Literal['skip', 'result', 'arg', 'script', 'read', 'remove', 'list'] = 'skip',
-                           value: Any = None,
+                           value: Annotated[Scalar, Field(description=(
+                               'skip, result: the value returned; arg: the new argument value (a number, true/false, '
+                               'or a 0xADDRESS or form for ptr, ref, form)'))] | None = None,
                            value_type: Literal['int', 'float', 'bool', 'ptr', 'ref', 'form'] | None = None,
                            arg: Annotated[int, Field(ge=0, le=31)] | None = None,
                            filter: Filter | None = None,
@@ -1652,8 +1668,10 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_world_edit(action: Literal['move', 'rotate', 'scale', 'transform', 'enable', 'disable', 'delete',
                                              'duplicate', 'weather', 'imagespace', 'imagespace_stop'],
                              ref: Ref | None = None,
-                             position: list[float | None] | None = None,
-                             rotation: list[float | None] | None = None,
+                             position: Annotated[list[float | None], Field(description=(
+                                 '[x, y, z] in game units; null keeps that axis'))] | None = None,
+                             rotation: Annotated[list[float | None], Field(description=(
+                                 '[x, y, z] angles in degrees; null keeps that axis'))] | None = None,
                              scale: Annotated[float, Field(gt=0, le=10)] | None = None,
                              fade: bool = False,
                              weather: Annotated[str, Field(max_length=200)] | None = None,
@@ -1704,7 +1722,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_probe(action: Literal['plan', 'install', 'status', 'read', 'remove', 'clear', 'config', 'harvest',
                                         'harvests'] = 'status',
                         statuses: list[str] | None = None, functions: list[str] | None = None,
-                        start: str | None = None, end: str | None = None, cls: str | None = None,
+                        start: Annotated[str, Field(description=(
+                            'plan: first address of a range (0x00401000), with end'))] | None = None,
+                        end: str | None = None, cls: str | None = None,
                         callees_of: list[str] | None = None, limit: int | None = None, part: str | None = None,
                         samples: int = 8, exit_samples: int = 4, every: int = 64, dry_run: bool = False,
                         top: int = 25, int3: bool = False, int3_budget: int | None = None,
@@ -2115,7 +2135,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_overlay(action: Literal['text', 'marker', 'clear'],
                           text: Annotated[str, Field(max_length=250)] | None = None,
                           x: float | None = None, y: float | None = None,
-                          position: list[float] | None = None,
+                          position: Annotated[list[float], Field(description='[x, y, z] in game units')]
+                          | None = None,
                           ref: Ref | None = None,
                           base: Ref | None = None,
                           scale: Annotated[float, Field(gt=0, le=20)] = 1.0) -> result_type:
@@ -2311,8 +2332,11 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                        name: Annotated[str, Field(max_length=100)] | None = None,
                        plugin: Annotated[str, Field(max_length=200)] | None = None,
                        records: list[Annotated[str, Field(max_length=128)]] | None = None,
-                       since: float | None = None,
-                       form: Ref | None = None) -> result_type:
+                       since: Annotated[float, Field(description=(
+                           'changes: only entries at or after this time (Unix seconds)'))] | None = None,
+                       form: Ref | None = None,
+                       since_seconds: Annotated[float, Field(gt=0, le=31 * 86400, description=(
+                           'changes: only the last N seconds (instead of since)'))] | None = None) -> result_type:
         """Forms at run time. create type=<STAT, MISC, ARMO, ...> makes an empty form, or clone=<base form> a copy
         (name sets its name); ready for fnv_form_edit and fnv_place. reload plugin=<name, or the rebuilt file's path: the
         running game locks its own plugin files> after rebuilding it: the
@@ -2324,7 +2348,14 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         is_read = action in ('changes', 'bytes')
         args = {'type': type, 'clone': clone, 'name': name, 'plugin': plugin, 'records': records, 'since': since,
                 'form': form}
-        return await invoke('fnv_form', lambda: form_tools.run(action, **args), 'read' if is_read else 'act')
+
+        def run():
+            if since_seconds is not None:
+                if since is not None:
+                    raise ValueError('Give since (a time) or since_seconds (the last N seconds), not both')
+                args['since'] = time.time() - since_seconds
+            return form_tools.run(action, **args)
+        return await invoke('fnv_form', run, 'read' if is_read else 'act')
 
     @server.tool(annotations=act)
     async def fnv_native(action: Literal['headers', 'build', 'load', 'unload', 'reload', 'call', 'log', 'list'],
@@ -2506,7 +2537,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                         stop: bool = False,
                         fade_ms: Annotated[int, Field(ge=0, le=20000)] = 1000,
                         enable: bool | None = None,
-                        position: list[float] | None = None) -> result_type:
+                        position: Annotated[list[float], Field(description='[x, y, z] in game units')]
+                        | None = None) -> result_type:
         """Sound. log seconds: every sound the engine creates meanwhile, with its sound form or file and the
         function that asked (footsteps, weapons, scripts...). play sound [ref]: a SOUN form, 2D or from a
         reference. playing: every sound the audio manager holds (file, form, 2D/3D, loop, volume, position, state).
@@ -2528,7 +2560,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                           ref: Ref | None = None,
                           velocity: list[float] | None = None,
                           seconds: Annotated[float, Field(gt=0, le=60)] = 5.0,
-                          position: list[float] | None = None,
+                          position: Annotated[list[float], Field(description='[x, y, z] in game units')]
+                          | None = None,
                           radius: Annotated[float, Field(gt=0, le=4096)] = 64.0) -> result_type:
         """Physics. controller ref: the actor's character controller, state (on ground, in air, swimming...), fall
         time and fall distance (the engine's GetFallDistance). body ref: 3D root to collision object to Havok body,
@@ -2547,7 +2580,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                           name: Annotated[str, Field(max_length=200)] | None = None,
                           args: list[Any] | None = None,
                           index: Annotated[int, Field(ge=0, le=15)] | None = None,
-                          start: float | None = None, stop: float | None = None,
+                          start: Annotated[float, Field(description='sweep: the first value of the argument')]
+                          | None = None, stop: float | None = None,
                           steps: Annotated[int, Field(ge=1, le=100)] = 10) -> result_type:
         """Game systems. formulas: the catalog (skill value, XP for a level, walk and run speed, item
         value by condition, force-lock chance). formula name args: call it (or any engine function by name) with
@@ -2611,7 +2645,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_place(action: Literal['at', 'array', 'nudge', 'rotate', 'scale', 'snap', 'check', 'list', 'remove'],
                         base: Ref | None = None, ref: Ref | None = None,
                         position: Point | None = None, near: Ref | None = None,
-                        offset: Point | None = None, rotation: Point | None = None,
+                        offset: Point | None = None, rotation: Rotation | None = None,
                         scale: Annotated[float, Field(gt=0, le=10)] | None = None,
                         shape: Literal['row', 'grid', 'circle'] | None = None,
                         count: Annotated[int, Field(ge=1, le=100)] | None = None,
