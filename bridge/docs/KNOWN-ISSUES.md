@@ -61,6 +61,19 @@ damaged file. Most are tracked as GitHub issues.
 
 ## Game control
 
+- **The game hangs at startup when the monitors are asleep.** A launch while the display is off, or turning off,
+  stops the game before its first frame: `fnv_game launch` ends with `COMPANION_NOT_READY`, and the Windows System
+  log has a Kernel-Power event 566 (`ScMonitorPower`) in the second of the launch. Fix: keep the display on for as
+  long as you test, with a separate helper that stays running across all launches and calls
+  `SetThreadExecutionState(0x80000003)` (display and system required, continuous). In PowerShell, in a window of
+  its own:
+
+  ```powershell
+  Add-Type -Name Power -Namespace Keep -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);'
+  [Keep.Power]::SetThreadExecutionState(0x80000003); while ($true) { Start-Sleep -Seconds 60 }
+  ```
+
+  After a hang, end the game with `fnv_game action=quit force=true` and launch again.
 - After a launch in which no game started, `fnv_status` says the game was terminated from outside.
 - The audio-cache setting can stay off when writing it back fails.
 - `fnv_crawl cells` moves the player with a `coc` that is not journaled.

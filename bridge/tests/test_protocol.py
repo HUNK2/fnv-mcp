@@ -5,6 +5,7 @@ import unittest
 
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
+from geck_mcp import fnv_guide
 from geck_mcp.server import make_server
 from geck_mcp.fnv_tools import FNV_TOOLS
 from geck_mcp.fnv_live_tools import FNV_LIVE_TOOLS
@@ -50,7 +51,8 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(caps['toolCount'], len(ALL))
             self.assertEqual(set(caps['tools']), ALL)
             prompts = await client.list_prompts()
-            self.assertEqual(list(prompts.prompts if hasattr(prompts, 'prompts') else prompts), [])
+            names = [p.name for p in (prompts.prompts if hasattr(prompts, 'prompts') else prompts)]
+            self.assertEqual(sorted(names), sorted(fnv_guide.guide_names()))     # every guide is also a prompt
 
     async def test_no_tool_takes_an_editor_session(self):
         async with Client(make_server(self.fixture.p)) as client:

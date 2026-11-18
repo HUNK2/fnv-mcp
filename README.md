@@ -42,8 +42,10 @@ client). Then a first prompt:
 > Call fnv_setup_check and fix what it reports with me, then launch the game with fnv_game launch and show me
 > fnv_status.
 
-The tool references are [FNV-ENGINE-TOOLS.md](bridge/docs/FNV-ENGINE-TOOLS.md) and
-[FNV-LIVE-TOOLS.md](bridge/docs/FNV-LIVE-TOOLS.md); the `fnv_guide` tool has step-by-step guides. Open problems are
+Every tool, with its actions, parameters and an example call, is in [TOOLS.md](bridge/docs/TOOLS.md); the
+documentation index is [bridge/docs/README.md](bridge/docs/README.md), and the `fnv_guide` tool has step-by-step
+guides. To give your own agent the rules for working with the tools, copy
+[AGENT-GUIDE.md](bridge/docs/AGENT-GUIDE.md) into your mod project. Open problems are
 listed in [KNOWN-ISSUES.md](bridge/docs/KNOWN-ISSUES.md). To remove it again, see "Uninstall" in the setup guide.
 
 ## Credits

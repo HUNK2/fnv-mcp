@@ -4,7 +4,8 @@ This is the one setup guide. It takes a Windows machine from nothing to `fnv_sta
 game. Run every command from the `bridge` folder of your clone (`cd bridge` first), in PowerShell.
 
 Tool references: [FNV-ENGINE-TOOLS.md](FNV-ENGINE-TOOLS.md) (offline engine knowledge, crash doctor) and
-[FNV-LIVE-TOOLS.md](FNV-LIVE-TOOLS.md) (everything that touches the game). A worked example of a mod built and
+[TOOLS.md](TOOLS.md) (every tool, generated from the code), and how the live tools reach the game in
+[FNV-LIVE-TOOLS.md](FNV-LIVE-TOOLS.md). A worked example of a mod built and
 tested end to end: [examples/hello-quest](../examples/hello-quest/README.md).
 
 ## What you need
@@ -105,6 +106,9 @@ Nothing here downloads files or ships game files, the decompilation or anything 
 A first prompt to give the agent: *"Call fnv_setup_check and fix what it reports with me, then launch the game
 with fnv_game launch and show me fnv_status."*
 
+Before the agent starts on a mod, give it [AGENT-GUIDE.md](AGENT-GUIDE.md): the five rules, the working loop and
+what it must ask you first. Copy it into your mod project so the agent reads it in every session.
+
 ## Without Mod Organizer 2 (the direct install)
 
 The tools also work with the game as Steam installed it: you start it with Steam's Play button (or
@@ -159,7 +163,7 @@ play with. On the direct install (no MO2) they act on your real game, and change
 | Tool family | Needs |
 | --- | --- |
 | `fnv_guide`, `fnv_setup_check`, `fnv_crash latest`, `fnv_crash` (without engine names), `fnv_save_inspect`, `fnv_save_diff` | nothing beyond the project file |
-| Engine knowledge: `fnv_func_*`, `fnv_class_*`, `fnv_symbolize`, `fnv_global_find`, `fnv_setting_info`, `fnv_func action=strings`, `fnv_command_info`, `fnv_script_explain` | the engine map |
+| Engine knowledge: `fnv_func`, `fnv_class`, `fnv_symbolize`, `fnv_global_find`, `fnv_setting_info`, `fnv_func action=strings`, `fnv_command_info`, `fnv_script_explain` | the engine map |
 | `fnv_symbols`, source lines and named locals in other tools | the symbol database (optional) |
 | `fnv_name_*` (the naming tools, an optional extra) | the fnvsym proof folder (`FNVSYM_ROOT`) |
 | Live tools: `fnv_status`, `fnv_player`, `fnv_ref`, `fnv_photo`, tests, profiling, debugging... | a running game with the engine companion |
@@ -198,7 +202,7 @@ Paths in the project file may be relative to the project file. `fnv_*` keys go i
 | `FNV_ENGINE_MAP`, `FNV_DECOMP`, `FNV_SYMDB`, `FNV_CRASH_DIRS`, `FNV_RESEARCH_DIR` | none | The same as the `fnv` keys above; the project file wins |
 | `FNV_CLEAN_EXE` | none | The same as `fnv.clean_exe`; `fnv_plugin_build` then falls back to `%USERPROFILE%\.fnvdecomp\FalloutNV.exe` |
 | `FNV_MCP_PIPE` | none | The same as `fnv.engine_pipe` |
-| `FNV_MCP_SAME_FRAME` | on | `0` makes every request to the game wait for its own frame again (read tools get slower); see "How it works" in `FNV-LIVE-TOOLS.md` |
+| `FNV_MCP_SAME_FRAME` | on | `0` makes every request to the game wait for its own frame again (read tools get slower); see "How the tools reach the game" in `FNV-LIVE-TOOLS.md` |
 | `FNVSYM_ROOT` | none | The fnvsym checkout the `fnv_name_*` tools need; without it they answer `NO_PROOF_FOLDER` |
 | `FNV_MCP_ZIG` | none | Zig, when `fnv.zig` is not set |
 | `FNV_MCP_RELOAD` | off | `1` starts the reloading supervisor, for development (same as `run_mcp.py --reload`) |

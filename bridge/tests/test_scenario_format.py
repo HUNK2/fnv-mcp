@@ -1,4 +1,4 @@
-"""Release plan Phase 7 (M5): scenario files are a YAML subset. Each rule docs/FNV-LIVE-TOOLS.md states under
+"""Release plan Phase 7 (M5): scenario files are a YAML subset. Each rule docs/SCENARIOS.md states under
 "Scenario file format" is checked here, so the text and the parser cannot drift apart."""
 import sys
 import unittest
@@ -9,13 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from geck_mcp import fnv_scenario  # noqa: E402
 from geck_mcp.fnv_scenario import ScenarioError, parse_yaml  # noqa: E402
 
-DOC = Path(__file__).resolve().parents[1] / 'docs' / 'FNV-LIVE-TOOLS.md'
+DOC = Path(__file__).resolve().parents[1] / 'docs' / 'SCENARIOS.md'
 
 
 class ScenarioFormatTests(unittest.TestCase):
     def test_the_documented_section_exists(self):
         text = DOC.read_text(encoding='utf-8')
-        self.assertIn('### Scenario file format', text)
+        self.assertIn('## Scenario file format', text)
 
     def test_mappings_lists_and_flow(self):
         data = parse_yaml('name: x\nsteps:\n  - run: a\n  - {wait: 1}\n  - [1, 2]\nlist:\n- a\n- b\n')

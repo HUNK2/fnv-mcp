@@ -31,4 +31,8 @@ branch `fnv/engine-knowledge`.
 - `TESBoundObject` bounds (OBND, 6 x int16 min then max) at base form +0x24; `TESObjectREFR` base form at +0x20;
   form type byte at +4. Up axis from angles: (-sin Y, sin X cos Y, cos X cos Y).
 - Pick rays (`fnv_hands.Rays.cast`) batch many rays per companion call; a hit naming no reference is the landscape.
-- Footprint snap rules and their live evidence: `bridge/docs/FNV-LIVE-TOOLS.md` (placement section).
+- Footprint snap rules: the `build-a-place` guide (`bridge/geck_mcp/guides/build-a-place.md`); their live
+  evidence: `bridge/docs/history/live-tools-reference-2026-11-18.md` ("Creation loop").
+- The tool reference `bridge/docs/TOOLS.md` is generated: after changing a tool run
+  `PYTHONPATH=. .venv/Scripts/python.exe tools/gen_tool_docs.py` from `bridge`, and give a new tool its group,
+  example and action lines in `geck_mcp/tool_examples.py`. Docs index: `bridge/docs/README.md`.
