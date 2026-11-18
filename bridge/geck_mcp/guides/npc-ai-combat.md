@@ -23,8 +23,9 @@ does not notice the player, or takes the wrong damage.
    `action=stop`: each hit broken down. `fnv_actor_values` shows the values, their modifiers and the effects
    behind them; `fnv_vats_odds` the VATS hit chances.
 7. **Try a change, then make it real.** `fnv_actor_control` (start_combat, add_package, set_av, move_to...) and
-   `fnv_form_edit` (package or NPC data) change the running game; they are journaled and `fnv_undo` reverses them.
-   When the change works, put it in the plugin. For a fight test, `fnv_place action=at export=false` places an
+   `fnv_form_edit` (package or NPC data) change the running game. Both are journaled; `fnv_form_edit` changes are
+   undoable, and for `fnv_actor_control` the answer's `undoable` says whether `fnv_undo` can reverse it. When the
+   change works, put it in the plugin. For a fight test, `fnv_place action=at export=false` places an
    enemy near the player that is not exported.
 
 ## What the answers mean
@@ -43,7 +44,8 @@ does not notice the player, or takes the wrong damage.
   removes it.
 - Changes from `fnv_actor_control` last only in the running game; a restart or a load starts from the plugin and
   the save again.
-- A kill or a resurrect cannot always be undone exactly: check `fnv_journal` before relying on `fnv_undo`.
+- Most `fnv_actor_control` actions (kill, resurrect, start_combat, evaluate_package, packages, idles) cannot be
+  undone; enable, disable, add_item and set_av can. Start from a test save (`fnv_test_save`) to try them again.
 - An actor in another cell has little AI running (process level): go there with `fnv_move` before judging it.
 
 ## Checks that prove the fix
