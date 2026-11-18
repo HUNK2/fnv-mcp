@@ -1,7 +1,7 @@
 # fnv_* live tools: game control, scenario tests, live inspection and full control
 
 These tools work on the **running game** and its plugins. They are the fnv-mcp milestones 4-8 on top of the offline
-engine tools in [FNV-ENGINE-TOOLS.md](FNV-ENGINE-TOOLS.md):
+engine tools in [FNV-ENGINE-TOOLS.md](../FNV-ENGINE-TOOLS.md):
 
 - **Game control and tests**: launch Fallout: New Vegas through a portable MO2 dev profile, load a save or
   a cell with no clicks, quit and restart, install plugins, read logs, and run repeatable YAML tests.
@@ -161,7 +161,7 @@ are kept in `state/atlas.sqlite`, and an existing Frida `fnvsym-trace/1` capture
 
 ## Setup
 
-The full guide, from an empty machine, is [FNV-MCP-SETUP.md](FNV-MCP-SETUP.md); `fnv_setup_check` says what is
+The full guide, from an empty machine, is [FNV-MCP-SETUP.md](../FNV-MCP-SETUP.md); `fnv_setup_check` says what is
 missing. In short:
 
 1. A portable MO2 instance with a dev profile, xNVSE 6.4.9+ and JIP LN NVSE (`tools\fnv_setup_dev_profile.py`
@@ -210,7 +210,7 @@ Without MO2 (the direct install: the game started by Steam or `nvse_loader.exe`)
 target=game` puts the companion into `Data\NVSE\Plugins` and the tools attach to the game however it was started;
 `fnv_status` names the install in `install.kind` (`mo2` or `direct`). Changes to the direct install's files (plugins
 into `Data`, `plugins.txt`, `Fallout.ini`, xNVSE's config, saves) refuse with `DIRECT_INSTALL_PROTECTED` unless
-`fnv.allow_direct_install_changes` is true. [FNV-MCP-SETUP.md](FNV-MCP-SETUP.md), "Without Mod Organizer 2", has
+`fnv.allow_direct_install_changes` is true. [FNV-MCP-SETUP.md](../FNV-MCP-SETUP.md), "Without Mod Organizer 2", has
 the details.
 
 ## Tools
@@ -320,7 +320,7 @@ engine calls cannot be undone automatically; the journal says which entries can.
 ## Warnings and guides: fnv_warnings and fnv_guide (Plan 2, first wave)
 
 The conventions these two tools follow (and every later action-style tool) are in
-[FNV-TOOL-CONVENTIONS.md](FNV-TOOL-CONVENTIONS.md): an `action` argument, the verdict first, paged lists, next steps.
+[FNV-TOOL-CONVENTIONS.md](../FNV-TOOL-CONVENTIONS.md): an `action` argument, the verdict first, paged lists, next steps.
 
 **`fnv_warnings`.** The engine calls its warning function from about 845 places, but in the retail game the
 function is empty. xNVSE hooks it when `[Logging] EnableGameErrorLog=1` is set in `Data/NVSE/nvse_config.ini`.
@@ -1076,7 +1076,7 @@ writes before compiling (GECK's bytecode starts with a single one), maps runtime
 master-relative ids, builds `SCHR`/`SCDA`/`SCTX`/`SLSD`/`SCVR`/`SCRO`/`SCRV`, checks them with the builder's own
 `verify_script`, and stores them with an in-game provenance tied to the build's compile context. The next
 `fnv_spec build` includes them. Scripts with `Quest.variable` references stay uncompiled. The worked
-example is [examples/hello-quest](../examples/hello-quest/README.md).
+example is [examples/hello-quest](../../examples/hello-quest/README.md).
 
 Dialogue: a `DIAL` record in the spec takes `infos`, lines with `key`, `quest`, `responses`, `conditions`, `choices`,
 `flags` and a `result` script (`geck_mcp/esp/dialogue.py` has the format). `"override": true` on a master topic

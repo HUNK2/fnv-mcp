@@ -144,7 +144,7 @@ EXAMPLES = {
     'fnv_script_instances': {'of': 'MyQuest'},
     'fnv_script_profile': {'action': 'read', 'seconds': 5},
     'fnv_script_trace': {'script': 'MyQuestScript', 'action': 'start'},
-    'fnv_script_debug': {'action': 'break', 'op': 'set', 'script': 'MyQuestScript', 'line': 12},
+    'fnv_script_debug': dict(action='break', op='set', script='MyQuestScript', line=12),  # dict(): not an undo op
     'fnv_script_log': {'action': 'errors'},
     'fnv_script_decompile': {'form': 'MyQuestScript'},
     'fnv_script_explain': {'source': 'player.SetAV Health 50'},
@@ -186,7 +186,7 @@ EXAMPLES = {
     'fnv_global_find': {'query': 'fCombatDistance', 'kind': 'Setting'},
     'fnv_setting_info': {'name': 'bAlwaysActive:General'},
     # engine debugging and engine changes
-    'fnv_debug': {'action': 'break', 'op': 'set', 'location': 'fault'},
+    'fnv_debug': dict(action='break', op='set', location='fault'),
     'fnv_flow': {'action': 'trace', 'function': 'Actor::GetLevel'},
     'fnv_blame': {'action': 'ref', 'ref': 'crosshair', 'seconds': 10},
     'fnv_trace': {'function': 'TESQuest::RunScript', 'action': 'start'},
