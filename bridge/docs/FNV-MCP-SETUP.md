@@ -106,6 +106,9 @@ Nothing here downloads files or ships game files, the decompilation or anything 
 A first prompt to give the agent: *"Call fnv_setup_check and fix what it reports with me, then launch the game
 with fnv_game launch and show me fnv_status."*
 
+Before the agent starts on a mod, give it [AGENT-GUIDE.md](AGENT-GUIDE.md): the five rules, the working loop and
+what it must ask you first. Copy it into your mod project so the agent reads it in every session.
+
 ## Without Mod Organizer 2 (the direct install)
 
 The tools also work with the game as Steam installed it: you start it with Steam's Play button (or
