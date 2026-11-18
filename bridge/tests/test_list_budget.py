@@ -2,7 +2,7 @@
 
 - The size budget: the whole listing (every tool as it goes on the wire) must not grow back. Measured on
   2026-11-18: 231,716 characters at 4a3dc9f (138 tools); 197,668 after dropping the output schema stub and the
-  default annotation values. A new tool or a longer description spends from the headroom; raise BUDGET only with
+  default annotation values; 198,281 with the brief parameters. A new tool or a longer description spends from the headroom; raise BUDGET only with
   a reason in the commit.
 - The opt-in `core` toolset: 23 everyday tools (38,298 characters, about 9,600 tokens); the default list stays every tool; fnv_guide find marks a
   match outside the active toolsets."""

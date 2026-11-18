@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from . import fnv_link
+from . import fnv_brief, fnv_link
 from .fnv_args import hex_int
 from .fnv_game import Game
 from .fnv_data import DataTools
@@ -1695,14 +1695,28 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                                                                         override, imagespace, strength, distance, count), 'act')
 
     @server.tool(annotations=read)
-    async def fnv_scene_graph(ref: Ref = 'player', depth: Annotated[int, Field(ge=0, le=30)] = 6,
-                              max_nodes: Annotated[int, Field(ge=1, le=2000)] = 300, first_person: bool = False,
-                              name_filter: Annotated[str, Field(max_length=120)] | None = None) -> result_type:
+    async def fnv_scene_graph(ref: Annotated[Ref, Field(description=(
+                                  'The loaded reference: player, a form id or an EditorID'))] = 'player',
+                              depth: Annotated[int, Field(ge=0, le=30, description='Levels below the root')] = 6,
+                              max_nodes: Annotated[int, Field(ge=1, le=2000, description=(
+                                  'Stop after this many nodes (capped says so)'))] = 300,
+                              first_person: Annotated[bool, Field(description=(
+                                  "The player's first-person skeleton"))] = False,
+                              name_filter: Annotated[str, Field(max_length=120, description=(
+                                  'Keep nodes whose name contains this text'))] | None = None,
+                              brief: Annotated[bool, Field(description=(
+                                  'The tree as indented lines with a count per class (default); false: every '
+                                  "node's transforms, flags, geometry, textures, controllers and extra data"))]
+                              = True) -> result_type:
         """The 3D node tree of a loaded reference: each node's class, name, hidden flag, local and world position
         and scale, children; geometry with vertex and triangle counts, skinning, the shader and its texture paths;
         animation controllers and active sequences; extra data (BSX flags, strings). Lists every texture in use and the
         model path. first_person=true reads the player's first-person skeleton."""
-        return await invoke('fnv_scene_graph', lambda: world.scene_graph(ref, depth, max_nodes, first_person, name_filter))
+        def run():
+            out = world.scene_graph(ref, depth, max_nodes, first_person, name_filter)
+            return fnv_brief.scene(out) if brief else out
+
+        return await invoke('fnv_scene_graph', run)
 
     @server.tool(annotations=read)
     async def fnv_vats_odds(target: Ref | None = None, limb: Annotated[int, Field(ge=-1, le=14)] | None = None,
@@ -2453,16 +2467,27 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_threads(action: Literal['list', 'hang'] = 'list',
                           samples: Annotated[int, Field(ge=1, le=20)] = 5,
                           interval_ms: Annotated[int, Field(ge=50, le=5000)] = 250,
-                          all_threads: bool = False) -> result_type:
+                          all_threads: bool = False,
+                          brief: Annotated[bool, Field(description=(
+                              'A short answer (default): list without stacks; hang with one stack of names per '
+                              'thread. false: every sample, frame address and local'))] = True) -> result_type:
         """The game's threads. list (default): every thread of the game, its start routine (named), what it runs now
         (one outside sample), and the known spin locks (process lists, garbage collector, global, script delayed
         actions) with their owner. hang: when the game freezes, read the main thread's call stack (or every thread's
         with all_threads) samples times, interval_ms apart, from outside the process, name each frame with the
         engine map, and say where it is stuck. Works without the companion answering; threads are suspended only
         while their registers are read."""
+        def hang():
+            out = deep.hang_doctor(samples, interval_ms, all_threads)
+            return fnv_brief.hang(out) if brief else out
+
+        def listing():
+            out = thread_tools.list()
+            return fnv_brief.threads(out) if brief else out
+
         if action == 'hang':
-            return await invoke('fnv_threads', lambda: deep.hang_doctor(samples, interval_ms, all_threads))
-        return await invoke('fnv_threads', lambda: thread_tools.list(), 'read')
+            return await invoke('fnv_threads', hang)
+        return await invoke('fnv_threads', listing, 'read')
 
     @server.tool(annotations=act)
     async def fnv_memory(action: Literal['address_space', 'pools', 'alloc_trace', 'refcount'] = 'pools',
