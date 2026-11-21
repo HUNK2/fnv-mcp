@@ -102,7 +102,9 @@ class LoopTests(LiveCase):
         self.ok('fnv_input', action='tap', control='activate')
         before = position(self.ok('fnv_player'))
         self.ok('fnv_input', action='hold', control='forward', duration_ms=500)
-        self.ok('fnv_wait_for', frames=5, timeout=30)
+        # A key hold returns at once and is released 500 ms later (an unfocused game gets the injector instead):
+        # wait past its end before measuring.
+        self.ok('fnv_wait_for', frames=60, timeout=30)
         moved = position(self.ok('fnv_player'))
         self.assertGreater(abs(moved[0] - before[0]) + abs(moved[1] - before[1]), 5, 'duration hold did not move')
         self.ok('fnv_input', action='hold', control='forward', frames=30)
@@ -128,8 +130,14 @@ class LoopTests(LiveCase):
         self.assertTrue(here['found'], here)
         self.assertLessEqual(here['groundHeight'], z + 5, here)
         self.assertGreater(here['groundHeight'], z - 150, (here, z))
-        there = self.ok('fnv_raycast', ground_at={'x': x + 2000, 'y': y + 2000})
-        self.assertNotEqual(round(there.get('groundHeight') or 0, 1), round(here['groundHeight'], 1), (here, there))
+        # The land at Goodsprings Source is flat (6360.0 at every landscape point probed live 2026-11-21), so two
+        # equal readings prove nothing; a spread of points around the player meets rocks and slopes too.
+        heights = set()
+        for dx, dy in ((-1000, 0), (1500, 1500), (-3000, -1000), (2000, 2000), (0, 500), (3000, -2000)):
+            g = self.ok('fnv_raycast', ground_at={'x': x + dx, 'y': y + dy})
+            if g.get('found'):
+                heights.add(round(g['groundHeight'], 1))
+        self.assertGreater(len(heights), 1, heights)
 
     def test_90_status_names_this_checkout(self):
         data = self.ok('fnv_status')

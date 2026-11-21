@@ -136,8 +136,9 @@ class GroundTests(unittest.TestCase):
 
         class Rays:
             def cast(inner, segments, refs=False):
+                # One segment per cast; `hits` is one hit for every cast, or a list taken in order.
                 self.cast.append(segments)
-                return [hits]
+                return [hits.pop(0) if isinstance(hits, list) else hits for _ in segments]
         return ai, Rays()
 
     def test_ground_at_not_found_says_so(self):
@@ -150,7 +151,7 @@ class GroundTests(unittest.TestCase):
     def test_ground_at_is_a_ray_straight_down_from_above(self):
         ai, rays = self.ai({'hit': True, 'point': (100.0, 200.0, 40.5), 'ref': 0})
         out = ai.ground_height(100.0, 200.0, z=50.0, rays=rays)
-        (start, end), = self.cast[0]
+        (start, end) = self.cast[0][0]
         self.assertEqual((start[0], start[1], end[0], end[1]), (100.0, 200.0, 100.0, 200.0))
         self.assertGreater(start[2], 50.0)
         self.assertLess(end[2], 40.5)
@@ -163,6 +164,40 @@ class GroundTests(unittest.TestCase):
         self.assertEqual(out['groundHeight'], 300.0)
         self.assertEqual(out['onRef'], '0x12345678')
 
+    PLAYER = 0x18532BE0
+
+    def test_a_hit_on_the_player_is_passed_through(self):
+        # Live 2026-11-21: straight down at the player's own (x, y), the first hit was the player's capsule
+        # 128.7 units over its feet (ref = the PlayerCharacter); 30 units aside the floor was found.
+        ai, rays = self.ai([{'hit': True, 'point': (1.0, 2.0, 129.3), 'ref': self.PLAYER},
+                            {'hit': True, 'point': (1.0, 2.0, 0.0), 'ref': 0x41192B60}])
+        out = ai.ground_height(1.0, 2.0, z=0.6, rays=rays, player=(self.PLAYER, (1.0, 2.0, 0.6)))
+        self.assertEqual(out['groundHeight'], 0.0)
+        self.assertEqual(out['onRef'], '0x41192B60')
+        self.assertLess(self.cast[1][0][0][2], 129.3)
+
+    def test_the_next_ray_starts_inside_the_capsule(self):
+        # Live 2026-11-21, Goodsprings: one unit under the first player hit the ray met the player again (101 over
+        # its feet); four casts later it was still on the player. The next ray starts just over the feet.
+        ai, rays = self.ai([{'hit': True, 'point': (1.0, 2.0, 6510.0), 'ref': self.PLAYER},
+                            {'hit': True, 'point': (1.0, 2.0, 6380.0), 'ref': 0}])
+        out = ai.ground_height(1.0, 2.0, z=6380.9, rays=rays, player=(self.PLAYER, (1.0, 2.0, 6380.9)))
+        self.assertLessEqual(self.cast[1][0][0][2], 6380.9 + 2.0)
+        self.assertEqual(out['terrainHeight'], 6380.0)
+
+    def test_a_hit_in_the_players_column_without_a_ref_is_passed_through(self):
+        # Live 2026-11-21, Goodsprings: the same capsule hit came back with no reference (6500.64 over feet at
+        # 6367.08) and was reported as the terrain.
+        ai, rays = self.ai([{'hit': True, 'point': (1.0, 2.0, 6500.64), 'ref': 0},
+                            {'hit': True, 'point': (1.0, 2.0, 6366.5), 'ref': 0}])
+        out = ai.ground_height(1.0, 2.0, z=6367.08, rays=rays, player=(self.PLAYER, (1.0, 2.0, 6367.08)))
+        self.assertEqual(out['terrainHeight'], 6366.5)
+
+    def test_away_from_the_player_the_first_hit_stands(self):
+        ai, rays = self.ai([{'hit': True, 'point': (900.0, 2.0, 120.0), 'ref': 0}])
+        out = ai.ground_height(900.0, 2.0, z=0.0, rays=rays, player=(self.PLAYER, (1.0, 2.0, 0.0)))
+        self.assertEqual(out['terrainHeight'], 120.0)
+        self.assertEqual(len(self.cast), 1)
 
 class UnfocusedInputTests(unittest.TestCase):
     """4c, found live 2026-11-21: a duration hold (xNVSE HoldKey) said accepted and moved nothing while the game

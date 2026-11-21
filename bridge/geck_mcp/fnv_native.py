@@ -14,6 +14,7 @@
 Compiled module DLLs stay in the bridge state folder: they never enter git.
 """
 import hashlib
+import os
 import re
 import shutil
 import struct
@@ -257,7 +258,12 @@ class NativeTools:
         out = self.modules / ('%s-%s.dll' % (name, digest))
         if out.is_file():
             # The same digest is the same build, and when it is loaded Windows will not let it be overwritten
-            # (seen live 2026-11-21: "failed to write output ... Permission denied").
+            # (seen live 2026-11-21: "failed to write output ... Permission denied"). Its time is set to now: load
+            # takes the newest build of a name, and that must be this one.
+            try:
+                os.utime(out, None)
+            except OSError:
+                pass
             return verdict('Built %s (unchanged: the existing build is reused)' % out.name,
                            'Load it with fnv_native load name=%s.' % name, dll=str(out), name=name, reused=True)
         cmd = [self._zig(), 'cc', '-target', 'x86-windows-gnu', '-shared', '-O2', '-std=c11', '-Wall',

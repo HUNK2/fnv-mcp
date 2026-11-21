@@ -188,6 +188,32 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(out['reused'])
         self.assertEqual(Path(out['dll']), dll)
 
+    def test_load_after_a_reused_build_loads_that_build(self):
+        # Live 2026-11-21: build 42 (reused), then load loaded the later 43 build: load takes the newest file, and
+        # a reused build kept its old time.
+        import os
+        modules = Path(self.tmp.name) / 'fnv' / 'modules'
+        old, new = modules / 'r-000000000042.dll', modules / 'r-000000000043.dll'
+        old.write_bytes(b'MZ')
+        new.write_bytes(b'MZ')
+        os.utime(old, (1000, 1000))
+        os.utime(new, (2000, 2000))
+        from geck_mcp import fnv_native
+        real = fnv_native.source_digest
+        fnv_native.source_digest = lambda *a: '000000000042'
+        try:
+            source = Path(self.tmp.name) / 'r.c'
+            source.write_text('int x;', encoding='utf-8')
+            sdk = Path(self.tmp.name) / 'fnv' / 'sdk'
+            sdk.mkdir(parents=True, exist_ok=True)
+            (sdk / 'fnvmcp_module.h').write_text('// api', encoding='utf-8')
+            self.assertTrue(self.t.build(str(source), 'r')['reused'])
+        finally:
+            fnv_native.source_digest = real
+        self.t.load('r')
+        loaded = [bytes.fromhex(op[2]).decode() for op in self.game.calls if op[:2] == ('mod', 'load')]
+        self.assertEqual(Path(loaded[-1]).name, old.name)
+
     def test_list_shows_the_newest_build_per_name(self):
         modules = Path(self.tmp.name) / 'fnv' / 'modules'
         for i, name in enumerate(('a-000000000001', 'a-000000000002', 'a-000000000003', 'b-000000000001')):

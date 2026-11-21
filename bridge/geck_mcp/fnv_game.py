@@ -269,6 +269,24 @@ def mo2_processes(mo2_root):
             if (image_path(pid) or '').lower().replace('/', '\\').startswith(root.replace('/', '\\') + '\\')]
 
 
+NEVER_RAN_CPU_SECONDS = 0.5
+
+
+def process_cpu_seconds(pid):
+    """User plus kernel CPU seconds the process has used, or None when it cannot be read."""
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, int(pid))      # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+            return None
+        return sum((t.dwHighDateTime << 32 | t.dwLowDateTime) for t in times[2:]) / 1e7
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def visible_windows(pid):
     """[(hwnd, title)] of a process's visible top-level windows."""
     user32 = ctypes.windll.user32
@@ -793,6 +811,12 @@ class Game:
         if threshold and elapsed >= threshold and not ping.get('error') \
                 and (ping.get('frame') == 0 or window_hung(pid)):
             raise StartupHung(elapsed, ping)
+        # A game that never ran: no pipe and (almost) no CPU time past the threshold. Seen live 2026-11-21: MO2's
+        # NVSE loader exited and left FalloutNV.exe suspended (one thread); a starting game uses CPU at once.
+        if threshold and elapsed >= threshold and ping.get('error'):
+            cpu = process_cpu_seconds(pid)
+            if cpu is not None and cpu < NEVER_RAN_CPU_SECONDS:
+                raise StartupHung(elapsed, {**ping, 'frame': None, 'cpuSeconds': round(cpu, 3)})
         return None
 
     def _wait_companion(self, pid, deadline, launched, layout, direct, timeline):

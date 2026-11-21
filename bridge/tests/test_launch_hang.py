@@ -61,10 +61,13 @@ class HangTests(unittest.TestCase):
                                                              'pipe_exists': True, 'window_hung': False,
                                                              'idle_seconds': 400}
         self.held, self.released = [], []
+        self.cpu = {}                 # pid -> CPU seconds; a running game has some
         for patch in (mock.patch.object(fnv_game, 'time', self.clock),
                       mock.patch.object(fnv_game, 'process_alive', side_effect=lambda pid: pid in self.alive),
                       mock.patch.object(fnv_game, 'terminate', side_effect=self._terminate),
                       mock.patch.object(fnv_game, 'window_hung', return_value=False),
+                      mock.patch.object(fnv_game, 'process_cpu_seconds',
+                                        side_effect=lambda pid: self.cpu.get(pid, 5.0)),
                       mock.patch.object(fnv_display, 'hold', side_effect=lambda: self.held.append(1) or True),
                       mock.patch.object(fnv_display, 'release', side_effect=lambda: self.released.append(1))):
             patch.start()
@@ -127,6 +130,16 @@ class HangTests(unittest.TestCase):
         out = self.launch()
         self.assertEqual(self.terminated, [])
         self.assertFalse(out['retried'])
+
+    def test_game_never_resumed_is_a_hang(self):
+        # Live 2026-11-21: MO2's NVSE loader exited and left FalloutNV.exe suspended (one thread, no CPU time, no
+        # pipe); the launch waited its whole 180 s timeout and was not started again.
+        self.cpu[5000] = 0.0
+        self.behaviours = [lambda s: NO_PIPE, lambda s: READY if s > 12 else NO_PIPE]
+        out = self.launch()
+        self.assertTrue(out['retried'])
+        self.assertEqual(self.terminated, [5000])
+        self.assertLess(out['seconds'], 90)
 
     def test_hang_recovery_ends_only_its_own_process(self):
         self.alive.add(4242)            # another FalloutNV.exe, not this launch's
