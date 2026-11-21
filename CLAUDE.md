@@ -1,7 +1,7 @@
 # fnv-mcp
 
 MCP server for building and testing Fallout: New Vegas mods in the running game. Python package `bridge/geck_mcp`,
-branch `main`, checkout `C:\DecompModGithubnv-mcp-code` (the only one; `geck-mcp-nv` is the old one).
+branch `main`, checkout `C:\DecompModGithub\fnv-mcp-code` (the only one; `geck-mcp-nv` is the old one).
 
 ## Git
 - "Push" / "GitHub" means the private remote `fnv-mcp` (`git push fnv-mcp main`). Never push
