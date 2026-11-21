@@ -81,13 +81,13 @@ Nothing here downloads files or ships game files, the decompilation or anything 
 6. **Register the MCP server** with your client. With Claude Code (use your own absolute paths):
 
    ```powershell
-   claude mcp add fnv-mcp -- C:\path\to\bridge\.venv\Scripts\python.exe C:\path\to\bridge\run_mcp.py --project C:\path\to\bridge\projects\my-fnv.json
+   claude mcp add fnv -- C:\path\to\bridge\.venv\Scripts\python.exe C:\path\to\bridge\run_mcp.py --project C:\path\to\bridge\projects\my-fnv.json
    ```
 
    For a client with a JSON file, the entry is:
 
    ```json
-   "fnv-mcp": {
+   "fnv": {
      "command": "C:/path/to/bridge/.venv/Scripts/python.exe",
      "args": ["C:/path/to/bridge/run_mcp.py", "--project", "C:/path/to/bridge/projects/my-fnv.json"]
    }
@@ -180,10 +180,11 @@ Paths in the project file may be relative to the project file. `fnv_*` keys go i
 | `project_id` | (required) | Lower-case name of the project; used in state file names |
 | `game_root` | (required) | The game folder (with `FalloutNV.exe` and `Data`) |
 | `state_dir` | (required) | Where the tools keep their state, logs, builds and journals |
-| `toolsets` | both | Which tool families the server registers: `game` (fnv_*, fnv_spec) and `naming` (fnv_name_*, fnv_probe, fnv_atlas). For example `["game"]` for a game session. `run_mcp.py --toolsets game,naming` overrides it; `fnv_guide` is always on and its find names hidden tools. Reconnect the server after a change |
+| `toolsets` | both | Which tool families the server registers: `game` (fnv_*, fnv_spec) and `naming` (fnv_name_*, fnv_probe, fnv_atlas), and the opt-in `core` (29 everyday tools: building and testing a plugin, plus the engine loop fnv_native, fnv_func, fnv_input, fnv_mem_read, fnv_screenshot, fnv_wait_for). For example `["game"]` for a game session. `run_mcp.py --toolsets game,naming` overrides it; `fnv_guide` is always on and its find names hidden tools. Reconnect the server after a change |
 | `plugin` | none | The `.esp` `fnv_spec` builds |
 | `spec` | none | The JSON spec `fnv_spec` builds the plugin from |
 | `fnv.engine_control` | `read` | `read` or `full` (see "Safety levels") |
+| `fnv.startup_hang_seconds` | 45 | A starting game that answers but draws no frames this long is ended and started once more (0: never; a machine whose starts are slower gets three times its usual start time) |
 | `fnv.engine_map` | `<state_dir>/engine_map.json` | The engine map from `engine_map.generate` |
 | `fnv.decomp_root` | the path in the map | Your fnv_decomp checkout |
 | `fnv.symdb` | `<state_dir>/symdb.sqlite` | The symbol database (optional) |
@@ -217,8 +218,8 @@ GECK editor and legacy tools (`launcher`, `helper`, `records`, `source_roots`, `
 
 Nothing here runs by itself; there is no uninstall tool. Close the game and the MCP client first.
 
-1. **The MCP registration.** With Claude Code: `claude mcp remove fnv-mcp`. For a client with a JSON file, delete
-   the `"fnv-mcp"` entry.
+1. **The MCP registration.** With Claude Code: `claude mcp remove fnv`. For a client with a JSON file, delete
+   the `"fnv"` entry.
 2. **xNVSE in the game folder.** xNVSE cannot go through MO2, so `tools\fnv_setup_dev_profile.py --apply`
    copied its loader and DLLs into the game folder (`nvse_loader.exe`, `nvse_*.dll`; its `Data` part is the MO2
    mod `xNVSE Data`). Every file it added is listed under `gameFilesAdded` in

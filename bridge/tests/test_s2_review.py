@@ -10,9 +10,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_journal, fnv_state  # noqa: E402
-from geck_mcp.fnv_journal import Journal  # noqa: E402
-from geck_mcp.fnv_state import GameIdentity  # noqa: E402
+from fnv_mcp import fnv_journal, fnv_state  # noqa: E402
+from fnv_mcp.fnv_journal import Journal  # noqa: E402
+from fnv_mcp.fnv_state import GameIdentity  # noqa: E402
 
 GAME = GameIdentity(4242, 1000)
 
@@ -44,7 +44,7 @@ class JournalReviewTests(unittest.TestCase):
         self.assertEqual(Journal(self.path).add({'kind': 'x'}, GAME)['seq'], 7)
 
     def test_i3_add_outwaits_an_undo_holding_the_lock(self):
-        from geck_mcp import fnv_link, fnv_live
+        from fnv_mcp import fnv_link, fnv_live
         self.assertGreater(fnv_journal.ADD_TIMEOUT,
                            fnv_live.UNDO_LOCK_TIMEOUT + fnv_link.EngineLink.DEFAULT_TIMEOUT)
 
@@ -81,7 +81,7 @@ class StateReviewTests(unittest.TestCase):
         self.assertEqual(json.loads(path.read_text()), {'pid': 1, 'ready': True})
 
     def test_m8_swaps_not_saved_without_a_game(self):
-        from geck_mcp.fnv_code import CodeTools
+        from fnv_mcp.fnv_code import CodeTools
         live = SimpleNamespace(project=SimpleNamespace(state_dir=str(self.dir)),
                                game=SimpleNamespace(process=lambda: (4242, 1)))
         a = CodeTools(live)
@@ -95,14 +95,14 @@ class StateReviewTests(unittest.TestCase):
         self.assertEqual(list(stored['swaps']), ['0x00401000'])
 
     def test_m11_procstate_start_as_text_matches_int(self):
-        from geck_mcp.fnv_pred import ProcState
+        from fnv_mcp.fnv_pred import ProcState
         state = ProcState(SimpleNamespace(project=SimpleNamespace(state_dir=str(self.dir))))
         state.save('s', 10, 500, [1])
         self.assertEqual(state.load('s', 10, '500'), [1])
 
     def test_m9_running_guards_ask_fresh(self):
         import inspect
-        from geck_mcp import fnv_game, fnv_records
+        from fnv_mcp import fnv_game, fnv_records
         self.assertIn('process(fresh=True)', inspect.getsource(fnv_game.Game.install_plugin))
         self.assertIn('process(fresh=True)', inspect.getsource(fnv_records.RecordsTools._profile_set))
 
@@ -110,7 +110,7 @@ class StateReviewTests(unittest.TestCase):
 class MaintainTests(unittest.TestCase):
     def test_i4_register_without_maintenance_starts_no_thread(self):
         import threading
-        from geck_mcp import fnv_live_tools
+        from fnv_mcp import fnv_live_tools
         self.assertIn('maintain', fnv_live_tools.register.__code__.co_varnames)
         before = {t.name for t in threading.enumerate()}
         with mock.patch.object(fnv_live_tools.LiveService, 'maintain') as m:
@@ -127,8 +127,8 @@ class MaintainTests(unittest.TestCase):
         the test deleted it (WinError 145 on CI) and pruned the real %LOCALAPPDATA%\\fnvmcp crash folder."""
         import threading
         import project_fixture
-        from geck_mcp import fnv_live_tools
-        from geck_mcp.server import make_server
+        from fnv_mcp import fnv_live_tools
+        from fnv_mcp.server import make_server
         fixture = project_fixture.ProjectFixture()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
@@ -142,8 +142,8 @@ class MaintainTests(unittest.TestCase):
     def test_a_server_asked_for_maintenance_runs_it(self):
         import threading
         import project_fixture
-        from geck_mcp import fnv_live_tools
-        from geck_mcp.server import make_server
+        from fnv_mcp import fnv_live_tools
+        from fnv_mcp.server import make_server
         fixture = project_fixture.ProjectFixture()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
@@ -155,8 +155,8 @@ class MaintainTests(unittest.TestCase):
         self.assertTrue(m.called)
 
     def test_the_real_server_keeps_its_maintenance(self):
-        from geck_mcp import fnv_tools
-        from geck_mcp import server as server_module
+        from fnv_mcp import fnv_tools
+        from fnv_mcp import server as server_module
         with mock.patch.object(server_module.Project, 'load', return_value=_project()), \
                 mock.patch.object(server_module, 'make_server', return_value=mock.Mock()) as make, \
                 mock.patch.object(fnv_tools, 'warm_up'):
@@ -173,7 +173,7 @@ def _project():
 class CreateIdentityTests(unittest.TestCase):
     def test_m3_place_list_uses_the_pinging_identity(self):
         import inspect
-        from geck_mcp import fnv_create
+        from fnv_mcp import fnv_create
         src = inspect.getsource(fnv_create)
         self.assertNotIn('entries(process=self.live.identity())', src)
 

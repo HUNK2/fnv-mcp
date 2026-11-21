@@ -9,11 +9,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_guide  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_guide import GuideTools, TOOL_NAME, load_guides, tool_table  # noqa: E402
+from fnv_mcp import fnv_guide  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_guide import GuideTools, TOOL_NAME, load_guides, tool_table  # noqa: E402
 
-PACKAGE = Path(__file__).resolve().parents[1] / 'geck_mcp'
+PACKAGE = Path(__file__).resolve().parents[1] / 'fnv_mcp'
 
 
 def registered_tools():
@@ -57,7 +57,7 @@ class GuideFileTests(unittest.TestCase):
         self.assertIn('fnv_not_a_tool', set(TOOL_NAME.findall('call `fnv_not_a_tool` now')) - known)
 
     def test_both_new_tools_are_registered(self):
-        from geck_mcp.fnv_live_tools import FNV_LIVE_TOOLS
+        from fnv_mcp.fnv_live_tools import FNV_LIVE_TOOLS
         self.assertEqual(FNV_LIVE_TOOLS['fnv_guide'][0], 'read')
         self.assertEqual(FNV_LIVE_TOOLS['fnv_warnings'][0], 'control')
 
@@ -160,8 +160,8 @@ class RegistrationTests(unittest.TestCase):
 
     def test_register_and_call(self):
         import asyncio
-        from geck_mcp import fnv_live_tools
-        from geck_mcp.config import Project
+        from fnv_mcp import fnv_live_tools
+        from fnv_mcp.config import Project
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'mo2/profiles/Dev').mkdir(parents=True)

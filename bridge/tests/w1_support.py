@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_fnv_time import FakeCompanion, DISABLE, ENABLE, CLAMP  # noqa: E402
-from geck_mcp.fnv_inject import POLL_FN, FORCE_FN  # noqa: E402
-from geck_mcp.fnv_time import TimeControl, WaitFor  # noqa: E402
+from fnv_mcp.fnv_inject import POLL_FN, FORCE_FN  # noqa: E402
+from fnv_mcp.fnv_time import TimeControl, WaitFor  # noqa: E402
 
 # A prologue the decoder takes whole: push ebp; mov ebp,esp; sub esp,0x10 (6 bytes, no relative jump or call).
 PROLOGUE = bytes([0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x10, 0x53, 0x56, 0x57, 0x8B, 0x45, 0x08]) + b'\x90' * 12

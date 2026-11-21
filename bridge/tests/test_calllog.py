@@ -13,10 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp import fnv_calllog  # noqa: E402
-from geck_mcp.fnv_calllog import CallLog  # noqa: E402
-from geck_mcp.fnv_state import prune  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp import fnv_calllog  # noqa: E402
+from fnv_mcp.fnv_calllog import CallLog  # noqa: E402
+from fnv_mcp.fnv_state import prune  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 KEYS = {'t', 'tool', 'action', 'ok', 'code', 'ms', 'size', 'cut'}
 
@@ -62,6 +62,12 @@ class CallLogUnitTests(unittest.TestCase):
         self.assertEqual(fnv_calllog.prune(self.state, now), 2)
         self.assertEqual([r['t'] for r in self.lines()], [new['t']])
         self.assertEqual(prune(self.state, now)['calls'], 0)       # part of the state maintenance
+
+    def test_summary_lists_tools_never_called(self):
+        self.log.record('a', None, True, None, 1, 1, False)
+        out = self.log.summary(known=['a', 'b', 'c'])
+        self.assertEqual(out['neverCalled'], {'count': 2, 'tools': ['b', 'c']})
+        self.assertNotIn('neverCalled', self.log.summary())
 
     def test_summary(self):
         for ms, ok, code in ((10, True, None), (500, False, 'GAME_NOT_RUNNING'), (20, False, 'GAME_NOT_RUNNING')):

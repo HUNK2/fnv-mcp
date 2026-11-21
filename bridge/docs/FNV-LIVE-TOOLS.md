@@ -67,7 +67,7 @@ Engine calls are not guarded: a wrong call can crash the game, and the crash doc
 The companion refuses to load except on FalloutNV 1.4.0.525 with xNVSE 6.x. Only the current Windows user
 (and SYSTEM) can open its pipe, and remote clients are rejected.
 
-Console output capture uses the game's own mechanisms (decomp references in `geck_mcp/fnv_facts.py`):
+Console output capture uses the game's own mechanisms (decomp references in `fnv_mcp/fnv_facts.py`):
 the companion routes console output to `%LOCALAPPDATA%\fnvmcp\console.log` with the vanilla `scof`
 command, and the bridge sets the vanilla "verbose messages" byte and the console-visible byte for the one
 frame a line runs, so commands print their results while the console is closed.
@@ -137,7 +137,7 @@ frame gate). The setting `fnv.engine_control` in the project file decides which 
   user**: `fnv_native` compiles C and loads it into the game process. Use it with a game and a profile you test
   with.
 
-Two tables in `geck_mcp/fnv_live_tools.py` decide, so a tool cannot pass a weaker kind by mistake.
+Two tables in `fnv_mcp/fnv_live_tools.py` decide, so a tool cannot pass a weaker kind by mistake.
 `MUTATING_ACTIONS` lists every action that changes the running game, including the hooks that tracing, profiling
 and logging tools install (`fnv_trace`, `fnv_script_profile`, `fnv_script_trace`, `fnv_damage_log`,
 `fnv_profile action=frame`, `fnv_crash capture_on`) and the scenario runners (`fnv_test`, `fnv_session start` and

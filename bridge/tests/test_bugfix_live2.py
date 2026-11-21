@@ -12,9 +12,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_create, fnv_game, fnv_live  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_native import NativeTools  # noqa: E402
+from fnv_mcp import fnv_create, fnv_game, fnv_live  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_native import NativeTools  # noqa: E402
 
 
 class IdentityTests(unittest.TestCase):
@@ -59,7 +59,6 @@ class NativeAfterRestartTests(unittest.TestCase):
         link = FakeModLink(call_result)
         live = SimpleNamespace(link=link, ready=lambda: None, project=SimpleNamespace(state_dir=tempfile.gettempdir()))
         t = NativeTools(live)
-        t._log_tail = lambda: []
         t._export_in_memory = lambda base, name: 0x01A51090 if name == 'seh_catch' else None
         return t, link
 
@@ -67,7 +66,7 @@ class NativeAfterRestartTests(unittest.TestCase):
         t, link = self.tools({'ok': True, 'eax': '0x0000002a'})
         out = t.call('sehtest', 'seh_catch')
         self.assertEqual(out['value'], 42)
-        self.assertEqual(int(link.calls[-1][1], 16), 0x01A51090)
+        self.assertEqual(int([op for op in link.calls if op[0] == 'call'][-1][1], 16), 0x01A51090)
 
     def test_an_unknown_export_still_says_so(self):
         t, _ = self.tools({'ok': True, 'eax': '0x0'})
@@ -125,7 +124,7 @@ class FileLogPathTests(unittest.TestCase):
 
 class WaitTimeoutMessageTests(unittest.TestCase):
     def test_a_wait_that_ran_out_of_time_names_timeout(self):
-        from geck_mcp import fnv_time
+        from fnv_mcp import fnv_time
         wait = fnv_time.WaitFor.__new__(fnv_time.WaitFor)
         snap = {'held': False, 'fixedFps': 0, 'realFps': 60, 'multiplier': 1.0}
         wait.control = SimpleNamespace(require_game=lambda: 1, ensure_gate=lambda: None, snapshot=lambda measure=False: snap)
@@ -153,7 +152,7 @@ class UntilAndTemporarySiteTests(DebugTestBase):
         status = self.run_tool('status')
         self.assertEqual(status['pendingTo'], ['0x00401010'])
         # A restarted server still knows it (state file), and break clear sweeps it.
-        from geck_mcp import fnv_debugger
+        from fnv_mcp import fnv_debugger
         fresh = fnv_debugger.Debugger(self.live, sleep=lambda s: None, clock=lambda: 0.0)
         fresh.pid, fresh.start = self.dbg.pid, self.dbg.start
         fresh._restore()

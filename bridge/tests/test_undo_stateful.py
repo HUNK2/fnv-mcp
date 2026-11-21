@@ -7,8 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_eyes  # noqa: E402
-from geck_mcp.fnv_eyes import EyesTools  # noqa: E402
+from fnv_mcp import fnv_eyes  # noqa: E402
+from fnv_mcp.fnv_eyes import EyesTools  # noqa: E402
 
 OSG = 0x00700000
 
@@ -65,7 +65,7 @@ class CameraUndoTests(unittest.TestCase):
         self.assertEqual(out['reverted'], 1)
         self.assertFalse(self.fly())
         self.live.console('tfc 1')               # the user turns it on again: a repeated undo never toggles blind
-        from geck_mcp.fnv_live import UNDO_OPS
+        from fnv_mcp.fnv_live import UNDO_OPS
         UNDO_OPS['fly_set'](self.live, {}, {'op': 'fly_set', 'on': True})
         self.assertTrue(self.fly())
 
@@ -79,7 +79,7 @@ class CameraUndoTests(unittest.TestCase):
         self.assertFalse(cams[1]['undone'])
 
     def test_hud_set_reads_the_flag(self):
-        from geck_mcp.fnv_live import UNDO_OPS
+        from fnv_mcp.fnv_live import UNDO_OPS
         UNDO_OPS['hud_set'](self.live, {}, {'op': 'hud_set', 'on': True})
         self.assertNotIn('tm', self.lines)       # already shown: nothing to do
         self.live.console('tm')

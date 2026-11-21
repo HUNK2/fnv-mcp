@@ -7,8 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_flow import FlowTools  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_flow import FlowTools  # noqa: E402
 
 
 class _FlowLink:
@@ -172,7 +172,7 @@ class ThawTests(unittest.TestCase):
         import struct as _struct
         from unittest import mock
         from test_fnv_debug import DebugTestBase
-        from geck_mcp import fnv_procmem
+        from fnv_mcp import fnv_procmem
         base = DebugTestBase('setUp')
         base.setUp()
         self.addCleanup(base.doCleanups)
@@ -228,7 +228,7 @@ class HookReadNoteTests(unittest.TestCase):
 
     def test_read_note_marks_applied_calls(self):
         from types import SimpleNamespace
-        from geck_mcp.fnv_control import ControlTools
+        from fnv_mcp.fnv_control import ControlTools
 
         def rec(seq, act):
             r = [0] * 48

@@ -314,7 +314,7 @@ Schema: `engine_map/symdb_schema.py` (`DDL`, `create(connection)`).
 | `members`, `bases`, `methods`, `enums`, `args` | Children of a type, `seq` in declaration order |
 | `globals` | Data symbols outside procedures and static locals' data; `addr` from the unit's `symbols` map in `units.json` when the decorated name is there, else NULL |
 
-## 7. Reader: `geck_mcp/fnv_symdb.py`
+## 7. Reader: `fnv_mcp/fnv_symdb.py`
 
 ```python
 db = fnv_symdb.load(path)            # cached; opens read-only; None when the file does not exist

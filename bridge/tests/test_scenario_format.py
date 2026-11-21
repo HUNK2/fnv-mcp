@@ -6,8 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_scenario  # noqa: E402
-from geck_mcp.fnv_scenario import ScenarioError, parse_yaml  # noqa: E402
+from fnv_mcp import fnv_scenario  # noqa: E402
+from fnv_mcp.fnv_scenario import ScenarioError, parse_yaml  # noqa: E402
 
 DOC = Path(__file__).resolve().parents[1] / 'docs' / 'SCENARIOS.md'
 

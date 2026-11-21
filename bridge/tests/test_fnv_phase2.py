@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from geck_mcp import fnv_records
-from geck_mcp.fnv_control import ControlTools, _stack_words
-from geck_mcp.fnv_world import _f32, address_space
+from fnv_mcp import fnv_records
+from fnv_mcp.fnv_control import ControlTools, _stack_words
+from fnv_mcp.fnv_world import _f32, address_space
 
 
 def sub(tag, data):
@@ -111,7 +111,7 @@ class Helpers(unittest.TestCase):
         self.assertEqual(int(_f32(_f32(0.4907) * 100.0)), 49)
 
     def test_background_mouse_ini(self):
-        from geck_mcp.fnv_world import WorldTools
+        from fnv_mcp.fnv_world import WorldTools
         with tempfile.TemporaryDirectory() as tmp:
             profile = Path(tmp) / 'profiles' / 'Dev'
             profile.mkdir(parents=True)
@@ -173,7 +173,7 @@ class ProbePlanning(unittest.TestCase):
         return e
 
     def test_entry_sites_and_rejections(self):
-        from geck_mcp import fnv_probe
+        from fnv_mcp import fnv_probe
         # 0x1000 normal prologue (entry). 0x1100 a 3-byte getter reached by a direct call from 0x1200 and two vtable
         # slots. 0x1300 has a short jump landing inside its own first 5 bytes, plus a call site from 0x1400 (so it
         # cannot take an entry jump but is still probeable at the site).
@@ -218,7 +218,7 @@ class ProbePlanning(unittest.TestCase):
         self.assertEqual(cache_q, {})  # quarantine verdicts are not cached
 
     def test_int3_for_what_nothing_else_reaches(self):
-        from geck_mcp import fnv_probe
+        from fnv_mcp import fnv_probe
         # 0x1500: an empty function (ret) and 0x1600 a 4-byte getter, neither called directly nor in a vtable
         functions = {0x1500: ('Empty::Fn', 'unnamed', bytes([0xC3])),
                      0x1600: ('Getter::Fn', 'unnamed', bytes.fromhex('8b4104c3')),
@@ -241,7 +241,7 @@ class CallKinds(unittest.TestCase):
     """The call instruction before a return address: vtable calls only through [reg] or [reg+disp]."""
 
     def kind(self, call_bytes):
-        from geck_mcp import fnv_probe
+        from fnv_mcp import fnv_probe
 
         class Img:
             def __init__(self, code):
@@ -268,7 +268,7 @@ class SlotIntroducer(unittest.TestCase):
 
     def test_primary_and_secondary(self):
         from types import SimpleNamespace
-        from geck_mcp.fnv_naming import slot_introducer
+        from fnv_mcp.fnv_naming import slot_introducer
         vt = lambda addr, off, n: {'address': hex(addr), 'thisOffset': off, 'slots': ['0x1'] * n}
         rtti = {
             'Base': {'bases': [], 'directBases': [], 'vtables': [vt(0x100, 0, 20)]},
@@ -295,7 +295,7 @@ class SlotIntroducer(unittest.TestCase):
 
 class DoseResponse(unittest.TestCase):
     def test_fit_classifies(self):
-        from geck_mcp import fnv_atlas
+        from fnv_mcp import fnv_atlas
         per_unit = [(0, 0), (0, 0), (1, 2), (2, 4), (4, 8), (1, 2), (2, 4), (4, 8)]
         fit = fnv_atlas.classify(per_unit)
         self.assertEqual(fit['kind'], 'per_unit')

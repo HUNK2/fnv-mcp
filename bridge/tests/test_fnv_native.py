@@ -9,9 +9,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_native  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_native import NativeTools, c_name, c_type  # noqa: E402
+from fnv_mcp import fnv_native  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_native import NativeTools, c_name, c_type  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
 from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
@@ -88,7 +88,7 @@ class HeaderAndBuildTests(unittest.TestCase):
             orig = fnv_native.NativeTools.headers
 
             def headers(self, functions=None, classes=None):
-                import geck_mcp.fnv_symdb as symdb
+                import fnv_mcp.fnv_symdb as symdb
                 real = symdb.load
                 symdb.load = lambda path: db
                 try:

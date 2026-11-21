@@ -10,10 +10,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_game, fnv_layout, fnv_save, fnv_setup  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
-from geck_mcp.esp import assets, build as builder, dialogue  # noqa: E402
-from geck_mcp.esp.records import SpecError  # noqa: E402
+from fnv_mcp import fnv_game, fnv_layout, fnv_save, fnv_setup  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
+from fnv_mcp.esp import assets, build as builder, dialogue  # noqa: E402
+from fnv_mcp.esp.records import SpecError  # noqa: E402
 
 from test_fnv_save_and_engine_ai import make_save  # noqa: E402
 

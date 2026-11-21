@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp.fnv_state import GameIdentity, prune  # noqa: E402
+from fnv_mcp.fnv_state import GameIdentity, prune  # noqa: E402
 
 
 def touch(path, age_days=0.0, now=None):

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_blame, fnv_conv  # noqa: E402
+from fnv_mcp import fnv_blame, fnv_conv  # noqa: E402
 from test_fnv_debug import FakeLink  # noqa: E402
 
 

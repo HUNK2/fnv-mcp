@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 
-from geck_mcp.fnv_data import RecordIndex
+from fnv_mcp.fnv_data import RecordIndex
 
 
 class RecordIndexThreadTests(unittest.TestCase):

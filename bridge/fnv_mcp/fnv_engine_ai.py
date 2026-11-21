@@ -98,10 +98,11 @@ PERK_FUNCTIONS = {1: 'set', 2: 'add', 3: 'multiply', 4: 'add range', 5: 'add act
 
 # ------------------------------------------------------------------------------------------- pathing / world
 G_TES = 0x011DEA10
+PLAYER_SINGLETON = 0x011DEA3C   # PlayerCharacter*
 TES_PICK = 0x00458420              # TES::Pick wrapper (bytes checked), thiscall (bhkPickData*)
 PICK_CTOR, PICK_FROM, PICK_TO, PICK_FILTER = 0x004A3C20, 0x004A3DA0, 0x004A3EB0, 0x004A3F70
 FIND_REF_FOR_3D = 0x0056F930       # TESObjectREFR::FindReferenceFor3D (proven), cdecl
-LAND_HEIGHT = 0x004572E0           # TES::GetLandHeightAt (probable)
+# TES::GetLandHeightAt 0x004572E0 is not used: live it gave one height per cell (ground_height casts a ray).
 LINE_OF_SIGHT = 0x0088B880         # Actor::LineOfSight (proven)
 CELL_GRID_X, CELL_GRID_Y = 0x00544C30, 0x00544C60
 PATH_STATES = {1: 'initializing', 2: 'moving', 3: 'moving while waiting', 4: 'waiting for updated path',
@@ -768,16 +769,72 @@ class EngineAITools:
                        'TESObjectREFR::FindReferenceFor3D 0x0056F930 (proven)']
         return out
 
-    def ground_height(self, x, y, z=0.0):
+    GROUND_RAY_UP = 8000.0        # the ray starts this far above z
+    GROUND_RAY_LENGTH = 30000.0
+    PLAYER_RADIUS = 48.0          # the player's capsule column, around its (x, y) ...
+    PLAYER_HEIGHT = 200.0         # ... and up from its feet
+
+    def ground_height(self, x, y, z=None, rays=None, player=None):
+        """The height of the ground at (x, y): a pick ray straight down. A hit that names no reference is the
+        landscape (terrainHeight); a hit on an object gives groundHeight and the object's reference instead.
+
+        Critique fix 2026-11-21: TES::GetLandHeightAt 0x004572E0 returned one value for every point of a cell
+        (6360.0 at two points 2,000 units apart, checked live), so it is no longer used. At the player's own
+        (x, y) the ray first meets the player's capsule (live: 128.7 over its feet, named the PlayerCharacter in an
+        interior, no reference outside): a hit on the player or in its capsule column is passed through.
+        `player` is (PlayerCharacter pointer, (x, y, z)), read from the game when not given."""
         self.live.in_game()
-        buf = self.agent._buffer() + 0x600
-        tes = self.live.u32s([G_TES])[0]
-        self.link.one('wr', word(buf), struct.pack('<4f', x, y, z, -1e9).hex())
-        ok = bool(self._eax(LAND_HEIGHT, tes, buf, buf + 12) & 0xFF)
-        h = self._floats([buf + 12])[0]
-        return {'x': x, 'y': y, 'terrainHeight': _r(h, 2) if ok else None, 'found': ok,
-                'note': None if ok else 'No loaded terrain under this point (interiors and unloaded cells have none).',
-                'uses': ['TES::GetLandHeightAt 0x004572E0 (probable)']}
+        if rays is None:
+            from .fnv_hands import Rays
+            rays = getattr(self, '_rays', None) or Rays(self.live)
+            self._rays = rays
+        if z is None:
+            try:
+                z = self.live.player()['position']['z']
+            except Exception:  # noqa: BLE001 - a start height is all it is
+                z = 0.0
+        if player is None:
+            try:
+                p = self.live.player()['position']
+                player = (self.live.u32s([PLAYER_SINGLETON])[0], (p['x'], p['y'], p['z']))
+            except Exception:  # noqa: BLE001 - without the player nothing is passed through
+                player = None
+        top = float(z) + self.GROUND_RAY_UP
+        bottom = top - self.GROUND_RAY_LENGTH
+        passed = False
+        for _ in range(4):
+            hit = rays.cast([((x, y, top), (x, y, bottom))], refs=True)[0]
+            point = hit.get('point') if hit.get('hit') else None
+            if point is None or not self._on_player(x, y, point[2], hit.get('ref'), player):
+                break
+            # The capsule is more than one shape: one unit under this hit the ray meets it again (live). A ray
+            # that starts inside it does not, so the next one starts just over the player's feet.
+            passed, top = True, min(point[2] - 1.0, player[1][2] + 2.0)
+        point = hit.get('point') if hit.get('hit') else None
+        out = {'x': x, 'y': y, 'found': point is not None, 'uses': ['TES::Pick, a ray straight down']}
+        if passed:
+            out['passedPlayer'] = True
+        if point is None:
+            out.update(terrainHeight=None, note='Nothing under this point within %d units (interiors have no '
+                                                'terrain; only loaded cells have collision).' % self.GROUND_RAY_LENGTH)
+            return out
+        ref = hit.get('ref')
+        out['groundHeight'] = _r(point[2], 2)
+        if ref:
+            out.update(terrainHeight=None, onRef='0x%08X' % ref,
+                       note='The ray hit an object before the terrain: groundHeight is its top.')
+        else:
+            out.update(terrainHeight=_r(point[2], 2), note=None)
+        return out
+
+    def _on_player(self, x, y, h, ref, player):
+        if player is None:
+            return False
+        ptr, (px, py, pz) = player
+        if ref and ref == ptr:
+            return True
+        return (math.hypot(x - px, y - py) <= self.PLAYER_RADIUS
+                and pz + 2.0 < h <= pz + self.PLAYER_HEIGHT)
 
     # ================================================================== fnv_cell_grid
     def cell_grid(self):

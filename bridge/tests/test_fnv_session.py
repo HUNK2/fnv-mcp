@@ -12,10 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from w1_support import W1Live  # noqa: E402
-from geck_mcp import fnv_time  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_scenario import ScenarioRunner  # noqa: E402
-from geck_mcp.fnv_session import SessionTools  # noqa: E402
+from fnv_mcp import fnv_time  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_scenario import ScenarioRunner  # noqa: E402
+from fnv_mcp.fnv_session import SessionTools  # noqa: E402
 
 READY = {'ready': True, 'missing': [], 'checks': []}
 
@@ -29,9 +29,9 @@ class SessionTestCase(unittest.TestCase):
         self.warnings.from_game.return_value.summary.return_value = {'byCategory': {}}
         self.warnings.from_game.return_value.enable.return_value = {'changed': False}
         for target, kwargs in (
-                ('geck_mcp.fnv_session.setup_check', {'return_value': READY}),
-                ('geck_mcp.fnv_session.warnings_for_live', {'new': self.warnings.from_game}),
-                ('geck_mcp.fnv_deep.context_files', {'return_value': []})):
+                ('fnv_mcp.fnv_session.setup_check', {'return_value': READY}),
+                ('fnv_mcp.fnv_session.warnings_for_live', {'new': self.warnings.from_game}),
+                ('fnv_mcp.fnv_deep.context_files', {'return_value': []})):
             patcher = mock.patch(target, **kwargs)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -62,7 +62,7 @@ class SessionTests(SessionTestCase):
         self.assertIn('Next:', str(cm.exception))
 
     def test_start_refuses_when_the_setup_is_missing(self):
-        with mock.patch('geck_mcp.fnv_session.setup_check',
+        with mock.patch('fnv_mcp.fnv_session.setup_check',
                         return_value={'ready': False, 'missing': ['xNVSE'], 'checks': []}):
             with self.assertRaises(ConvError) as cm:
                 self.tools.run('start')

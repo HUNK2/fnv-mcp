@@ -113,7 +113,7 @@ class Watcher:
 
 
 def busy_calls(path):
-    """The calls a child reports as still running (geck_mcp/busy.py writes the file): [] when there is none, or the
+    """The calls a child reports as still running (fnv_mcp/busy.py writes the file): [] when there is none, or the
     file is missing or unreadable. Read here, not imported, so a broken edit in the package cannot stop the
     supervisor."""
     if path is None:
@@ -131,7 +131,7 @@ class Child:
     def __init__(self, argv, cwd, on_message, on_exit, busy_file=None):
         env = dict(os.environ, PYTHONUNBUFFERED='1')
         # A cancelled act call is not answered, but the server keeps running it: the server reports such calls in
-        # this file (geck_mcp/busy.py), so a reload waits for them instead of killing them (R4).
+        # this file (fnv_mcp/busy.py), so a reload waits for them instead of killing them (R4).
         self.busy_file = Path(busy_file) if busy_file else None
         if self.busy_file is not None:
             self.busy_file.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +282,7 @@ class Supervisor:
             for rid in failed:
                 del self.in_flight[rid]
                 self.emit({'jsonrpc': '2.0', 'id': json.loads(rid), 'error': {
-                    'code': -32603, 'message': 'The geck server process exited during this call (a crash or a '
+                    'code': -32603, 'message': 'The fnv-mcp server process exited during this call (a crash or a '
                     'kill). A new one starts on the next call; check the game and editor state before retrying.'}})
             for rid in [r for r, owner in self.server_requests.items() if owner is child]:
                 del self.server_requests[rid]
@@ -414,7 +414,7 @@ class Supervisor:
             if child is None:
                 if has_id and method is not None:
                     self.emit({'jsonrpc': '2.0', 'id': message['id'], 'error': {
-                        'code': -32603, 'message': 'The geck server process could not start; the error is in the '
+                        'code': -32603, 'message': 'The fnv-mcp server process could not start; the error is in the '
                         'MCP server log (stderr). Fix it and call again.'}})
                 return
             if has_id and method is not None:
@@ -498,12 +498,12 @@ class Supervisor:
 
 
 def main(script, argv):
-    """`script` is run_mcp.py; the child runs it with --serve and the same arguments. Watched: the geck_mcp package
+    """`script` is run_mcp.py; the child runs it with --serve and the same arguments. Watched: the fnv_mcp package
     and the project file."""
     global LOG_FILE
     script = Path(script).resolve()
     root = script.parent
-    watch = [root / 'geck_mcp']
+    watch = [root / 'fnv_mcp']
     project = None
     if '--project' in argv:
         index = argv.index('--project') + 1

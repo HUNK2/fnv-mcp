@@ -55,7 +55,7 @@ class ZigPathTests(unittest.TestCase):
             self.assertEqual(Path(engine_host.zig_path(self.root)), self.zig)
 
     def test_defines_string_is_one_define(self):
-        from geck_mcp import fnv_link
+        from fnv_mcp import fnv_link
         self.assertEqual(fnv_link.check_defines('FNVMCP_TEST_SEAM'), ['FNVMCP_TEST_SEAM'])
         self.assertEqual(fnv_link.check_defines(['B', 'A', 'A']), ['A', 'B'])
         for bad in ('éX', '1X', 'A-B', ''):
@@ -134,7 +134,7 @@ class SeamBuildTests(unittest.TestCase):
         # and compare bytes with the real tree's product DLL.
         import re
         import shutil
-        from geck_mcp import fnv_link
+        from fnv_mcp import fnv_link
         copy = self.state / 'noseam' / 'native'
         shutil.copytree(fnv_link.NATIVE, copy)
         removed = 0
@@ -150,7 +150,7 @@ class SeamBuildTests(unittest.TestCase):
         self.assertEqual(engine_host.pe_code_digest(out), engine_host.pe_code_digest(self.product['dll']))
 
     def test_install_refuses_seam_build(self):
-        from geck_mcp import fnv_link
+        from fnv_mcp import fnv_link
         with self.assertRaises(fnv_link.LinkError) as cm:
             fnv_link.install(self.state / 'mo2', 'Dev', self.seam, self.state)
         self.assertEqual(cm.exception.code, 'TEST_BUILD')

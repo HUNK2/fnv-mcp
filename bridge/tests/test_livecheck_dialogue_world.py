@@ -8,9 +8,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_brief  # noqa: E402
-from geck_mcp.fnv_social import SocialTools  # noqa: E402
-from geck_mcp.fnv_world import (DATA_HANDLER, DIALOG_INFO, DIALOG_MENU, TOPIC_MANAGER, WorldTools,  # noqa: E402
+from fnv_mcp import fnv_brief  # noqa: E402
+from fnv_mcp.fnv_social import SocialTools  # noqa: E402
+from fnv_mcp.fnv_world import (DATA_HANDLER, DIALOG_INFO, DIALOG_MENU, TOPIC_MANAGER, WorldTools,  # noqa: E402
                                 _transform)
 
 

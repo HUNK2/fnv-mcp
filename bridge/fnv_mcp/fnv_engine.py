@@ -286,7 +286,9 @@ class EngineMap:
                 self._files.popitem(last=False)
         return lines
 
-    def code(self, address, max_lines=400, annotate=True):
+    def code(self, address, max_lines=400, annotate=True, offset=0):
+        """The decompiled source of a function: max_lines lines from line `offset` of it (0: its first line, with the
+        marker comment). A cut answer names the offset of the next line."""
         f = self.functions[address]
         if not f.get('file'):
             raise EngineMapError('NO_SOURCE', 'The decomp has no source for %s' % f['address'])
@@ -306,6 +308,9 @@ class EngineMap:
             exact = False
         else:
             raise EngineMapError('NO_SOURCE', 'No // @fnv marker for %s in %s' % (f['address'], f['file']))
+        offset = max(0, int(offset or 0))
+        first += min(offset, len(text))
+        text = text[offset:]
         truncated = len(text) > max_lines
         if truncated:
             text = text[:max_lines]
@@ -320,8 +325,13 @@ class EngineMap:
                     return '%s/*%s*/' % (m.group(0), t['name'])
                 return m.group(0)
             body = PLACEHOLDER_REF.sub(repl, body)
-        return {'file': f['file'], 'firstLine': first, 'lastLine': first + len(text) - 1,
-                'exactExtent': exact, 'truncated': truncated, 'code': body, 'resolvedNames': names}
+        out = {'file': f['file'], 'firstLine': first, 'lastLine': first + len(text) - 1,
+               'exactExtent': exact, 'truncated': truncated, 'code': body, 'resolvedNames': names}
+        if truncated:
+            out['next'] = offset + max_lines
+            out['truncatedNote'] = ('%d lines shown. The rest: call again with offset=%d (and max_lines up to 3000).'
+                                    % (max_lines, offset + max_lines))
+        return out
 
     # ----------------------------------------------------------------------------- search
     def name_keys(self):

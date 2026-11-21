@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 class OutsideNoteTests(unittest.TestCase):
     def game(self, companion, quit_rows=()):
-        from geck_mcp import fnv_game
+        from fnv_mcp import fnv_game
         from fakes import project
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -50,8 +50,8 @@ class OutsideNoteTests(unittest.TestCase):
 
 class AssetBuildDirTests(unittest.TestCase):
     def test_i3_a_just_built_plugin_can_be_checked(self):
-        from geck_mcp import fnv_records
-        from geck_mcp.fnv_records import RecordsTools
+        from fnv_mcp import fnv_records
+        from fnv_mcp.fnv_records import RecordsTools
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             game_root, state = root / 'game', root / 'proj' / 'state'
@@ -78,7 +78,7 @@ class AssetBuildDirTests(unittest.TestCase):
 class ProbeDryRunTests(unittest.TestCase):
     def test_i4_dry_run_on_a_changing_action_is_refused(self):
         import ast
-        source = (Path(__file__).resolve().parents[1] / 'geck_mcp' / 'fnv_live_tools.py').read_text(encoding='utf-8')
+        source = (Path(__file__).resolve().parents[1] / 'fnv_mcp' / 'fnv_live_tools.py').read_text(encoding='utf-8')
         fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.AsyncFunctionDef) and n.name == 'fnv_probe')
         text = ast.get_source_segment(source, fn)
         self.assertIn("dry_run and action != 'install'", text)
@@ -86,7 +86,7 @@ class ProbeDryRunTests(unittest.TestCase):
 
 class SessionTests(unittest.TestCase):
     def test_m_rollback_only_disables_crash_context_prepare_turned_on(self):
-        from geck_mcp import fnv_session
+        from fnv_mcp import fnv_session
         calls = []
         warn = SimpleNamespace(status=lambda: {'enabled': True},
                                capture=SimpleNamespace(start=lambda: {'capturing': False, 'started': False},
@@ -126,7 +126,7 @@ class SessionTests(unittest.TestCase):
 
 class CrawlRewearTests(unittest.TestCase):
     def test_m_a_failed_unequip_still_rewears_and_counts_the_cleanup(self):
-        from geck_mcp.fnv_crawl import CrawlTools
+        from fnv_mcp.fnv_crawl import CrawlTools
         lines, counts, rewore = [], iter([0, 1]), []
 
         class Live:
@@ -156,7 +156,7 @@ class CrawlRewearTests(unittest.TestCase):
 class SubtitleLostTests(unittest.TestCase):
     def test_m_lost_lines_are_reported(self):
         import inspect
-        from geck_mcp import fnv_inspect
+        from fnv_mcp import fnv_inspect
         self.assertIn('lost', inspect.getsource(fnv_inspect.AudioTools.subtitles).split('out = dict(')[1])
 
 

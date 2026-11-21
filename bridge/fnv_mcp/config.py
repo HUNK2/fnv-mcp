@@ -28,6 +28,10 @@ class FnvSettings(BaseModel):
     engine_pipe: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     # Act tools (memory writes, engine calls, console changes) refuse unless this is "full".
     engine_control: Literal['read', 'full'] = 'read'
+    # Seconds after its process appears that a starting game that draws no frames counts as hung and is started once
+    # more (critique fix 2026-11-21). Unset: 45, or three times the median of the last five ready times when that
+    # is longer. 0 turns the early end off.
+    startup_hang_seconds: float | None = Field(default=None, ge=0, le=600)
     tests_dir: Path | None = None
     # Your own unpacked copy of FalloutNV.exe 1.4.0.525 (the Steam exe's code is encrypted on disk): the
     # reference fnv_patch_map compares the running game's code with. Read locally, never copied.
@@ -53,7 +57,7 @@ class Project(BaseModel):
     spec: Path | None = None
     # fnv_* tools (engine map, crash doctor); optional.
     fnv: FnvSettings | None = None
-    # Toolsets this server registers (geck_mcp/toolsets.py): game, naming, core (opt-in: the everyday tools only).
+    # Toolsets this server registers (fnv_mcp/toolsets.py): game, naming, core (opt-in: the everyday tools only).
     # Unset: game and naming.
     toolsets: list[Literal['game', 'naming', 'core']] | None = Field(default=None, max_length=3)
 

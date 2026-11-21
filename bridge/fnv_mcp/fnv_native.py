@@ -14,6 +14,7 @@
 Compiled module DLLs stay in the bridge state folder: they never enter git.
 """
 import hashlib
+import os
 import re
 import shutil
 import struct
@@ -65,6 +66,42 @@ def source_path(source):
         return None
     path = no_unc(text, 'source')
     return path if path.is_file() else None
+
+
+_QUOTED_INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.M)
+LOG_PAGE = 200          # the companion's own page size (op_mod_log, native/engine/w5_mod.c)
+CALL_LOG_LINES = 40     # log lines an action's answer carries; logNext reads the rest
+
+
+def source_digest(text, path, sdk):
+    """12 hex digits naming a build: the source, every file it includes in quotes (found beside the including file,
+    then in the SDK folder, each once, so a cycle ends), and the SDK headers. A changed included file gives a new DLL
+    name (critique fix 2026-11-21: only the main file was hashed). A missing include is left to the compiler."""
+    sdk = Path(sdk)
+    h = hashlib.sha256(text.encode('utf-8'))
+    for name in ('fnvmcp_module.h', 'fnv_engine.h'):
+        if (sdk / name).is_file():
+            h.update(b'\0sdk:' + name.encode() + b'\0' + (sdk / name).read_bytes())
+    seen = set()
+    todo = [(text, Path(path).parent if path else None)]
+    while todo:
+        body, folder = todo.pop()
+        for name in _QUOTED_INCLUDE.findall(body):
+            for base in ([folder] if folder else []) + [sdk]:
+                found = base / name
+                try:
+                    key = str(found.resolve()).lower()
+                    if not found.is_file():
+                        continue
+                except OSError:
+                    continue
+                if key not in seen:
+                    seen.add(key)
+                    data = found.read_bytes()
+                    h.update(b'\0inc:' + name.encode('utf-8', 'replace') + b'\0' + data)
+                    todo.append((data.decode('utf-8', 'replace'), found.parent))
+                break
+    return h.hexdigest()[:12]
 
 
 class NativeTools:
@@ -217,10 +254,18 @@ class NativeTools:
         if not (self.sdk / 'fnvmcp_module.h').is_file():
             self.sdk.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(SDK_SOURCE / 'fnvmcp_module.h', self.sdk / 'fnvmcp_module.h')
-        digest = hashlib.sha256(text.encode('utf-8') + (self.sdk / 'fnvmcp_module.h').read_bytes() +
-                                ((self.sdk / 'fnv_engine.h').read_bytes() if (self.sdk / 'fnv_engine.h').is_file()
-                                 else b'')).hexdigest()[:12]
+        digest = source_digest(text, path, self.sdk)
         out = self.modules / ('%s-%s.dll' % (name, digest))
+        if out.is_file():
+            # The same digest is the same build, and when it is loaded Windows will not let it be overwritten
+            # (seen live 2026-11-21: "failed to write output ... Permission denied"). Its time is set to now: load
+            # takes the newest build of a name, and that must be this one.
+            try:
+                os.utime(out, None)
+            except OSError:
+                pass
+            return verdict('Built %s (unchanged: the existing build is reused)' % out.name,
+                           'Load it with fnv_native load name=%s.' % name, dll=str(out), name=name, reused=True)
         cmd = [self._zig(), 'cc', '-target', 'x86-windows-gnu', '-shared', '-O2', '-std=c11', '-Wall',
                '-I', str(self.sdk), '-o', str(out), str(path or target)]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
@@ -236,6 +281,23 @@ class NativeTools:
         return verdict('Built %s' % out.name, 'Load it with fnv_native load name=%s.' % name, dll=str(out), name=name,
                        warnings=result.stderr.strip()[-3000:] or None)
 
+    def _sync(self):
+        """The companion's loaded modules by name. Records in self.loaded that the running game does not hold (a
+        game restart or crash ended them, or another server unloaded them) are dropped first: the companion is the
+        truth, this map is a cache (critique fix 2026-11-21: load said ALREADY_LOADED and call used dead addresses
+        after a restart)."""
+        listed = {}
+        for m in self.live.link.one('mod', 'list').get('modules', []) or []:
+            listed[c_name(str(m['name']).rsplit('-', 1)[0])] = m
+        for key, rec in list(self.loaded.items()):
+            m = listed.get(key)
+            same = m is not None and str(m.get('id')) == str(rec.get('id'))
+            if same and rec.get('base') is not None and m.get('base') is not None:
+                same = int(str(m['base']), 16) == int(str(rec['base']), 16)
+            if not same:
+                self.loaded.pop(key, None)
+        return listed
+
     def _newest(self, name):
         hits = sorted(self.modules.glob('%s-*.dll' % c_name(name)), key=lambda p: p.stat().st_mtime)
         if not hits:
@@ -247,14 +309,16 @@ class NativeTools:
         self.live.ready()
         dll = Path(name) if str(name).lower().endswith('.dll') else self._newest(name)
         key = c_name(dll.stem.rsplit('-', 1)[0]) if '-' in dll.stem else c_name(dll.stem)
+        listed = self._sync()
         if key in self.loaded:
             raise ConvError('ALREADY_LOADED', '%s is loaded (module %d). Next: reload or unload.'
                             % (key, self.loaded[key]['id']))
-        listed = self._listed(key)
+        listed = listed.get(key)
         if listed:   # loaded by an earlier server process (the supervisor restarts it on code changes)
             raise ConvError('ALREADY_LOADED', '%s is loaded (module %s, by an earlier server process). Next: call it, '
                             'or reload / unload it.' % (key, listed['id']))
         self.live.changing('native load')
+        mark = self._log_mark()
         out = self.live.link.one('mod', 'load', hexs(str(dll.resolve())), timeout=60)
         if not out.get('ok'):
             raise ConvError('LOAD_FAILED', 'The companion could not load %s (%s%s).' % (
@@ -290,12 +354,13 @@ class NativeTools:
                         pass
                 failed.append({'request': req['request'], 'target': req['target'], 'error': str(e)[:200]})
         exports = {e['name']: e['address'] for e in out.get('exports', [])}
-        self.loaded[key] = {'id': mod['id'], 'dll': str(dll), 'exports': exports, 'hooks': installed}
+        self.loaded[key] = {'id': mod['id'], 'base': mod.get('base'), 'dll': str(dll), 'exports': exports,
+                            'hooks': installed}
         self.live.journal.add({'kind': 'native_load', 'module': key, 'moduleId': mod['id'], 'undo': None})
         return verdict('Loaded %s as module %d: %d hooks installed%s' % (
             key, mod['id'], len(installed), (', %d failed' % len(failed)) if failed else ''),
             'Its init ran on the main thread; fnv_native log shows what it logged.', module=key, id=mod['id'],
-            base=mod['base'], exports=exports, hooks=installed, hooksFailed=failed or None, log=self._log_tail())
+            base=mod['base'], exports=exports, hooks=installed, hooksFailed=failed or None, **self._log_answer(mark))
 
     def _fname(self, address):
         try:
@@ -305,7 +370,9 @@ class NativeTools:
 
     def unload(self, name):
         self.live.ready()
+        self._sync()
         key, mod_id = self._which(name)
+        mark = self._log_mark()
         out = self.live.link.one('mod', 'unload', word(mod_id), timeout=30)
         if not out.get('ok'):
             raise ConvError('UNLOAD_FAILED', 'The companion could not unload module %d (%s).'
@@ -313,7 +380,7 @@ class NativeTools:
         self.loaded.pop(key, None)
         return verdict('Unloaded %s' % key, 'Its hooks are gone (original bytes back) and its writes put back.',
                        hooksRemoved=out.get('hooksRemoved'), writesRestored=out.get('writesRestored'),
-                       log=self._log_tail())
+                       **self._log_answer(mark))
 
     def _listed(self, key):
         """The companion's record of a loaded module by name (it outlives a server restart), or None."""
@@ -370,6 +437,7 @@ class NativeTools:
     def flow_slot(self):
         """Address of the flow-call module's slot (fnv_flow call), building and loading the module when needed."""
         key = 'fnvmcp_flowcall'
+        self._sync()
         if key not in self.loaded:
             listed = self.live.link.one('mod', 'list').get('modules', [])
             for m in listed:      # loaded by an earlier bridge: find the slot in its export table in memory
@@ -402,6 +470,7 @@ class NativeTools:
     # ------------------------------------------------------------------ call / log / list
     def call(self, name, export, args=None):
         self.live.ready()
+        self._sync()
         key, _ = self._which(name)
         exports = self.loaded.get(key, {}).get('exports', {})
         if export not in exports and key not in self.loaded:
@@ -419,6 +488,7 @@ class NativeTools:
                 words.append(word(struct.unpack('<I', struct.pack('<f', a))[0]))
             else:
                 words.append(word(int(a)))
+        mark = self._log_mark()
         out = self.live.link.one('call', word(int(exports[export], 16)), 'ig', '0', '0', *words, timeout=60)
         if out.get('fault'):
             fault = out['fault']
@@ -430,25 +500,71 @@ class NativeTools:
         eax = int(out['eax'], 16)
         return verdict('%s.%s returned %d' % (key, export, eax - (1 << 32) if eax >= 1 << 31 else eax),
                        'Run on the main thread, guarded (a fault comes back as an error).', eax=out['eax'],
-                       value=eax - (1 << 32) if eax >= 1 << 31 else eax, log=self._log_tail())
+                       value=eax - (1 << 32) if eax >= 1 << 31 else eax, **self._log_answer(mark))
 
-    def _log_tail(self, since=0, limit=40):
-        out = self.live.link.one('mod', 'log', word(since))
-        lines = out.get('lines', [])
-        return [{'seq': l['seq'], 'module': l['module'], 'frame': l['frame'], 'text': l['text']}
-                for l in lines[-limit:]]
+    def _log_mark(self):
+        """The sequence number of the newest module log line now (lines after it are new)."""
+        # Ask for lines after 0x7FFFFFFE: none exist, and the reply's "last" is the newest. Not 0x7FFFFFFF: the
+        # companion computes since + 1 as a signed 32-bit number.
+        out = self.live.link.one('mod', 'log', word(0x7FFFFFFE))
+        return int(out.get('last') or 0)
+
+    def _log_since(self, since, limit):
+        """(lines, next, dropped): up to limit lines after since, oldest first, paged LOG_PAGE at a time. dropped
+        counts lines after since that the ring (1,024 lines) no longer holds."""
+        lines, dropped, last = [], 0, None
+        cursor = since
+        while len(lines) < limit:
+            out = self.live.link.one('mod', 'log', word(cursor), str(min(LOG_PAGE, limit - len(lines))))
+            page = out.get('lines') or []
+            last = out.get('last', last)
+            if not page:
+                break
+            if not lines and page[0]['seq'] > since + 1:
+                dropped = page[0]['seq'] - since - 1
+            lines.extend({'seq': line['seq'], 'module': line['module'], 'frame': line['frame'], 'text': line['text']}
+                         for line in page)
+            cursor = page[-1]['seq']
+            if last is not None and cursor >= int(last):
+                break
+        return lines, (lines[-1]['seq'] if lines else max(since, int(last or 0))), dropped
+
+    def _log_answer(self, mark):
+        """The log part of an action's answer: only the lines written since mark (taken just before the action)."""
+        lines, nxt, dropped = self._log_since(mark, CALL_LOG_LINES)
+        out = {'log': lines, 'logNext': nxt}
+        try:
+            newest = self._log_mark()
+        except Exception:  # noqa: BLE001 - only the cut count depends on it
+            newest = nxt
+        if newest > nxt:
+            out['logCut'] = newest - nxt
+        if dropped:
+            out['logDropped'] = dropped
+        return out
 
     def log(self, since=0):
+        """Module log lines after since (at most 500, oldest first); since=0 gives the newest LOG_PAGE lines."""
         self.live.ready()
-        lines = self._log_tail(since, limit=500)
-        return verdict('%d log lines' % len(lines), None, lines=lines,
-                       next=lines[-1]['seq'] if lines else since)
+        if not since:
+            since = max(0, self._log_mark() - LOG_PAGE)
+        lines, nxt, dropped = self._log_since(since, 500)
+        return verdict('%d log lines' % len(lines),
+                       'More after %d: fnv_native log since=%d.' % (nxt, nxt) if len(lines) == 500 else None,
+                       lines=lines, next=nxt, dropped=dropped or None)
 
     def list(self):
         self.live.ready()
-        mods = self.live.link.one('mod', 'list').get('modules', [])
-        return verdict('%d modules loaded' % len(mods), None, modules=mods,
-                       built=sorted(p.name for p in self.modules.glob('*.dll')) if self.modules.exists() else [])
+        mods = list(self._sync().values())
+        builds = {}
+        for p in (self.modules.glob('*.dll') if self.modules.exists() else []):
+            builds.setdefault(c_name(p.stem.rsplit('-', 1)[0]), []).append(p)
+        built = []
+        for name, paths in sorted(builds.items()):
+            newest = max(paths, key=lambda p: p.stat().st_mtime)
+            built.append({'name': name, 'newest': newest.name, 'builds': len(paths)})
+        return verdict('%d modules loaded, %d module names built' % (len(mods), len(built)), None, modules=mods,
+                       built=built)
 
     def run(self, action, **a):
         if action == 'headers':
@@ -469,3 +585,4 @@ class NativeTools:
             return self.list()
         raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: headers, build, load, unload, reload, call, log, '
                         'list.' % action)
+

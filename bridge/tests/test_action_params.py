@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp.action_params import ACTION_PARAMS, unused_arguments  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp.action_params import ACTION_PARAMS, unused_arguments  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 
 def enum_of(schema):

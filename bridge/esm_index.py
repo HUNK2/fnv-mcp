@@ -18,7 +18,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from geck_mcp.esp import codec  # noqa: E402
+from fnv_mcp.esp import codec  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 def default_data():

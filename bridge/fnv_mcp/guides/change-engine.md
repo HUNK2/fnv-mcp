@@ -23,6 +23,17 @@ Use this when a script cannot do it and the change belongs in engine code. Statu
    functions it hooks, `install`, then `fnv_game restart`, `log`). A `fnv_code` swap is recompiled game code: local use
    only; ship the change as a module hook instead.
 
+## The loop
+
+1. `fnv_native build source=<file.c> name=N`: the DLL name carries a hash of the source and every file it includes
+   in quotes, so an edited header gives a new build.
+2. `load name=N`, then `call name=N export=<fn>`. Each answer's `log` holds only the lines that action wrote;
+   `logNext` is the newest line it saw and `logCut` counts lines it left out.
+3. `fnv_native log since=<logNext>` reads what the module logged since (for example from a frame callback).
+4. After an edit: `reload name=N source=<file.c>` (unload, rebuild, load).
+5. After the game restarts or crashes the module is gone with it: just `load` again, under the same name. The
+   tool asks the game which modules it holds before every action.
+
 ## What the answers mean
 
 - `hooksFailed` after a load: the bridge could not plan that function's prologue or it is hooked already.

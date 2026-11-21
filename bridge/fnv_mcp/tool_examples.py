@@ -389,8 +389,8 @@ ACTIONS = {
         'unload': 'Remove its hooks, put writes back and free the DLL.',
         'reload': 'Unload, rebuild and load again.',
         'call': 'Call an exported function of a loaded module on the main thread.',
-        'log': 'What modules logged.',
-        'list': 'Loaded modules and built DLLs.'},
+        'log': 'What modules logged: the newest lines, or the lines after since.',
+        'list': 'Loaded modules and the newest build of each module name.'},
     'fnv_object': {
         'identify': 'The pool block, class and form a pointer is in.',
         'find': 'Live objects of a class.',

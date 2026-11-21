@@ -11,8 +11,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_conv, fnv_engine, fnv_procmem, fnv_symdb  # noqa: E402
-from geck_mcp import fnv_debugger  # noqa: E402
+from fnv_mcp import fnv_conv, fnv_engine, fnv_procmem, fnv_symdb  # noqa: E402
+from fnv_mcp import fnv_debugger  # noqa: E402
 from test_fnv_symdb import build_db  # noqa: E402
 
 CODE = 0x401000          # Actor::ApplyDamage: 6 bytes of prologue, lines at offsets 0, 6, 0x10, 0x20 (inline.h), 0x30
@@ -417,7 +417,7 @@ class ProcessTests(DebugTestBase):
         proc.threads.return_value = [1000, 1001, 1002]
         proc.main_thread.return_value = 1000
         proc.thread_context.return_value = {'eip': CODE}
-        with mock.patch('geck_mcp.fnv_procmem.GameProcess', return_value=proc):
+        with mock.patch('fnv_mcp.fnv_procmem.GameProcess', return_value=proc):
             self.assertEqual(self.run_tool('freeze')['state'], 'frozen')
             self.assertEqual(self.run_tool('status')['state'], 'frozen')
             self.assertEqual(self.run_tool('thaw')['state'], 'running')
@@ -430,7 +430,7 @@ class ProcessTests(DebugTestBase):
         proc.__enter__.return_value = proc
         proc.suspend_all.return_value = []
         proc.minidump.return_value = 2048
-        with mock.patch('geck_mcp.fnv_procmem.GameProcess', return_value=proc):
+        with mock.patch('fnv_mcp.fnv_procmem.GameProcess', return_value=proc):
             out = self.run_tool('dump', file='crash one')
         self.assertEqual(out['bytes'], 2048)
         self.assertTrue(out['path'].endswith('crash_one.dmp'))

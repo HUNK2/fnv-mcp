@@ -10,10 +10,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_create  # noqa: E402
-from geck_mcp.esp.codec import Record, Subrecord  # noqa: E402
-from geck_mcp.fnv_create import AssetTools, AuthorTools, FormTools, PlaceTools, bsa_hashes  # noqa: E402
-from geck_mcp.fnv_live import Journal, LiveError  # noqa: E402
+from fnv_mcp import fnv_create  # noqa: E402
+from fnv_mcp.esp.codec import Record, Subrecord  # noqa: E402
+from fnv_mcp.fnv_create import AssetTools, AuthorTools, FormTools, PlaceTools, bsa_hashes  # noqa: E402
+from fnv_mcp.fnv_live import Journal, LiveError  # noqa: E402
 
 
 def write_bsa(path, folders):
@@ -195,7 +195,7 @@ class AssetTests(unittest.TestCase):
             live.refs = {0x100: {'formId': '00000100', 'base': '0003404A', 'model': 'Clutter\\Food\\Wine.NIF'},
                          0x200: {'formId': '00000200', 'base': '00000999', 'model': 'Other.nif'}}
             live.mem[fnv_create.MODEL_LOADER] = 0x7000
-            from geck_mcp import fnv_eyes
+            from fnv_mcp import fnv_eyes
             live.mem[fnv_eyes.G_TES] = 0x400
             live.reads = lambda spans: [struct.pack('<16I', *([0] * 13 + [0x500, 0, 0])) if a == 0x400 else bytes(n)
                                         for a, n in spans]

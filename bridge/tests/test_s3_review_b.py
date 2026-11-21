@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_time  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp import fnv_time  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
 from test_undo_instrumentation import install  # noqa: E402
 
 
@@ -40,7 +40,7 @@ class HookOwnerTests(unittest.TestCase):
         self.assertEqual(len(self.fake.link.hooks), 2)
 
     def test_i3_profile_and_crash_context_forget_hooks_revert_removed(self):
-        from geck_mcp.fnv_deep import PROFILE, DeepTools
+        from fnv_mcp.fnv_deep import PROFILE, DeepTools
         deep = DeepTools(self.live)
         deep._baseline.update(profile={'frame': 1, 'time': 0}, crash_context=True)
         for k, label in enumerate(PROFILE):
@@ -55,7 +55,7 @@ class OrderTests(unittest.TestCase):
         with FakeLive() as fake:
             live = fake.live
             fake.link.put(fnv_time.TIME_GLOBAL, struct.pack('<If', 0, 0.0))
-            from geck_mcp.fnv_inject import shared_time
+            from fnv_mcp.fnv_inject import shared_time
             control, _ = shared_time(live)
             control.functions = lambda: {'disable': 0x00AA0000, 'enable': 0x00AA0010, 'clamp': 0x00AA0020}
             control.fixed(30)
@@ -80,14 +80,14 @@ class OrderTests(unittest.TestCase):
 class SessionEndTests(unittest.TestCase):
     def test_m1_session_end_turns_the_fixed_step_off_unjournaled(self):
         import inspect
-        from geck_mcp import fnv_session
+        from fnv_mcp import fnv_session
         src = inspect.getsource(fnv_session)
         self.assertNotIn('control.fixed(0)', src, 'session start/end turn the step off without a new entry')
 
 
 class SpawnProjectileTests(unittest.TestCase):
     def test_m8_projectile_ref_refused(self):
-        from geck_mcp.fnv_agent import AgentTools
+        from fnv_mcp.fnv_agent import AgentTools
         with FakeLive() as fake:
             live = fake.live
             live.in_game = lambda: None

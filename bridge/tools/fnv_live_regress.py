@@ -38,12 +38,12 @@ SCENARIOS = [
 
 def preflight(session, attach, start):
     """Problems that make the run meaningless (empty list: go)."""
-    from geck_mcp import fnv_link
+    from fnv_mcp import fnv_link
     problems = []
     # The game's pipe takes one client: an MCP server that used it lets go after 20 s idle (EngineLink). Wait for
     # that, before any call through the session (whose own link would then hold the pipe), and say so when it does
     # not happen. Only when a game runs: without one there is nothing to wait for.
-    from geck_mcp.fnv_game import game_processes
+    from fnv_mcp.fnv_game import game_processes
     if game_processes():
         probe = fnv_link.EngineLink(getattr(session.project.fnv, 'engine_pipe', None))
         try:
@@ -90,8 +90,13 @@ def preflight(session, attach, start):
 
 def run_tests(suite):
     loader = unittest.TestLoader()
-    pattern = 'test_smoke.py' if suite == 'smoke' else 'test_*.py'
-    tests = loader.discover(str(BRIDGE / 'tests' / 'live'), pattern=pattern, top_level_dir=str(BRIDGE / 'tests'))
+    folder = str(BRIDGE / 'tests' / 'live')
+    if suite == 'loop':     # the loop real use is made of (critique fix 2026-11-21), about 3 minutes
+        tests = unittest.TestSuite(loader.discover(folder, pattern=p, top_level_dir=str(BRIDGE / 'tests'))
+                                   for p in ('test_smoke.py', 'test_loop.py', 'test_quality.py'))
+    else:
+        pattern = 'test_smoke.py' if suite == 'smoke' else 'test_*.py'
+        tests = loader.discover(folder, pattern=pattern, top_level_dir=str(BRIDGE / 'tests'))
     stream = io.StringIO()
     result = unittest.TextTestRunner(stream=stream, verbosity=2).run(tests)
     rows = []
@@ -168,7 +173,7 @@ def write_summary(out, summary):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--project', default=str(BRIDGE / 'projects' / 'hellowasteland.windows.json'))
-    parser.add_argument('--suite', choices=('smoke', 'full'), default='smoke')
+    parser.add_argument('--suite', choices=('smoke', 'loop', 'full'), default='smoke')
     parser.add_argument('--attach', action='store_true', help='never launch the game')
     parser.add_argument('--start', default='coc:GoodspringsSource', help='where to launch when not attached')
     parser.add_argument('--out', default=None, help='default: <state_dir>/fnv/regress/<stamp>')
@@ -178,7 +183,7 @@ def main(argv=None):
     from live.base import Session
     session = Session.get(args.project)
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    out = Path(args.out) if args.out else Path(session.project.state_dir) / 'fnv' / 'regress' / stamp
+    out = Path(args.out) if args.out else Path(session.project.state_dir) / 'live-check' / stamp
     summary = {'stamp': stamp, 'suite': args.suite, 'project': args.project, 'passed': False}
     started = time.monotonic()
     try:
@@ -197,7 +202,16 @@ def main(argv=None):
         summary['seconds'] = round(time.monotonic() - started, 1)
         write_summary(out, summary)
         session.close()
-    print('%s: %s (%s s) -> %s' % (args.suite, 'PASS' if summary['passed'] else 'FAIL', summary['seconds'], out))
+    tests = summary.get('tests') or {}
+    counts = {}
+    for row in tests.get('rows', []):
+        counts[row['result']] = counts.get(row['result'], 0) + 1
+    summary['line'] = '%s: %s, %d ran, %d failed, %d skipped, %s s' % (
+        args.suite, 'PASS' if summary['passed'] else 'FAIL', tests.get('ran', 0), tests.get('bad', 0),
+        counts.get('skipped', 0), summary['seconds'])
+    with open(out / 'summary.md', 'a', encoding='utf-8') as f:
+        f.write('\n' + summary['line'] + '\n')
+    print('%s -> %s' % (summary['line'], out))
     if summary.get('note'):
         print('  note: ' + summary['note'])
     for row in summary.get('scenarios') or []:

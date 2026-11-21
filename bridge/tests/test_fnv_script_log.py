@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_conv, fnv_debugger, fnv_scriptdbg  # noqa: E402
+from fnv_mcp import fnv_conv, fnv_debugger, fnv_scriptdbg  # noqa: E402
 from test_fnv_script_debug import ACTION, EVAL, LOCALS_ACTION, REF, SCRIPT, FakeClock, ScriptLive  # noqa: E402
 
 

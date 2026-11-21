@@ -1667,6 +1667,19 @@ class LiveService:
         duration_ms = int(duration_ms or 0)
         if action == 'hold' and not 0 < duration_ms <= 10000:
             raise ValueError('hold needs 1..10000 ms')
+        if not self._game_focused():
+            # Critique fix 4c (live 2026-11-21): xNVSE HoldKey/TapKey go through DirectInput, which ignores keys
+            # while the game window is not focused; the call said accepted and nothing moved. The frame injector
+            # writes the engine's input state after its poll, so it works either way.
+            frames = max(1, round(duration_ms * 60 / 1000)) if action == 'hold' else 2
+            if scan >= 256:
+                out = self.inject(action, None, None, frames, scan - 256, None)
+            else:
+                out = self.inject(action, None, scan, frames, None, None)
+            out = dict(out)
+            out['via'] = ('frame injector, %d frames: the game window is not focused, so key commands would '
+                          'be ignored' % frames)
+            return out
         self.changing('input')
         if action == 'tap':
             result = self.link.batch([('con', hexs('TapKey %d' % scan), '0')])[0]
@@ -1676,6 +1689,19 @@ class LiveService:
         self.journal.add({'kind': 'input', 'action': action, 'scan': scan, 'durationMs': duration_ms, 'undo': None})
         return {'action': action, 'scanCode': scan, 'durationMs': duration_ms, 'accepted': result.get('accepted'),
                 'releaseScheduled': action == 'hold'}
+
+    def _game_focused(self):
+        """True when the foreground window belongs to the game process (DirectInput sees keys only then)."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            pids = self.game.process() or []
+            user32 = ctypes.windll.user32
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(owner))
+            return owner.value in pids
+        except Exception:  # noqa: BLE001 - unknown focus: keep the key commands
+            return True
 
     def _scan_of(self, control):
         """The DirectInput scan code (or 256 + mouse button) a control is bound to, from the game's bindings."""

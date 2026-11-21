@@ -11,8 +11,8 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_social  # noqa: E402
-from geck_mcp.fnv_social import SocialTools  # noqa: E402
+from fnv_mcp import fnv_social  # noqa: E402
+from fnv_mcp.fnv_social import SocialTools  # noqa: E402
 
 
 class TreeLive:
@@ -138,7 +138,7 @@ class ChooseNumberingTests(unittest.TestCase):
 
 class PathingTests(unittest.TestCase):
     def test_a_flee_goal_is_null_with_a_note(self):
-        from geck_mcp.fnv_engine_ai import EngineAITools
+        from fnv_mcp.fnv_engine_ai import EngineAITools
         flt_max = 3.4028234663852886e+38
         req = bytearray(0xB0)
         struct.pack_into('<3f', req, 0x0C + 4, 1.0, 2.0, 3.0)
@@ -175,7 +175,7 @@ class PathingTests(unittest.TestCase):
 
 class QuestTargetsTests(unittest.TestCase):
     def test_an_objective_without_targets_says_why_it_has_no_marker(self):
-        from geck_mcp.fnv_agent import AgentTools
+        from fnv_mcp.fnv_agent import AgentTools
         qraw = bytearray(0x64)
         qraw[0x3C] = 1
         oraw = bytearray(0x24)
@@ -212,25 +212,25 @@ class QuestTargetsTests(unittest.TestCase):
 class HealthObjectsTests(unittest.TestCase):
     def setUp(self):
         from w1_support import W1Live
-        from geck_mcp.fnv_scenario import ScenarioRunner
+        from fnv_mcp.fnv_scenario import ScenarioRunner
         self.live = W1Live()
         mark = ScenarioRunner(self.live).mark()
         self.live.session_state = {'start': 'continue', 'since': time.time(), 'deterministic': None,
                                    'baseline': {'realFps': None, 'refs': 100, 'cell': 'A'}, 'journal': mark['journal'],
                                    'mark': mark, 'marks': [{'label': 'session start', **mark}]}
-        for target, kwargs in (('geck_mcp.fnv_session.warnings_for_live', {}), ('geck_mcp.fnv_deep.context_files',
+        for target, kwargs in (('fnv_mcp.fnv_session.warnings_for_live', {}), ('fnv_mcp.fnv_deep.context_files',
                                                                                   {'return_value': []})):
             patcher = mock.patch(target, **kwargs)
             patcher.start()
             self.addCleanup(patcher.stop)
-        wf = mock.patch('geck_mcp.fnv_session.warnings_for_live')
+        wf = mock.patch('fnv_mcp.fnv_session.warnings_for_live')
         self.warn = wf.start()
         self.addCleanup(wf.stop)
         self.warn.return_value.summary.return_value = {'byCategory': {}}
 
     def check(self, refs, cell):
-        from geck_mcp.fnv_session import HealthTools
-        with mock.patch('geck_mcp.fnv_session._refs', return_value=refs),                 mock.patch('geck_mcp.fnv_session._cell', return_value=cell):
+        from fnv_mcp.fnv_session import HealthTools
+        with mock.patch('fnv_mcp.fnv_session._refs', return_value=refs),                 mock.patch('fnv_mcp.fnv_session._cell', return_value=cell):
             return HealthTools(self.live).check()
 
     def test_a_rise_in_the_same_cell_is_reported_since_the_session_start(self):
@@ -242,8 +242,8 @@ class HealthObjectsTests(unittest.TestCase):
         self.assertTrue(self.check(5000, 'B')['ok'])
 
     def test_the_baseline_is_taken_at_each_mark(self):
-        from geck_mcp.fnv_session import SessionTools
-        with mock.patch('geck_mcp.fnv_session._refs', return_value=4000),                 mock.patch('geck_mcp.fnv_session._cell', return_value='A'):
+        from fnv_mcp.fnv_session import SessionTools
+        with mock.patch('fnv_mcp.fnv_session._refs', return_value=4000),                 mock.patch('fnv_mcp.fnv_session._cell', return_value='A'):
             SessionTools(self.live).mark('before-undo')
         self.assertTrue(self.check(4500, 'A')['ok'])        # 500 above the mark, under the threshold
         out = self.check(6000, 'A')

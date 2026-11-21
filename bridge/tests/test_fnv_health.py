@@ -12,9 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from w1_support import W1Live  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_scenario import ScenarioRunner  # noqa: E402
-from geck_mcp.fnv_session import REF_COUNT, HealthTools  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_scenario import ScenarioRunner  # noqa: E402
+from fnv_mcp.fnv_session import REF_COUNT, HealthTools  # noqa: E402
 
 
 def open_session(live, real_fps=60, refs=0):
@@ -30,8 +30,8 @@ class HealthTestCase(unittest.TestCase):
         self.live = W1Live()
         self.warnings = mock.MagicMock()
         self.warnings.from_game.return_value.summary.return_value = {'byCategory': {}}
-        for target, kwargs in (('geck_mcp.fnv_session.warnings_for_live', {'new': self.warnings.from_game}),
-                               ('geck_mcp.fnv_deep.context_files', {'return_value': []})):
+        for target, kwargs in (('fnv_mcp.fnv_session.warnings_for_live', {'new': self.warnings.from_game}),
+                               ('fnv_mcp.fnv_deep.context_files', {'return_value': []})):
             patcher = mock.patch(target, **kwargs)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -90,7 +90,7 @@ class HealthTests(HealthTestCase):
     def test_crash_context_files_newer_than_the_mark_are_reported(self):
         open_session(self.live, real_fps=None)
         fresh = SimpleNamespace(stat=lambda: SimpleNamespace(st_mtime=time.time() + 5))
-        with mock.patch('geck_mcp.fnv_deep.context_files', return_value=[fresh]):
+        with mock.patch('fnv_mcp.fnv_deep.context_files', return_value=[fresh]):
             out = HealthTools(self.live).check()
         self.assertEqual(self.kinds(out), ['crash_context'])
 

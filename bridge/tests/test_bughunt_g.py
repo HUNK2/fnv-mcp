@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from geck_mcp.param_docs import PARAM_DOCS  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp.param_docs import PARAM_DOCS  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 from test_stab_gate import GateFixture  # noqa: E402
 
 

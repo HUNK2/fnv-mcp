@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine_host import StopHost, StopTestCase, build, hexint, needs_zig, zig_path  # noqa: E402
-from geck_mcp import fnv_link  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
 
 BRIDGE = Path(__file__).resolve().parents[1]
 SDK = BRIDGE / 'native' / 'sdk'
@@ -29,7 +29,7 @@ PROLOGUE_LEN = 6
 CHILD = r'''
 import json, sys, threading, time
 sys.path.insert(0, sys.argv[1])
-from geck_mcp import fnv_link
+from fnv_mcp import fnv_link
 link = fnv_link.EngineLink(sys.argv[2]).connect(wait=10)
 link.idle_release_seconds = 0
 for op in json.loads(sys.argv[3]):

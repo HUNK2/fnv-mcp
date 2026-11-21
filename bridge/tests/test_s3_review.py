@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_eyes, fnv_link  # noqa: E402
-from geck_mcp.fnv_journal import Journal  # noqa: E402
+from fnv_mcp import fnv_eyes, fnv_link  # noqa: E402
+from fnv_mcp.fnv_journal import Journal  # noqa: E402
 from test_undo_stateful import OSG, Cam  # noqa: E402
 
 
@@ -87,7 +87,7 @@ class CameraHudTests(unittest.TestCase):
         self.assertIn('fov 75.0', self.lines)
 
     def test_i3_menus_toggle_undo_shows_the_hud_again(self):
-        from geck_mcp.fnv_render import RenderTools
+        from fnv_mcp.fnv_render import RenderTools
         self.live.in_game = lambda: None
         out = RenderTools(self.live).toggle('menus')
         self.assertEqual(self.fake.link.get(fnv_eyes.MENUS_SHOWN_FLAG, 1), b'\x00')
@@ -96,7 +96,7 @@ class CameraHudTests(unittest.TestCase):
         self.assertEqual(e['undo'], {'op': 'hud_set', 'on': True})
 
     def test_unreadable_fly_flag_is_not_an_undo(self):
-        from geck_mcp.fnv_live import UNDO_OPS
+        from fnv_mcp.fnv_live import UNDO_OPS
         self.fake.link.put(fnv_eyes.OS_GLOBALS, b'\x00\x00\x00\x00')     # OSGlobals not there (yet)
         r = UNDO_OPS['fly_set'](self.live, {}, {'op': 'fly_set', 'on': False})
         self.assertFalse(r['undone'])
@@ -105,7 +105,7 @@ class CameraHudTests(unittest.TestCase):
 class PendingPlaceTests(unittest.TestCase):
     def test_i4_pending_place_listed_with_the_live_pose(self):
         from test_fnv_create import FakeLive as CreateLive
-        from geck_mcp.fnv_create import PlaceTools
+        from fnv_mcp.fnv_create import PlaceTools
         with tempfile.TemporaryDirectory() as d:
             live = CreateLive(d)
             place = PlaceTools(live)

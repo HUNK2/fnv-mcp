@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from geck_mcp import server as server_module  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
+from fnv_mcp import server as server_module  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
 
 BRIDGE = Path(__file__).resolve().parents[1]
 CAP = 40000
@@ -92,7 +92,7 @@ class CapTests(unittest.IsolatedAsyncioTestCase):
 
 class DefaultTests(unittest.TestCase):
     def test_lower_defaults(self):
-        from geck_mcp import fnv_tools
+        from fnv_mcp import fnv_tools
         source = inspect.getsource(fnv_tools.register)
         self.assertIn("status: list[Status] | None = None, limit: Limit = 25,", source)    # fnv_func, find/callers/callees/strings
         self.assertIn('80 if limit is None else limit, offset', source)                   # fnv_class action=vtable

@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from geck_mcp import fnv_save
-from geck_mcp.fnv_engine_ai import (ENTRY_POINTS, FORMULA_ARGS, EngineAITools)
+from fnv_mcp import fnv_save
+from fnv_mcp.fnv_engine_ai import (ENTRY_POINTS, FORMULA_ARGS, EngineAITools)
 
 
 # ------------------------------------------------------------------------------------------- save writer (test only)

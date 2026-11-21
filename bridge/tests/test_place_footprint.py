@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_create  # noqa: E402
+from fnv_mcp import fnv_create  # noqa: E402
 
 BASE, REF = 0x5000, 0x99
 SHACK = (-316, -397, -279, 316, 397, 279)     # WoodShack01 OBND: origin at the centre

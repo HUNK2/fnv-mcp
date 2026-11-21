@@ -4,7 +4,7 @@ name = "fnv-mcp"
 version = "0.5.0b1"
 description = "MCP tools for Fallout: New Vegas: the running game, the engine and the GECK"
 requires-python = ">=3.12"
-# Used directly by geck_mcp (the rest come with mcp); requirements.lock.txt pins the whole tree, generated on
+# Used directly by fnv_mcp (the rest come with mcp); requirements.lock.txt pins the whole tree, generated on
 # Windows. There is no build system or entry point: run from a clone with `python run_mcp.py` (Task 5.2).
 dependencies = ["mcp==2.2.0", "pydantic==2.13.5", "anyio==4.15.1", "pillow==12.3.0", "numpy==2.5.3"]
 

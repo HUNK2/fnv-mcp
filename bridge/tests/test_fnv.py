@@ -17,9 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from engine_map import commands, demangle, generate, headers, source  # noqa: E402
-from geck_mcp import fnv_crash, fnv_engine  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
-from geck_mcp.fnv_tools import FNV_TOOLS, FnvService  # noqa: E402
+from fnv_mcp import fnv_crash, fnv_engine  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
+from fnv_mcp.fnv_tools import FNV_TOOLS, FnvService  # noqa: E402
 
 ACTOR_CPP = textwrap.dedent('''\
     #include "Actor.h"
@@ -227,6 +227,18 @@ class EngineQueryTests(FnvTestBase):
         self.assertTrue(code['exactExtent'])
         self.assertEqual(code['firstLine'], 3)   # starts at the marker
         self.assertIn('"}"', code['code'])
+
+    def test_cut_code_names_the_next_offset(self):
+        whole = self.engine.code(0x401000)
+        first = self.engine.code(0x401000, max_lines=2)
+        self.assertTrue(first['truncated'])
+        self.assertEqual(first['next'], 2)
+        self.assertIn('offset=2', first['truncatedNote'])
+        rest = self.engine.code(0x401000, max_lines=400, offset=2)
+        self.assertEqual(rest['firstLine'], 5)
+        self.assertFalse(rest['truncated'])
+        self.assertNotIn('next', rest)
+        self.assertEqual(first['code'].splitlines() + rest['code'].splitlines(), whole['code'].splitlines())
 
     def test_graph_and_symbolize(self):
         callers, _ = self.engine.walk(0x401100, 'callers')

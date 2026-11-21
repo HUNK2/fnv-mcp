@@ -23,7 +23,7 @@ Lint: `python -m ruff check .` from `bridge` (the rules are in `bridge/pyproject
 - Write the test first, and see it fail for the reason you expect.
 - Follow [FNV-TOOL-CONVENTIONS.md](bridge/docs/FNV-TOOL-CONVENTIONS.md): answers are envelopes, every refusal has a
   code and a sentence that says what to do, and act tools are journaled so they can be undone.
-- Engine addresses, offsets and layouts go in `bridge/geck_mcp/fnv_facts.py` with the evidence for each (conventions
+- Engine addresses, offsets and layouts go in `bridge/fnv_mcp/fnv_facts.py` with the evidence for each (conventions
   rule 6). Many modules still write addresses inline; when you change such a module, move the addresses you touch.
 - New tools or new actions on a tool need an issue first: the tool count is being reduced, so additions are
   discussed before they are written.

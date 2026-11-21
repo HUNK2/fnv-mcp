@@ -3,9 +3,9 @@ menus and the scenario runner's agent steps."""
 import struct
 import unittest
 
-from geck_mcp import fnv_agent
-from geck_mcp.fnv_agent import AgentTools, crash_signature, layout_args, parse_signature, param_kind
-from geck_mcp.fnv_scenario import ScenarioRunner
+from fnv_mcp import fnv_agent
+from fnv_mcp.fnv_agent import AgentTools, crash_signature, layout_args, parse_signature, param_kind
+from fnv_mcp.fnv_scenario import ScenarioRunner
 
 
 class Signatures(unittest.TestCase):

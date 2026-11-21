@@ -1,7 +1,7 @@
 """Subrecord-level diff of two plugins: python3 tools/esp_diff.py A.esp B.esp"""
 import sys
 sys.path.insert(0, '.')
-from geck_mcp.esp import codec
+from fnv_mcp.esp import codec
 def load(p):
     out = {}
     for rec, _ in codec.iter_records(open(p, 'rb').read()):

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_create  # noqa: E402
+from fnv_mcp import fnv_create  # noqa: E402
 from test_p1_place_surface import PlaneRays  # noqa: E402
 
 GROUND = 4314.0

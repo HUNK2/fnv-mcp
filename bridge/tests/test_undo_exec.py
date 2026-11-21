@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
 
-PACKAGE = Path(__file__).resolve().parents[1] / 'geck_mcp'
+PACKAGE = Path(__file__).resolve().parents[1] / 'fnv_mcp'
 
 
 class UndoExecutorTests(unittest.TestCase):
@@ -63,7 +63,7 @@ class UndoExecutorTests(unittest.TestCase):
         self.assertTrue(self.live.journal.get(e['id'])['undone'])
 
     def test_registry_covers_every_op_written(self):
-        from geck_mcp.fnv_live import UNDO_OPS
+        from fnv_mcp.fnv_live import UNDO_OPS
         written = set()
         for path in PACKAGE.rglob('*.py'):
             written |= set(re.findall(r"""['"]op['"]:\s*['"]([a-z_]+)['"]""", path.read_text(encoding='utf-8')))

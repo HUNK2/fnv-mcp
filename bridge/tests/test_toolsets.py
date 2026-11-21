@@ -17,15 +17,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
-from geck_mcp import server as server_module  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
-from geck_mcp.fnv_guide import GuideTools, tool_table  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
-from geck_mcp.toolsets import ALWAYS, DEFAULT_TOOLSETS, toolset_of  # noqa: E402
+from fnv_mcp import server as server_module  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
+from fnv_mcp.fnv_guide import GuideTools, tool_table  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
+from fnv_mcp.toolsets import ALWAYS, DEFAULT_TOOLSETS, toolset_of  # noqa: E402
 import project_fixture  # noqa: E402
 
 
 class ToolsetOfTests(unittest.TestCase):
+    def test_core_holds_the_five_most_used(self):
+        # The five tools that made 66% of 4,228 real calls (critique 2026-11-21).
+        from fnv_mcp.toolsets import CORE_TOOLS
+        for name in ('fnv_native', 'fnv_func', 'fnv_input', 'fnv_console', 'fnv_mem_read'):
+            self.assertIn(name, CORE_TOOLS)
+
     def test_families(self):
         self.assertEqual(toolset_of('fnv_ref'), 'game')
         self.assertEqual(toolset_of('fnv_func'), 'game')

@@ -1,7 +1,7 @@
 # Conventions for the action-style fnv_* tools
 
 New fnv tools are named `fnv_<domain>` and take an `action` argument: `fnv_warnings(action="read", ...)`. One tool
-carries many actions. This keeps the tool list short. The helpers are in `geck_mcp/fnv_conv.py`.
+carries many actions. This keeps the tool list short. The helpers are in `fnv_mcp/fnv_conv.py`.
 
 ## The rules
 
@@ -69,6 +69,6 @@ class DoorTools:
 In `fnv_live_tools.py`, add the tool to `FNV_LIVE_TOOLS` and register it with one `@server.tool`, then call
 `invoke('fnv_door', lambda: tools.run(action, ...), 'read')`. Use `'act'` or `'control'` for actions that change
 things. Give the tool a docstring that names every action in one sentence each. Add a fake-host test and an entry
-in `geck_mcp/tool_examples.py` (its group, an example call, one line per action), then run
+in `fnv_mcp/tool_examples.py` (its group, an example call, one line per action), then run
 `tools/gen_tool_docs.py` to write `docs/TOOLS.md` again. If the new tool solves a common problem, mention it in a guide
-(`geck_mcp/guides/`) so that `fnv_guide` can point to it.
+(`fnv_mcp/guides/`) so that `fnv_guide` can point to it.

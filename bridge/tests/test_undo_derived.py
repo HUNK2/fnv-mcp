@@ -18,7 +18,7 @@ RNG = 0x00800000
 class PoseTests(unittest.TestCase):
     def test_nudge_undo_then_list_shows_game_pose(self):
         from test_fnv_create import FakeLive as CreateLive
-        from geck_mcp.fnv_create import PlaceTools
+        from fnv_mcp.fnv_create import PlaceTools
         with tempfile.TemporaryDirectory() as d:
             live = CreateLive(d)
             place = PlaceTools(live)
@@ -30,7 +30,7 @@ class PoseTests(unittest.TestCase):
 
     def test_pose_stored_unrounded_list_rounds(self):
         from test_fnv_create import FakeLive as CreateLive
-        from geck_mcp.fnv_create import PlaceTools
+        from fnv_mcp.fnv_create import PlaceTools
         with tempfile.TemporaryDirectory() as d:
             live = CreateLive(d)
             place = PlaceTools(live)
@@ -42,7 +42,7 @@ class PoseTests(unittest.TestCase):
 class FormDeleteTests(unittest.TestCase):
     def test_form_delete_hides_create_from_export(self):
         from test_fnv_create import FakeLive as CreateLive
-        from geck_mcp.fnv_create import AuthorTools, FormTools
+        from fnv_mcp.fnv_create import AuthorTools, FormTools
         with tempfile.TemporaryDirectory() as d:
             live = CreateLive(d)
             create = live.journal.add({'kind': 'form_create', 'formId': 'FF000801', 'type': 'MISC', 'undo': None})
@@ -81,7 +81,7 @@ class ExecutorDerivedTests(unittest.TestCase):
         self.fake.link._op = op
 
     def test_probe_undo_removes_stubs(self):
-        from geck_mcp.fnv_probe import ProbeTools
+        from fnv_mcp.fnv_probe import ProbeTools
         probes = ProbeTools(self.live)
         probes._save('probe_session.json', {'armed': True, 'pid': 4242})
         e = self.live.journal.add({'kind': 'probe', 'undo': {'op': 'probe_remove'}})
@@ -107,7 +107,7 @@ class ExecutorDerivedTests(unittest.TestCase):
         self.assertNotIn(['dbg', 'clear', 'f'], self.sent)
 
     def test_rng_undo_restores_index(self):
-        from geck_mcp.fnv_agent import AgentTools
+        from fnv_mcp.fnv_agent import AgentTools
         link = self.fake.link
         old_state = bytes(range(256)) * 9 + bytes(2496 - 256 * 9)
         link.put(RNG, b'\0' * 8 + old_state)
@@ -121,7 +121,7 @@ class ExecutorDerivedTests(unittest.TestCase):
         self.assertEqual(link.get(RNG + 0x9C8, 4), struct.pack('<I', 17))
 
     def test_swap_undo_out_of_order_refused(self):
-        from geck_mcp import fnv_data
+        from fnv_mcp import fnv_data
         swaps = []
         self.addCleanup(setattr, fnv_data, 'swap_script_code', fnv_data.swap_script_code)
         fnv_data.swap_script_code = lambda live, target, holder: swaps.append((target, holder))

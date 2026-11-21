@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_link, fnv_plugin_build  # noqa: E402
+from fnv_mcp import fnv_link, fnv_plugin_build  # noqa: E402
 
 DOC = Path(__file__).resolve().parents[1] / 'docs' / 'FNV-MCP-SETUP.md'
 

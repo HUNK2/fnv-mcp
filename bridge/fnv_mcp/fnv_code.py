@@ -241,9 +241,7 @@ class CodeTools:
         obj = folder / 'unit.obj'
         if obj.exists():
             obj.unlink()
-        cmd = [sys.executable, str(self.decomp / 'tools' / 'msvc.py'), '--compiler', unit['compiler'], '/c', '/nologo'] \
-            + list(unit['flags']) + ['/I' + str(self.decomp / 'include'),
-                                     '/I' + str(Path(meta['original']).parent), meta['copy'], '/Fo' + str(obj)]
+        cmd = self._compile_cmd(self.decomp, unit, meta, obj)
         result = subprocess.run(cmd, cwd=str(self.decomp), capture_output=True, text=True, errors='replace',
                                 timeout=300)
         if result.returncode or not obj.exists():
@@ -261,6 +259,15 @@ class CodeTools:
             size=link['size'], originalSize=spec['size'], relocations=len(link['relocs']),
             copiedSections=link['copied'], unresolved=link['unresolved'] or None, refused=link['refused'] or None,
             diff=self._diff(meta))
+
+    @staticmethod
+    def _compile_cmd(decomp, unit, meta, obj):
+        """The compiler call for the copy. The copy lives in the bridge state, not next to its unit, so the unit's own
+        folder comes first: a quoted #include "Actor.h" must find src/.../Actor.h before include/Actor.h, a different
+        header of the same name (bug found 2026-11-18 on playercharacter.cpp)."""
+        return [sys.executable, str(decomp / 'tools' / 'msvc.py'), '--compiler', unit['compiler'], '/c', '/nologo'] \
+            + list(unit['flags']) + ['/I' + str(Path(meta['original']).parent), '/I' + str(decomp / 'include'),
+                                     meta['copy'], '/Fo' + str(obj)]
 
     def _link(self, obj, unit, spec):
         coff = self.coff_class()(obj)

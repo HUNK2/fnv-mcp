@@ -1,4 +1,4 @@
-"""The stdio supervisor (geck_mcp/supervisor.py): code reloads reach the client without a reconnect.
+"""The stdio supervisor (fnv_mcp/supervisor.py): code reloads reach the client without a reconnect.
 
 A small fake server reads its tool name from name.txt; the tests change that file and check that the client is
 told (handshake era: notifications/tools/list_changed; 2026-07-28 era: a subscriptions/listen event) and then
@@ -52,7 +52,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         (self.dir / 'server.py').write_text(FAKE_SERVER)
         (self.dir / 'name.txt').write_text('first_tool')
         launcher = Path(self.tmp.name) / 'launch.py'
-        launcher.write_text(LAUNCHER.format(supervisor=str(ROOT / 'geck_mcp' / 'supervisor.py'),
+        launcher.write_text(LAUNCHER.format(supervisor=str(ROOT / 'fnv_mcp' / 'supervisor.py'),
                                             server=str(self.dir / 'server.py'), watch=str(self.dir)))
         self.params = StdioServerParameters(command=sys.executable, args=[str(launcher)], cwd=str(ROOT))
 
@@ -131,7 +131,7 @@ BUSY_CHILD = textwrap.dedent('''
     import json, os, sys, threading, time
     from pathlib import Path
     sys.path.insert(0, {root!r})
-    from geck_mcp import busy
+    from fnv_mcp import busy
     here = Path(__file__).parent
     WORK = float(os.environ.get('WORK', '3'))
     workers = []
@@ -166,7 +166,7 @@ class BusyReloadTests(unittest.TestCase):                    # R4
         self.watched = self.dir / 'watched'
         self.watched.mkdir()
         (self.watched / 'code.py').write_text('v = 1\n')
-        spec = importlib.util.spec_from_file_location('geck_supervisor_busy', ROOT / 'geck_mcp' / 'supervisor.py')
+        spec = importlib.util.spec_from_file_location('geck_supervisor_busy', ROOT / 'fnv_mcp' / 'supervisor.py')
         self.sup_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.sup_mod)
         self.sup_mod.LOG_FILE = self.dir / 'supervisor.log'
@@ -263,7 +263,7 @@ class BusyFileTests(unittest.TestCase):
     def test_track_and_count(self):
         import os
         sys.path.insert(0, str(ROOT))
-        from geck_mcp import busy
+        from fnv_mcp import busy
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'busy.json'
             os.environ['GECK_MCP_BUSY_FILE'] = str(path)
@@ -288,7 +288,7 @@ class BusyFileTests(unittest.TestCase):
         import os
         import threading
         sys.path.insert(0, str(ROOT))
-        from geck_mcp import busy
+        from fnv_mcp import busy
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'busy.json'
             os.environ['GECK_MCP_BUSY_FILE'] = str(path)

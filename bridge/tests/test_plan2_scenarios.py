@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from geck_mcp import fnv_blame, fnv_deep, fnv_scenario, fnv_scriptdbg
-from geck_mcp.fnv_data import DataTools
-from geck_mcp.fnv_live import LiveError, LiveService
+from fnv_mcp import fnv_blame, fnv_deep, fnv_scenario, fnv_scriptdbg
+from fnv_mcp.fnv_data import DataTools
+from fnv_mcp.fnv_live import LiveError, LiveService
 
 SOURCE = '\n'.join([
     'scn HelloBugQuestScript',      # 1  statement 1
@@ -172,7 +172,7 @@ class HeldFaults(unittest.TestCase):
 
 class ModFolders(unittest.TestCase):
     def test_enabled_mods_and_the_plugins_own_folder_are_asset_roots(self):
-        from geck_mcp.authoring import Authoring
+        from fnv_mcp.authoring import Authoring
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for mod in ('HelloS6', 'Other', 'Disabled'):

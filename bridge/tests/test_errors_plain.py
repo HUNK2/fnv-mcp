@@ -13,12 +13,12 @@ from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_game  # noqa: E402
-from geck_mcp.fnv_conv import ConvError, nearest  # noqa: E402
-from geck_mcp.fnv_link import LinkError  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
-from geck_mcp.fnv_pred import PREDICATE_EXAMPLES, compile_predicate  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp import fnv_game  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError, nearest  # noqa: E402
+from fnv_mcp.fnv_link import LinkError  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp.fnv_pred import PREDICATE_EXAMPLES, compile_predicate  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 # The exceptions the transcripts showed reaching the agent as FNV_ERROR with a Python message.
 SEEN = [Exception('SQLite objects created in a thread can only be used in that same thread'),
@@ -50,7 +50,7 @@ class InternalErrorTests(unittest.TestCase):
 
     def test_no_exception_text_reaches_the_agent(self):
         for error in SEEN:
-            with self.assertLogs('geck_mcp', level='ERROR'):
+            with self.assertLogs('fnv_mcp', level='ERROR'):
                 r = self.live.run('fnv_record', raising(error))
             self.assertEqual(r['error']['code'], 'INTERNAL_ERROR', error)
             message = r['error']['message']
@@ -59,7 +59,7 @@ class InternalErrorTests(unittest.TestCase):
             self.assertIn('changed nothing', r['error']['recovery'])
 
     def test_an_act_bug_points_at_the_journal(self):
-        with self.assertLogs('geck_mcp', level='ERROR'):
+        with self.assertLogs('fnv_mcp', level='ERROR'):
             r = self.live.run('fnv_place', raising(KeyError('pose')), kind='act')
         self.assertEqual(r['error']['code'], 'INTERNAL_ERROR')
         self.assertEqual(r['outcome'], 'outcome_unknown')
@@ -71,17 +71,17 @@ class InternalErrorTests(unittest.TestCase):
         self.assertIn('radius must be 1 to 10000', r['error']['message'])
 
     def test_offline_and_spec_envelopes(self):
-        from geck_mcp.fnv_tools import FnvService
+        from fnv_mcp.fnv_tools import FnvService
         fixture = project_fixture.ProjectFixture()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
-        with self.assertLogs('geck_mcp', level='ERROR'):
+        with self.assertLogs('fnv_mcp', level='ERROR'):
             r = FnvService(fixture.p).run('fnv_func', raising(KeyError('x')))
         self.assertEqual(r['error']['code'], 'INTERNAL_ERROR')
-        from geck_mcp import fnv_spec
+        from fnv_mcp import fnv_spec
         service = fnv_spec.SpecTools(fixture.p)
         with mock.patch.object(service, 'validate', raising(AttributeError('nope'))), \
-                self.assertLogs('geck_mcp', level='ERROR'):
+                self.assertLogs('fnv_mcp', level='ERROR'):
             r = service.run('validate')
         self.assertEqual(r['error']['code'], 'INTERNAL_ERROR')
         self.assertNotIn('nope', r['error']['message'])
@@ -97,7 +97,7 @@ class ServerInternalErrorTests(unittest.IsolatedAsyncioTestCase):
         @server.tool()
         async def fnv_boom() -> str:
             raise KeyError('secret detail')
-        with self.assertLogs('geck_mcp', level='ERROR'):
+        with self.assertLogs('fnv_mcp', level='ERROR'):
             async with Client(server) as client:
                 result = await client.call_tool('fnv_boom', {})
         self.assertTrue(result.is_error)
@@ -171,7 +171,7 @@ class DidYouMeanTests(unittest.TestCase):
         self.assertIn('Did you mean DocMitchell', str(caught.exception))
 
     def test_unknown_function_name(self):
-        from geck_mcp.fnv_engine import EngineMap, EngineMapError
+        from fnv_mcp.fnv_engine import EngineMap, EngineMapError
         engine = EngineMap.__new__(EngineMap)
         engine.functions = {0x401000: {'name': 'Actor::GetLevel', 'status': 'proven'}}
         engine.by_name = {'actor::getlevel': {0x401000}, 'getlevel': {0x401000}}
@@ -180,7 +180,7 @@ class DidYouMeanTests(unittest.TestCase):
         self.assertIn('Did you mean Actor::GetLevel', str(caught.exception))
 
     def test_unknown_global(self):
-        from geck_mcp.fnv_world import did_you_mean_global
+        from fnv_mcp.fnv_world import did_you_mean_global
         self.assertIn('Did you mean GameHour', did_you_mean_global('GameHur', ['GameHour', 'GameDay']))
 
 
@@ -273,7 +273,7 @@ class SchemaRefusalTests(unittest.IsolatedAsyncioTestCase):
     and a link); now INVALID_ARGUMENT names the parameter, the bound and the value in plain words."""
 
     async def test_out_of_range_is_plain_invalid_argument(self):
-        from geck_mcp.server import schema_problems
+        from fnv_mcp.server import schema_problems
         fixture = project_fixture.ProjectFixture()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)

@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp import fnv_game  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp import fnv_game  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 PER_CALL_SECONDS = 60
 UNCODED = ('FNV_ERROR', 'BRIDGE_ERROR', 'INTERNAL_ERROR', 'TOOL_ERROR')
@@ -124,7 +124,7 @@ class EscapedErrorTests(unittest.IsolatedAsyncioTestCase):
     """A refusal that escapes a tool keeps its code and sentence; a crash is INTERNAL_ERROR with no detail."""
 
     async def test_codes(self):
-        from geck_mcp.server import BridgeServer
+        from fnv_mcp.server import BridgeServer
 
         class BridgeError(Exception):
             def __init__(self, code, message, uncertain=False):

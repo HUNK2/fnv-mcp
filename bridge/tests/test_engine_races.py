@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine_host import StopHost, StopTestCase, build, hexint, needs_zig  # noqa: E402
-from geck_mcp import fnv_link  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
 
 SEAM = ('FNVMCP_TEST_SEAM',)
 BP_TARGET_RESULT = 12   # bp_target(a, 5) = bp_callee() + 5 = 12 for every a

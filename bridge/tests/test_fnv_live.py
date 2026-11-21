@@ -15,10 +15,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_deep, fnv_game, fnv_link, fnv_scenario  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
-from geck_mcp.fnv_facts import FACTS  # noqa: E402
-from geck_mcp.fnv_live import LiveService  # noqa: E402
+from fnv_mcp import fnv_deep, fnv_game, fnv_link, fnv_scenario  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
+from fnv_mcp.fnv_facts import FACTS  # noqa: E402
+from fnv_mcp.fnv_live import LiveService  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
 from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
@@ -168,7 +168,7 @@ class LiveServiceTests(GameHelperTests):
         return live, link
 
     def test_act_calls_are_reported_busy(self):          # R4: the supervisor waits for them before a reload
-        from geck_mcp import busy
+        from fnv_mcp import busy
         live, link = self.live('full')
         path = Path(self.tmp.name) / 'busy.json'
         seen = {}
@@ -288,7 +288,7 @@ class DeepToolTests(unittest.TestCase):
         self.assertEqual(hit['flags'], ['critical', 'sneak_attack_critical'])
 
     def test_shutdown_crash(self):
-        from geck_mcp import fnv_crash
+        from fnv_mcp import fnv_crash
         self.assertTrue(fnv_crash.during_shutdown({'calltrace': [{'symbol': 'execute_onexit_table+0x71'},
                                                                  {'symbol': 'ExitProcess+0x13'}]}))
         self.assertFalse(fnv_crash.during_shutdown({'calltrace': [{'symbol': 'TESContainer::IsGold'}]}))
@@ -326,7 +326,7 @@ class DataToolTests(unittest.TestCase):
         return b'TES4' + struct.pack('<IIIIHH', len(header), 0, 0, 0, 15, 0) + header + group + group2
 
     def test_scan_and_read(self):
-        from geck_mcp import fnv_data
+        from fnv_mcp import fnv_data
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'Test.esp'
             path.write_bytes(self.plugin())
@@ -342,7 +342,7 @@ class DataToolTests(unittest.TestCase):
             self.assertEqual(fnv_data.plugin_masters(path), ['FalloutNV.esm'])
 
     def test_lint(self):
-        from geck_mcp import fnv_data
+        from fnv_mcp import fnv_data
 
         class Engine:
             commands = [{'name': 'PlaceAtMe', 'source': 'vanilla', 'params': [{'type': 'ObjectID', 'optional': False},
@@ -365,7 +365,7 @@ class DataToolTests(unittest.TestCase):
         self.assertFalse(report['ok'])
 
     def test_setup_check_on_an_empty_machine(self):
-        from geck_mcp import fnv_setup
+        from fnv_mcp import fnv_setup
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as folder:
             fnv = SimpleNamespace(mo2_root=folder, mo2_profile='Dev', mo2_executable='NVSE', zig=None,
@@ -382,7 +382,7 @@ class DataToolTests(unittest.TestCase):
         self.assertTrue(all(c['fix'] for c in report['checks'] if c['state'] != 'ok'))
 
     def test_crash_log_without_symbols(self):
-        from geck_mcp import fnv_crash
+        from fnv_mcp import fnv_crash
         parsed = {'format': 'yvile5', 'modules': [], 'calltrace': [
             {'module': '-\\(°_o)/-', 'address': 0x10AA55A6, 'symbol': '(Corrupt stack or heap?)'}]}
         frame = fnv_crash.resolve_frames(parsed)[0]
@@ -549,7 +549,7 @@ class CompanionPipeTests(unittest.TestCase):
     def test_int3_probes_and_watchpoints(self):
         # N7: an int3 probe on a 4-byte getter reached only through a function pointer (count, caller, the same
         # result, budget self-disarm, restore), and a hardware write watchpoint naming the function that wrote.
-        from geck_mcp import fnv_probe
+        from fnv_mcp import fnv_probe
         t, w = self.targets, fnv_link.word
         call = lambda k, *args: int(self.link.one('call', w(t[k]), 'i', *args)['eax'], 16)
         expected = call('ptrCaller', '0', '0', w(t['self']))
@@ -604,7 +604,7 @@ class CompanionPipeTests(unittest.TestCase):
     def test_probes(self):
         # Mass probes: entry jumps, a vtable slot and a call site for a 3-byte getter, counts, caller tables,
         # samples with results (int and float), sampling one in N, disarm and re-arm.
-        from geck_mcp import fnv_probe
+        from fnv_mcp import fnv_probe
         t, w = self.targets, fnv_link.word
         before = self.link.one('probe', 'info')
         if not before.get('ok'):

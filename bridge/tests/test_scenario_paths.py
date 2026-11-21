@@ -9,9 +9,9 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import action_params  # noqa: E402
-from geck_mcp.fnv_scenario import ScenarioError, ScenarioRunner  # noqa: E402
-from geck_mcp.safe_paths import EXAMPLES_DIR, read_roots  # noqa: E402
+from fnv_mcp import action_params  # noqa: E402
+from fnv_mcp.fnv_scenario import ScenarioError, ScenarioRunner  # noqa: E402
+from fnv_mcp.safe_paths import EXAMPLES_DIR, read_roots  # noqa: E402
 
 
 def runner(tests_dir=None, state=None):

@@ -8,7 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
 from test_stab_s6a import _flow  # noqa: E402
 
 
@@ -92,7 +92,7 @@ class ThawGuardTests(unittest.TestCase):
             def resume_all(self, tids):
                 test.resumed.extend(tids)
                 return list(tids)
-        from geck_mcp import fnv_procmem
+        from fnv_mcp import fnv_procmem
         p = mock.patch.object(fnv_procmem, 'GameProcess', Proc)
         p.start()
         self.addCleanup(p.stop)
@@ -138,7 +138,7 @@ class BreakNumberTests(unittest.TestCase):
 class HookNoteTests(unittest.TestCase):
     def test_m6_old_companion_note_has_no_none(self):
         from types import SimpleNamespace
-        from geck_mcp.fnv_control import ControlTools
+        from fnv_mcp.fnv_control import ControlTools
         hook = {'id': 4, 'label': 'act:00500000', 'target': '0x00500000', 'calls': 1, 'action': 3,
                 'actionValue': '0x00000007', 'actionHits': 3}
         deep = SimpleNamespace(hook=lambda label: hook, records=lambda h, since, limit=4096: (1, [], 0))

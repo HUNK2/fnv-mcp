@@ -18,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from geck_mcp import fnv_plugin_build  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp import fnv_plugin_build  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 BRIDGE = Path(__file__).resolve().parents[1]
 EXAMPLE = BRIDGE / 'projects' / 'example-fnv.json'
@@ -56,7 +56,7 @@ class ReadmeCountTests(unittest.TestCase):
 
     def test_the_readme_counts_match_the_server(self):
         import re
-        from geck_mcp.server import server_capabilities
+        from fnv_mcp.server import server_capabilities
         text = (BRIDGE.parent / 'README.md').read_text(encoding='utf-8')
         block = re.search(r'<!-- counts -->(.*?)<!-- /counts -->', text, re.S).group(1)
         numbers = [int(n) for n in re.findall(r'\d+', block)]

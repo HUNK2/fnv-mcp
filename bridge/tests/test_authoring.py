@@ -10,10 +10,10 @@ import unittest
 
 from mcp import Client
 
-from geck_mcp.config import Project
-from geck_mcp.esp import build as builder
-from geck_mcp.fnv_spec import SpecTools
-from geck_mcp.server import make_server
+from fnv_mcp.config import Project
+from fnv_mcp.esp import build as builder
+from fnv_mcp.fnv_spec import SpecTools
+from fnv_mcp.server import make_server
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 # Frozen copy of the original 13-reference CoolWorld spec; the live project spec keeps evolving.

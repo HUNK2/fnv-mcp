@@ -12,9 +12,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_code import DIR32, REL32, CodeTools  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_plugin_build import PluginTools  # noqa: E402
+from fnv_mcp.fnv_code import DIR32, REL32, CodeTools  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_plugin_build import PluginTools  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
 from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
@@ -53,6 +53,20 @@ class RangeAndRelocTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<I', out, 11)[0], 0x1000000C)
 
 
+class IncludeOrderTests(unittest.TestCase):
+    def test_unit_folder_before_include(self):
+        """The copy lives in the bridge state, so a quoted #include "Actor.h" must find the unit's own header next to
+        the original before decomp/include, which has other headers of the same names (2026-11-18: Load3D in
+        playercharacter.cpp failed with hundreds of errors)."""
+        decomp = Path('C:/decomp')
+        cmd = CodeTools._compile_cmd(decomp, {'compiler': 'sp1', 'flags': ['/MT']},
+                                     {'original': str(decomp / 'src/fallout/ai/playercharacter.cpp'),
+                                      'copy': 'C:/state/copy.cpp'}, Path('C:/state/unit.obj'))
+        includes = [a for a in cmd if a.startswith('/I')]
+        self.assertEqual(includes, ['/I' + str(decomp / 'src/fallout/ai'), '/I' + str(decomp / 'include')])
+        self.assertLess(cmd.index('/MT'), cmd.index(includes[0]))
+
+
 def live_for(tmp, resolve):
     engine = SimpleNamespace(resolve=resolve)
     project = SimpleNamespace(state_dir=tmp, fnv=SimpleNamespace(decomp_root=str(DECOMP), mo2_root=tmp,
@@ -82,6 +96,15 @@ class OfflineBuildTests(unittest.TestCase):
             self.assertIn('float result = base;', (DECOMP / 'src/fallout_shared/aiformulas.cpp').read_text())
 
 
+    def test_unit_with_same_named_header_builds(self):
+        """PlayerCharacter::Load3D: playercharacter.cpp includes "PlayerCharacter.h", which also exists in include/."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = CodeTools(live_for(tmp, lambda n: 0x0094E1D0))
+            tools.checkout('0x0094E1D0')
+            built = tools.build('0x0094E1D0')
+            self.assertEqual(built['size'], built['originalSize'])
+
+
 @needs_zig
 class PluginBuildTests(unittest.TestCase):
     def test_scaffold_builds_as_a_standalone_plugin(self):
@@ -103,7 +126,7 @@ class PluginSharingNoteTests(unittest.TestCase):
     local use only."""
 
     def test_install_and_description_say_local_use(self):
-        from geck_mcp import fnv_plugin_build
+        from fnv_mcp import fnv_plugin_build
         self.assertIn('local use', fnv_plugin_build.SHARING_NOTE.lower())
         with tempfile.TemporaryDirectory() as tmp:
             live = live_for(tmp, lambda n: 0x00401000)
@@ -114,7 +137,7 @@ class PluginSharingNoteTests(unittest.TestCase):
             (folder / 'my_plugin.dll').write_bytes(b'MZ')
             out = tools.install('my plugin')
             self.assertEqual(out.get('note'), fnv_plugin_build.SHARING_NOTE)
-        from geck_mcp import fnv_live_tools
+        from fnv_mcp import fnv_live_tools
         import inspect
         self.assertIn(fnv_plugin_build.SHARING_NOTE.split('.')[0], ' '.join(inspect.getsource(fnv_live_tools).split()))
 
@@ -122,7 +145,7 @@ class PluginSharingNoteTests(unittest.TestCase):
 class CompanionHashTests(unittest.TestCase):
     def test_every_engine_source_is_in_the_build_hash(self):
         # A C file left out of the hash let a change reuse a stale build (seen with w5_code.c).
-        from geck_mcp import fnv_link
+        from fnv_mcp import fnv_link
         names = set(fnv_link.source_hashes())
         engine = {'engine/%s' % p.name for p in (fnv_link.NATIVE / 'engine').glob('*.c')}
         self.assertTrue(engine <= names, engine - names)

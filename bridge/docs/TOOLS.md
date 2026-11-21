@@ -520,7 +520,7 @@ Cast a ray through the game's Havok world (the engine's own TES::Pick): from sta
 | `from_ref` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `to_ref` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `layer` | string | `line_of_sight`, `path_pick`, `projectile` | `"line_of_sight"` | Which collision test to use: line_of_sight (default), path_pick or projectile. |
-| `ground_at` | object |  |  | Object with x and y in game units; instead of casting a ray, return the terrain height at that point. |
+| `ground_at` | object |  |  | Object with x and y in game units; instead of your ray, cast one straight down there and return the ground height (terrainHeight when it hits the landscape, onRef when an object is on top). |
 
 Example:
 
@@ -1432,7 +1432,7 @@ Example:
 
 **Kind:** read · **Toolset:** game
 
-list (default): every change made through the act tools (memory writes, engine calls, settings, console lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default 100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the largest answers (limit rows each, default 10).
+list (default): every change made through the act tools (memory writes, engine calls, settings, console lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default 100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the largest answers (limit rows each, default 10), and the tools never called in that range.
 
 **Actions:**
 
@@ -2702,7 +2702,7 @@ Fallout: New Vegas 1.4.0.525 engine functions. find (default): mode=name matches
 | `mode` | string | `auto`, `name`, `code`, `regex`, `address` | `"auto"` | For action=find: auto, name, code, regex or address search. |
 | `status` | string[] | each: `proven`, `class_proven`, `probable`, `decomp`, `rejected`, `unnamed` |  | For action=find: keep only these proof statuses (proven, class_proven, probable, decomp, unnamed). |
 | `limit` | integer | 1 to 200 | `25` | For find, callers, callees and strings: maximum number of functions returned. |
-| `offset` | integer | 0 to 100000 | `0` | For find and strings: how many results to skip, for paging. |
+| `offset` | integer | 0 to 100000 | `0` | For find and strings: how many results to skip, for paging. For code: the first source line returned (0 is the start; a cut answer gives next). |
 | `depth` | integer | 1 to 4 | `1` | For callers and callees: how many call levels to walk, 1 to 4. |
 | `max_lines` | integer | 10 to 3000 | `400` | For action=code: maximum number of source lines returned. Default 400. |
 
@@ -3093,8 +3093,8 @@ C code running inside the game. headers functions=[names] classes=[names]: the m
 - `unload`: Remove its hooks, put writes back and free the DLL.
 - `reload`: Unload, rebuild and load again.
 - `call`: Call an exported function of a loaded module on the main thread.
-- `log`: What modules logged.
-- `list`: Loaded modules and built DLLs.
+- `log`: What modules logged: the newest lines, or the lines after since.
+- `list`: Loaded modules and the newest build of each module name.
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
@@ -3105,7 +3105,7 @@ C code running inside the game. headers functions=[names] classes=[names]: the m
 | `classes` | string[] | each: up to 200 characters |  | For action=headers: class names whose padded struct layouts are emitted from the symbol database. |
 | `export` | string | up to 100 characters |  | For action=call: name of the exported function in the loaded module to run on the main thread. |
 | `args` | integer \| number[] |  |  | For action=call: numeric arguments (integers or floats) passed to the exported function. |
-| `since` | integer | 0 or more |  | For action=log: return only log lines after this sequence number. Use the next value from the previous call; default 0 is everything. |
+| `since` | integer | 0 or more |  | For action=log: return log lines after this sequence number (at most 500). Use next from the last log answer, or logNext from a load, call or unload; default 0 is the newest 200 lines. |
 
 Example:
 

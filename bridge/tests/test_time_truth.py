@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_game  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp import fnv_game  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
 from test_fnv_time import MULT, TG, TimeTestCase  # noqa: E402
 
 

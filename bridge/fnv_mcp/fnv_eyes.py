@@ -831,8 +831,12 @@ class EyesTools:
         out = {'path': shot['path'], 'size': shot['size'], 'method': shot['method']}
         if label:
             seen = self.look(limit=30)
-            self._label(shot['path'], seen['refs'], shot['size'], seen['camera']['screen'])
-            out['labels'] = [{'formId': r['formId'], 'name': r['name'], 'rect': r['rect']} for r in seen['refs']]
+            sx, sy = self._label(shot['path'], seen['refs'], shot['size'], seen['camera']['screen'])
+            # The refs' rects are in screen pixels; the picture is scaled to size: give them in its pixels.
+            out['labels'] = [{'formId': r['formId'], 'name': r['name'],
+                              'rect': [round(r['rect'][0] * sx), round(r['rect'][1] * sy),
+                                       round(r['rect'][2] * sx), round(r['rect'][3] * sy)]} for r in seen['refs']]
+            out['rectSpace'] = 'image'
         return out
 
     def _photo_ref(self, ref, angles, size, hide_hud, name, distance):
@@ -961,6 +965,7 @@ class EyesTools:
             draw.rectangle(box, outline=(255, 200, 0))
             draw.text((box[0] + 2, box[1] + 2), '%s %s' % (r['formId'], r.get('name') or ''), fill=(255, 255, 0))
         img.save(path)
+        return sx, sy
 
 
 def fnv_hexs(text):

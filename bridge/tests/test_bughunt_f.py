@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_native import NativeTools  # noqa: E402
-from geck_mcp import fnv_inspect, fnv_engine_ai  # noqa: E402
-from geck_mcp.fnv_code import CodeTools  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_native import NativeTools  # noqa: E402
+from fnv_mcp import fnv_inspect, fnv_engine_ai  # noqa: E402
+from fnv_mcp.fnv_code import CodeTools  # noqa: E402
 
 
 class FakeLink:

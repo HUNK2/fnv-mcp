@@ -11,9 +11,9 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_conv, fnv_debugger, fnv_engine, fnv_scriptdbg  # noqa: E402
-from geck_mcp.fnv_deep import SELECTORS  # noqa: E402
-from geck_mcp.fnv_pred import compile_predicate  # noqa: E402
+from fnv_mcp import fnv_conv, fnv_debugger, fnv_engine, fnv_scriptdbg  # noqa: E402
+from fnv_mcp.fnv_deep import SELECTORS  # noqa: E402
+from fnv_mcp.fnv_pred import compile_predicate  # noqa: E402
 from test_fnv_debug import FakeLink  # noqa: E402
 
 EVAL = 0x005E1550

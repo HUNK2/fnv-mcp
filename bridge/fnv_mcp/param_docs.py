@@ -298,7 +298,8 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
               'status': 'For action=find: keep only these proof statuses (proven, class_proven, probable, decomp, '
                         'unnamed).',
               'limit': 'For find, callers, callees and strings: maximum number of functions returned.',
-              'offset': 'For find and strings: how many results to skip, for paging.',
+              'offset': 'For find and strings: how many results to skip, for paging. For code: the first source line '
+                        'returned (0 is the start; a cut answer gives next).',
               'depth': 'For callers and callees: how many call levels to walk, 1 to 4.',
               'max_lines': 'For action=code: maximum number of source lines returned. Default 400.'},
  'fnv_game': {'action': 'launch (start the game and wait until ready), quit, or restart (quit if running, then '
@@ -438,8 +439,9 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                 'export': 'For action=call: name of the exported function in the loaded module to run on the main '
                           'thread.',
                 'args': 'For action=call: numeric arguments (integers or floats) passed to the exported function.',
-                'since': 'For action=log: return only log lines after this sequence number. Use the next value from '
-                         'the previous call; default 0 is everything.'},
+                'since': 'For action=log: return log lines after this sequence number (at most 500). Use next from '
+                         'the last log answer, or logNext from a load, call or unload; default 0 is the newest 200 '
+                         'lines.'},
  'fnv_object': {'action': 'identify (default) says what memory a pointer is in; find lists live objects of a class; '
                           'referrers lists where an address is stored.',
                 'pointer': 'For identify and referrers: the address, as 0x....',
@@ -568,8 +570,9 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
  'fnv_quest': {'action': 'state (default): stages, objectives and script variables; targets: where each objective '
                          'marker points and why one is missing.'},
  'fnv_raycast': {'layer': 'Which collision test to use: line_of_sight (default), path_pick or projectile.',
-                 'ground_at': 'Object with x and y in game units; instead of casting a ray, return the terrain height '
-                              'at that point.'},
+                 'ground_at': 'Object with x and y in game units; instead of your ray, cast one straight down there and '
+                              'return the ground height (terrainHeight when it hits the landscape, onRef when an '
+                              'object is on top).'},
  'fnv_record': {'action': 'show (default) decodes one record; find searches records; users lists what references a '
                           'record.',
                 'query': 'For action=find: EditorID or name substring, form id, or Plugin.esp:LOCALID.',

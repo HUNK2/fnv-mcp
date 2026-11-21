@@ -9,8 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp.fnv_journal import Journal  # noqa: E402
-from geck_mcp.fnv_state import GameIdentity  # noqa: E402
+from fnv_mcp.fnv_journal import Journal  # noqa: E402
+from fnv_mcp.fnv_state import GameIdentity  # noqa: E402
 
 GAME = GameIdentity(4242, 1000)
 OLD = GameIdentity(1111, 500)
@@ -18,8 +18,8 @@ OLD = GameIdentity(1111, 500)
 
 def _append(path, n, tag):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from geck_mcp.fnv_journal import Journal as J
-    from geck_mcp.fnv_state import GameIdentity as G
+    from fnv_mcp.fnv_journal import Journal as J
+    from fnv_mcp.fnv_state import GameIdentity as G
     j = J(Path(path))
     for i in range(n):
         j.add({'kind': 'x', 'tag': tag, 'i': i, 'undo': None}, G(4242, 1000))

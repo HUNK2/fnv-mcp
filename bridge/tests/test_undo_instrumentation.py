@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_time  # noqa: E402
-from geck_mcp.fnv_link import hexs, word  # noqa: E402
+from fnv_mcp import fnv_time  # noqa: E402
+from fnv_mcp.fnv_link import hexs, word  # noqa: E402
 
 
 def install(link, address, label):
@@ -57,7 +57,7 @@ class HookJournalTests(unittest.TestCase):
         self.assertEqual([h['label'] for h in self.fake.link.hooks.values()], ['before the session'])
 
     def test_hooks_remove_is_journaled(self):
-        from geck_mcp.fnv_deep import DeepTools
+        from fnv_mcp.fnv_deep import DeepTools
         install(self.live.link, 0x004E1090, 'damage_log')
         DeepTools(self.live).hooks_tool('remove', 'all')
         removed = [e for e in self.live.journal.entries() if e['kind'] == 'hook_removed']
@@ -75,7 +75,7 @@ class TimeJournalTests(unittest.TestCase):
         link = self.fake.link
         link.put(fnv_time.TIME_GLOBAL, struct.pack('<If', 0, 0.0))
         link.put(fnv_time.MULTIPLIER, struct.pack('<ff', 1.0, 1.0))
-        from geck_mcp.fnv_inject import shared_time
+        from fnv_mcp.fnv_inject import shared_time
         self.control, _ = shared_time(self.live)
         self.control.functions = lambda: {'disable': 0x00AA0000, 'enable': 0x00AA0010, 'clamp': 0x00AA0020}
         real = link._op
@@ -114,7 +114,7 @@ class TimeJournalTests(unittest.TestCase):
 
 class LeveledRollSeedTests(unittest.TestCase):
     def test_leveled_roll_seed_journaled_and_undone(self):
-        from geck_mcp.fnv_agent import AgentTools
+        from fnv_mcp.fnv_agent import AgentTools
         fake = FakeLive()
         self.addCleanup(fake.close)
         live, link = fake.live, fake.link

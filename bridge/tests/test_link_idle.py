@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine_host import StopHost, build, needs_zig  # noqa: E402
-from geck_mcp import fnv_link  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
 
 IDLE = 0.4
 

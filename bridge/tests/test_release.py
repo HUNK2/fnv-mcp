@@ -28,7 +28,7 @@ class ReleaseTests(unittest.TestCase):
             'CHANGELOG.md': b'# Changelog\n\n## fnv-mcp 0.3.0 - unreleased\n',
             'LICENSE': b'Synthetic licence',
             'bridge/pyproject.toml': b'[project]\nversion="0.3.0"\n',
-            'bridge/geck_mcp/__init__.py': b'__version__="0.3.0"\n',
+            'bridge/fnv_mcp/__init__.py': b'__version__="0.3.0"\n',
             'bridge/examples/fnv-tests/a.yaml': b'name: a\n',
             'bridge/examples/q/scripts/Q.gek': b'scn Q\n',
             'bridge/docs/BUG-LOG.md': b'internal',
@@ -63,7 +63,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(prefix, 'fnv-mcp-0.3.0/')
             self.assertEqual(z.read(prefix + 'README.md'), b'# Test')
             self.assertEqual(set(z.namelist()), {prefix + p for p in (
-                'README.md', 'CHANGELOG.md', 'LICENSE', 'bridge/pyproject.toml', 'bridge/geck_mcp/__init__.py',
+                'README.md', 'CHANGELOG.md', 'LICENSE', 'bridge/pyproject.toml', 'bridge/fnv_mcp/__init__.py',
                 'bridge/native/runtime/companion.c', 'bridge/projects/example-windows.json',
                 'bridge/examples/fnv-tests/a.yaml', 'bridge/examples/q/scripts/Q.gek')})
         self.assertEqual(manifest['name'], 'fnv-mcp')
@@ -92,8 +92,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(candidate['fileSha256'], manifest['fileSha256'])
 
     def test_mismatched_versions_refused_before_output(self):
-        (self.repo / 'bridge/geck_mcp/__init__.py').write_text('__version__="9.9.9"\n')
-        self.git('add', 'bridge/geck_mcp/__init__.py')
+        (self.repo / 'bridge/fnv_mcp/__init__.py').write_text('__version__="9.9.9"\n')
+        self.git('add', 'bridge/fnv_mcp/__init__.py')
         self.git('commit', '-qm', 'Synthetic mismatch')
         output = self.root / 'bad.zip'
         with self.assertRaisesRegex(ValueError, 'version markers'):

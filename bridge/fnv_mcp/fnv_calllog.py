@@ -56,7 +56,9 @@ class CallLog:
                 out.append(row)
         return out
 
-    def summary(self, since_seconds=None, limit=10):
+    def summary(self, since_seconds=None, limit=10, known=None):
+        """Calls and failures per tool and code, the slowest and largest answers; with known (the registered tool
+        names), also the tools never called in that range."""
         rows = self.read(since_seconds)
         failed = [r for r in rows if not r.get('ok')]
         per_tool = {}
@@ -74,7 +76,7 @@ class CallLog:
             return [{k: r.get(k) for k in ('t', 'tool', 'action', 'ok', 'code', 'ms', 'size')}
                     for r in sorted(rows, key=lambda r: -(r.get(key) or 0))[:limit]]
         span = 'the last %d s' % since_seconds if since_seconds is not None else 'the log (%d days kept)' % KEEP_DAYS
-        return {'verdict': '%d calls in %s, %d failed' % (len(rows), span, len(failed)),
+        out = {'verdict': '%d calls in %s, %d failed' % (len(rows), span, len(failed)),
                 'reason': None if rows else 'No calls recorded in that range.',
                 'total': len(rows), 'failed': len(failed),
                 'failureRate': round(len(failed) / len(rows), 3) if rows else None,
@@ -84,6 +86,10 @@ class CallLog:
                 'perTool': tools[:max(limit, 1) * 5],
                 'perCode': [{'code': c, 'count': n} for c, n in codes.most_common()],
                 'slowest': top('ms'), 'largest': top('size'), 'path': str(self.path)}
+        if known is not None:
+            never = sorted(set(known) - set(per_tool))
+            out['neverCalled'] = {'count': len(never), 'tools': never[:40]}
+        return out
 
 
 def prune(state_dir, now, days=KEEP_DAYS):

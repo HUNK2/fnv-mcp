@@ -6,9 +6,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from geck_mcp.esp import build, codec, diff
-from geck_mcp.esp.formids import FormIdMap, MasterIndex
-from geck_mcp.esp.records import SpecError
+from fnv_mcp.esp import build, codec, diff
+from fnv_mcp.esp.formids import FormIdMap, MasterIndex
+from fnv_mcp.esp.records import SpecError
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).parent / 'fixtures' / 'plugins'
@@ -132,7 +132,7 @@ class BuildTests(unittest.TestCase):
                          ('ACHR', 'ACRE', 'REFR', 'REFR'))
         placed = [r for r, _ in codec.parse(data).records() if r.type in ('ACHR', 'ACRE')]
         self.assertEqual(sorted(r.type for r in placed), ['ACHR', 'ACRE'])
-        from geck_mcp.esp.validate import validate
+        from fnv_mcp.esp.validate import validate
         self.assertEqual(validate(data, self.index)['errors'], [])
 
     def test_unplaceable_base_is_rejected(self):
@@ -150,7 +150,7 @@ class BuildTests(unittest.TestCase):
         for rec, _ in plugin.records():
             if rec.type == 'ACHR':
                 rec.type = 'REFR'
-        from geck_mcp.esp.validate import validate
+        from fnv_mcp.esp.validate import validate
         errors = validate(codec.write(plugin), self.index)['errors']
         self.assertTrue(any('places a NPC_; that must be a ACHR record' in e for e in errors), errors)
 
@@ -165,7 +165,7 @@ class BuildTests(unittest.TestCase):
         self.assertNotIn('STAT', after['recordCounts'])
         types = [g.label for g in codec.parse(data).groups]
         self.assertEqual(types, [b'LIGH', b'MSTT', b'CELL'])      # GECK's top-group order
-        from geck_mcp.esp.validate import validate
+        from fnv_mcp.esp.validate import validate
         self.assertEqual(validate(data, self.index)['errors'], [])
 
     def test_generated_marker(self):

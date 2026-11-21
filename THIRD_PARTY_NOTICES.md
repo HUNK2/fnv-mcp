@@ -4,7 +4,7 @@
 - Source: https://github.com/2Shay96/geck-mcp-nv
 - fnv-mcp is built on it and keeps its full commit history; its copyright notice is kept in `LICENSE`.
 
-## Engine knowledge and crash doctor (`bridge/engine_map/`, `bridge/geck_mcp/fnv_*.py`)
+## Engine knowledge and crash doctor (`bridge/engine_map/`, `bridge/fnv_mcp/fnv_*.py`)
 Nothing from these projects is bundled. The engine map is generated on the user's machine from the
 user's own checkouts and game files; the code here only reads them.
 - fnv_decomp, the Fallout: New Vegas decompilation (https://github.com/momusdigital/fnv_decomp): read
@@ -16,7 +16,7 @@ user's own checkouts and game files; the code here only reads them.
 - Yvile's Crash Logger (Yvileapsis, fork of DavidJCobb's Crash Logger; https://github.com/yvileapsis/yUI-NVSE):
   `fnv_crash.py` parses the log format it writes. Cobb's Crash Logger (DavidJCobb, llde) logs are parsed best effort.
 
-## Live tools and the engine companion (`bridge/native/engine/`, `bridge/geck_mcp/fnv_*.py`, `bridge/tools/fnv_setup_dev_profile.py`)
+## Live tools and the engine companion (`bridge/native/engine/`, `bridge/fnv_mcp/fnv_*.py`, `bridge/tools/fnv_setup_dev_profile.py`)
 - fnv_decomp states that no licence is granted, for the reconstruction or for contributions. Nothing generated
   from it is in this repository: `engine_map.json` is built by each user from their own checkout and is
   git-ignored. The code here names some engine functions, addresses and structure offsets (in

@@ -1,4 +1,4 @@
-"""fnv_guide: which tool for which problem. Guides (Markdown in geck_mcp/guides/), a search over the tool
+"""fnv_guide: which tool for which problem. Guides (Markdown in fnv_mcp/guides/), a search over the tool
 descriptions, and a search over saved engine research notes and the recorded engine facts."""
 import math
 import os

@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_code, fnv_create, fnv_crawl, fnv_inspect  # noqa: E402
-from geck_mcp.esp.assets import nif_block_types  # noqa: E402
+from fnv_mcp import fnv_code, fnv_create, fnv_crawl, fnv_inspect  # noqa: E402
+from fnv_mcp.esp.assets import nif_block_types  # noqa: E402
 
 
 def nif(blocks):
@@ -120,7 +120,7 @@ class BarterRoundingTests(unittest.TestCase):
 
 class LaunchStartTests(unittest.TestCase):
     def test_cell_start_is_refused_with_the_coc_alternative(self):
-        from geck_mcp.fnv_game import GameError, parse_start
+        from fnv_mcp.fnv_game import GameError, parse_start
         with self.assertRaises(GameError) as caught:
             parse_start('cell:HelloWasteland', '.')
         self.assertEqual(caught.exception.code, 'CELL_START_UNSUPPORTED')
@@ -166,8 +166,8 @@ class CodeLinkTests(unittest.TestCase):
 
 class BisectRecordTests(unittest.TestCase):
     def test_variant_keeps_only_the_records_turned_on(self):
-        from geck_mcp import fnv_suite
-        from geck_mcp.esp import codec, records
+        from fnv_mcp import fnv_suite
+        from fnv_mcp.esp import codec, records
         statics = [records.stat(0x01000800 + i, 'BisectStat%d' % i, {'model': 'clutter\\box.nif'}) for i in range(3)]
         plugin = codec.Plugin(records.tes4(['FalloutNV.esm'], 4, 0x803),
                               [codec.Group(b'STAT', 0, children=statics)])
@@ -187,12 +187,12 @@ class BisectRecordTests(unittest.TestCase):
 
 class VariableConditionTests(unittest.TestCase):
     def test_names_exclude_the_predicate_words(self):
-        from geck_mcp.fnv_scriptdbg import var_names
+        from fnv_mcp.fnv_scriptdbg import var_names
         self.assertEqual(var_names('fTimer >= 0 and not arg6:u32 == 3 or frame > 9'), {'fTimer'})
 
     def test_conditions_evaluate_case_blind_and_refuse_calls(self):
-        from geck_mcp.fnv_conv import ConvError
-        from geck_mcp.fnv_scriptdbg import compile_var_when, eval_var_when
+        from fnv_mcp.fnv_conv import ConvError
+        from fnv_mcp.fnv_scriptdbg import compile_var_when, eval_var_when
         tree = compile_var_when('fTimer >= 2 * 3 and not bDone == 1')
         self.assertTrue(eval_var_when(tree, {'ftimer': 6.0, 'bdone': 0.0}))
         self.assertFalse(eval_var_when(tree, {'ftimer': 5.9, 'bdone': 0.0}))
@@ -217,7 +217,7 @@ class SurfaceAlignTests(unittest.TestCase):
 class RayFilterTests(unittest.TestCase):
     def test_the_filter_goes_on_the_stack(self):
         # bhkPickData::SetFilter 0x004A3F70 reads its filter at [ebp+8] and returns with ret 4: edx is not used.
-        from geck_mcp import fnv_hands
+        from fnv_mcp import fnv_hands
         sent = []
         live = SimpleNamespace(identity=lambda: {'pid': 1}, u32s=lambda addrs: [0x1000 for _ in addrs])
         live.link = SimpleNamespace(one=lambda *a: {'ok': True, 'eax': '0x20000000'},

@@ -15,9 +15,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_engine, fnv_game, fnv_link, fnv_records, fnv_tools  # noqa: E402
-from geck_mcp.fnv_data import DataTools  # noqa: E402
-from geck_mcp.fnv_tools import FnvService  # noqa: E402
+from fnv_mcp import fnv_engine, fnv_game, fnv_link, fnv_records, fnv_tools  # noqa: E402
+from fnv_mcp.fnv_data import DataTools  # noqa: E402
+from fnv_mcp.fnv_tools import FnvService  # noqa: E402
 from test_fnv import MISC_C, FnvTestBase, write  # noqa: E402
 
 
@@ -201,7 +201,7 @@ class RecordIndexFreshness(unittest.TestCase):
         write_plugin(self.plugin, [record('STAT', 0x800, edid('RockA'))])
         first = self.index.ensure(self.plugin)
         later = time.time() + 60
-        with mock.patch('geck_mcp.fnv_data.time.time', return_value=later):
+        with mock.patch('fnv_mcp.fnv_data.time.time', return_value=later):
             self.assertEqual(self.index.ensure(self.plugin), first)  # checked by its bytes once more, then trusted
             again, reads = self.plugin_reads(lambda: self.index.ensure(self.plugin))
         self.assertEqual((again, reads), (first, 0))
@@ -451,7 +451,7 @@ class WarmUp(FnvTestBase):
         self.assertNotIn('map', fnv_engine._cache)
 
     def test_the_server_starts_it(self):
-        from geck_mcp import server as server_module
+        from fnv_mcp import server as server_module
         with mock.patch.object(server_module.Project, 'load', return_value=self.project), \
                 mock.patch.object(server_module, 'make_server', return_value=mock.Mock()), \
                 mock.patch.object(fnv_tools, 'warm_up') as warm_up:
@@ -537,7 +537,7 @@ class LoadOrderSpeed(unittest.TestCase):
 
     def counted(self, fn):
         """(result, plugin headers read, file checks made) of one call."""
-        from geck_mcp import fnv_data
+        from fnv_mcp import fnv_data
         real_exists, checks = Path.exists, [0]
 
         def exists(path, *args, **kwargs):
@@ -549,7 +549,7 @@ class LoadOrderSpeed(unittest.TestCase):
         return out, masters.call_count, checks[0]
 
     def test_a_second_load_order_reads_no_plugin_and_looks_in_no_mod_folder(self):
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         first, read_first, checks_first = self.counted(lambda: load_order(self.project))
         second, read_second, checks_second = self.counted(lambda: load_order(self.project))
         self.assertEqual(second, first)
@@ -558,7 +558,7 @@ class LoadOrderSpeed(unittest.TestCase):
         self.assertLess(checks_second, len(first), 'every plugin was looked for again (%d file checks)' % checks_second)
 
     def test_a_plugin_put_in_a_higher_mod_wins_at_once(self):
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         load_order(self.project)
         write_plugin(self.mo2 / 'mods' / 'Top' / 'Mod.esp', [], masters=['FalloutNV.esm', 'Other.esp'])
         mod = self.entry(load_order(self.project), 'Mod.esp')
@@ -566,25 +566,25 @@ class LoadOrderSpeed(unittest.TestCase):
         self.assertEqual(mod['masters'], ['FalloutNV.esm', 'Other.esp'])
 
     def test_a_plugin_removed_from_its_mod_is_missed_at_once(self):
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         load_order(self.project)
         (self.mo2 / 'mods' / 'Middle' / 'Other.esp').unlink()
         self.assertIsNone(self.entry(load_order(self.project), 'Other.esp')['path'])
 
     def test_a_rewritten_plugin_gives_its_new_masters(self):
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         load_order(self.project)
         write_plugin(self.mo2 / 'mods' / 'Bottom' / 'Mod.esp', [], masters=['FalloutNV.esm', 'Other.esp'])
         self.assertEqual(self.entry(load_order(self.project), 'Mod.esp')['masters'], ['FalloutNV.esm', 'Other.esp'])
 
     def test_a_changed_plugin_list_is_read_again(self):
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         self.assertTrue(self.entry(load_order(self.project), 'Other.esp')['active'])
         self.set_plugins(['FalloutNV.esm', 'Mod.esp'])
         self.assertFalse(self.entry(load_order(self.project), 'Other.esp')['active'])
 
     def test_a_changed_mod_list_is_read_again(self):
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         self.assertEqual(self.entry(load_order(self.project), 'Other.esp')['mod'], 'Middle')
         (self.profile / 'modlist.txt').write_text('+Top\n-Middle\n+Bottom\n', encoding='utf-8')
         self.assertIsNone(self.entry(load_order(self.project), 'Other.esp')['path'])
@@ -592,7 +592,7 @@ class LoadOrderSpeed(unittest.TestCase):
     def test_a_plugin_added_in_the_same_clock_tick_is_seen(self):
         """A folder's time stays put when a file arrives in the same tick of the file clock: folders are told apart
         by the plugin names in them."""
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         top = self.mo2 / 'mods' / 'Top'
         load_order(self.project)
         st = top.stat()
@@ -603,7 +603,7 @@ class LoadOrderSpeed(unittest.TestCase):
     def test_a_mod_turned_off_in_the_same_clock_tick_is_seen(self):
         """'+Middle' to '-Middle' keeps the file's size, and a write in the same tick of the file clock (about 16 ms
         on Windows, as on the CI runner) keeps its time: profile files are told apart by what they say."""
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         modlist = self.profile / 'modlist.txt'
         self.assertEqual(self.entry(load_order(self.project), 'Other.esp')['mod'], 'Middle')
         st = modlist.stat()
@@ -615,7 +615,7 @@ class LoadOrderSpeed(unittest.TestCase):
     def test_a_plugin_rewritten_in_the_same_clock_tick_gives_its_new_masters(self):
         """A plugin rewritten at the same size in the same tick of the file clock keeps its size and time: plugins are
         told apart by their header record, where the masters are."""
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         mod = self.mo2 / 'mods' / 'Bottom' / 'Mod.esp'
         write_plugin(mod, [], masters=['FalloutNV.esm', 'Other.esp'])
         self.assertEqual(self.entry(load_order(self.project), 'Mod.esp')['masters'], ['FalloutNV.esm', 'Other.esp'])
@@ -626,14 +626,14 @@ class LoadOrderSpeed(unittest.TestCase):
         self.assertEqual(self.entry(load_order(self.project), 'Mod.esp')['masters'], ['FalloutNV.esm', 'Thing.esp'])
 
     def test_the_game_list_is_its_own_load_order(self):
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         load_order(self.project)
         live = self.entry(load_order(self.project, {'FalloutNV.esm': 0, 'Other.esp': 1}), 'Other.esp')
         self.assertEqual(live['index'], 1)
         self.assertEqual(self.entry(load_order(self.project), 'Other.esp')['index'], 2)
 
     def test_a_caller_that_changes_the_entries_changes_no_later_answer(self):
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         entries = load_order(self.project)
         entries[0]['fileId'] = 7
         entries[0]['masters'].append('Junk.esm')
@@ -672,7 +672,7 @@ class ArchiveNameSpeed(unittest.TestCase):
         return out, opened
 
     def test_a_second_index_reads_no_archive(self):
-        from geck_mcp.esp.assets import AssetIndex
+        from fnv_mcp.esp.assets import AssetIndex
         AssetIndex(None, [], [self.bsa])
         index, opened = self.opened(lambda: AssetIndex(None, [], [self.bsa]))
         self.assertEqual(opened, [])
@@ -681,7 +681,7 @@ class ArchiveNameSpeed(unittest.TestCase):
         self.assertEqual(index.archives, ['Test - Meshes.bsa'])
 
     def test_a_changed_archive_is_read_again(self):
-        from geck_mcp.esp.assets import AssetIndex
+        from fnv_mcp.esp.assets import AssetIndex
         AssetIndex(None, [], [self.bsa])
         st = self.bsa.stat()
         self.make_bsa(self.bsa, {'meshes\\a\\b.nif': b'1', 'meshes\\new.nif': b'22'})
@@ -695,7 +695,7 @@ class ArchiveNameSpeed(unittest.TestCase):
     def test_an_archive_rewritten_in_the_same_clock_tick_gives_its_new_names(self):
         """An archive rewritten at the same size in the tick of the file clock it was read in keeps its size and time.
         Names read from an archive written less than two seconds before are not kept (git's racily clean files)."""
-        from geck_mcp.esp.assets import AssetIndex
+        from fnv_mcp.esp.assets import AssetIndex
         self.make_bsa(self.bsa, {'meshes\\a\\b.nif': b'1', 'textures\\t.dds': b'2'})     # written just now
         self.assertIsNotNone(AssetIndex(None, [], [self.bsa]).find('textures\\t.dds'))
         st = self.bsa.stat()
@@ -737,14 +737,14 @@ class AssetUsersSpeed(unittest.TestCase):
 
     def server(self):
         """The asset tools of a newly started server: nothing kept in memory, the same state folder."""
-        from geck_mcp.fnv_create import AssetTools
+        from fnv_mcp.fnv_create import AssetTools
         data = DataTools(self.project)
         self.addCleanup(lambda: data.index.db.close())
         return AssetTools(SimpleNamespace(project=self.project), fnv_records.RecordsTools(data))
 
     def users(self, tools, path):
         """(users as (plugin, form id, field), plugins parsed in full) of one call."""
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         with mock.patch.object(codec, 'parse', wraps=codec.parse) as parse:
             out = tools.users(path)
         return sorted((u['plugin'], u['formId'], u['field']) for u in out['users']), parse.call_count

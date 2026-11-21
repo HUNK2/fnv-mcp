@@ -41,7 +41,7 @@ class ContractCase(unittest.TestCase):
 
 class ReplaySmoke(ContractCase):
     def test_entry_points(self):
-        from geck_mcp.fnv_replay import ReplayTools
+        from fnv_mcp.fnv_replay import ReplayTools
         t = ReplayTools(self.live)
         self.check({
             'list': lambda: t.run('list'),
@@ -56,8 +56,8 @@ class ReplaySmoke(ContractCase):
 
 class ScriptCoverageSmoke(ContractCase):
     def test_entry_points(self):
-        from geck_mcp.fnv_scriptcov import ScriptCoverage
-        from geck_mcp.fnv_scriptdbg import EvalHook
+        from fnv_mcp.fnv_scriptcov import ScriptCoverage
+        from fnv_mcp.fnv_scriptdbg import EvalHook
         t = ScriptCoverage(self.live, statement_hook=EvalHook(self.live), script_debug=None)
         self.check({
             'report': lambda: t.dispatch('report'),
@@ -71,7 +71,7 @@ class ScriptCoverageSmoke(ContractCase):
 
 class RenderSmoke(ContractCase):
     def test_entry_points(self):
-        from geck_mcp.fnv_render import OverlayTools, RenderTools
+        from fnv_mcp.fnv_render import OverlayTools, RenderTools
         r, o = RenderTools(self.live), OverlayTools(self.live)
         self.check({
             'shaders': lambda: r.run('shaders'),
@@ -89,7 +89,7 @@ class RenderSmoke(ContractCase):
 
 class OracleSmoke(ContractCase):
     def test_entry_points(self):
-        from geck_mcp.fnv_oracle import OracleTools
+        from fnv_mcp.fnv_oracle import OracleTools
         t = OracleTools(self.live, naming=None, agent=None)
         self.check({
             'purity': lambda: t.purity,
@@ -103,7 +103,7 @@ class OracleSmoke(ContractCase):
 @unittest.skipUnless(sys.platform == 'win32', 'Windows capture')
 class WinCaptureSmoke(unittest.TestCase):
     def test_entry_points(self):
-        from geck_mcp import wincapture
+        from fnv_mcp import wincapture
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / 'x.png'
             bad = {name: result for name, fn in {
@@ -115,7 +115,7 @@ class WinCaptureSmoke(unittest.TestCase):
 class ScenarioRunnerSmoke(ContractCase):
     def test_prepare_failure_is_reported(self):
         # The game runs; a start that names no valid cell is refused before any console line is sent (N15).
-        from geck_mcp.fnv_scenario import ScenarioRunner
+        from fnv_mcp.fnv_scenario import ScenarioRunner
         report = ScenarioRunner(self.live).run(data={'name': 'x', 'start': {'coc': 'bad;cell'}, 'steps': [{'wait': 1}]})
         self.assertFalse(report['passed'])
         self.assertEqual([(f['phase'], f.get('code')) for f in report['failures']], [('prepare', 'BAD_CELL')])
@@ -125,8 +125,8 @@ class ScenarioRunnerSmoke(ContractCase):
     def test_crash_path_is_reported(self):
         # The game dies during a step: the report marks the crash (run phase), not a prepare failure.
         from unittest import mock
-        from geck_mcp import fnv_game, fnv_link, fnv_scenario
-        from geck_mcp.fnv_scenario import ScenarioRunner
+        from fnv_mcp import fnv_game, fnv_link, fnv_scenario
+        from fnv_mcp.fnv_scenario import ScenarioRunner
         link, gone = self.fake.link, []
         real = link._op
 
@@ -146,7 +146,7 @@ class ScenarioRunnerSmoke(ContractCase):
         self.assertTrue(report.get('crash'), report['failures'])
 
     def test_run_all(self):
-        from geck_mcp.fnv_scenario import ScenarioRunner
+        from fnv_mcp.fnv_scenario import ScenarioRunner
         with tempfile.TemporaryDirectory() as tmp:
             self.check({
                 'empty folder': lambda: ScenarioRunner(self.live).run_all(tmp),
