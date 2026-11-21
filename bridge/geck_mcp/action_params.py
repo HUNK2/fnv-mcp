@@ -57,7 +57,7 @@ ACTION_PARAMS = {
     }},
     'fnv_func': {'common': {'query'}, 'actions': {
         'find': {'mode', 'status', 'limit', 'offset'},
-        'code': {'max_lines'},
+        'code': {'max_lines', 'offset'},
         'callers': {'depth', 'limit'},
         'callees': {'depth', 'limit'},
         'strings': {'limit', 'offset'},

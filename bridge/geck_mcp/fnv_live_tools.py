@@ -1073,11 +1073,12 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         """list (default): every change made through the act tools (memory writes, engine calls, settings, console
         lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default
         100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the
-        largest answers (limit rows each, default 10)."""
+        largest answers (limit rows each, default 10), and the tools never called in that range."""
         def answer():
             if action == 'calls':
                 from .fnv_calllog import CallLog
-                return CallLog(project.state_dir).summary(since_seconds, limit or 10)
+                known = [t.name for t in server._tool_manager.list_tools()]
+                return CallLog(project.state_dir).summary(since_seconds, limit or 10, known=known)
             return live.journal_list(limit or 100, include_undone)
         return await invoke('fnv_journal', answer, action=action)
 

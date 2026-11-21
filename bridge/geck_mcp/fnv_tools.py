@@ -102,7 +102,7 @@ class FnvService:
                     'offset': offset, 'results': results, 'identity': e.identity()}
         return self.run('fnv_func', action)
 
-    def func_code(self, function, max_lines=400):
+    def func_code(self, function, max_lines=400, offset=0):
         def action():
             e = self.engine()
             address = e.resolve(function)
@@ -113,7 +113,7 @@ class FnvService:
                         'callees': len(e.calls.get(address, [])) + len(e.tails.get(address, []))})
             if f.get('proof'):
                 out['proof'] = {k: f['proof'].get(k) for k in ('status', 'by') if f['proof'].get(k)}
-            out.update(e.code(address, max_lines))
+            out.update(e.code(address, max_lines, offset=offset))
             out['identity'] = e.identity()
             return out
         return self.run('fnv_func', action)
@@ -842,7 +842,7 @@ def register(server, project, observe, result_type, maintain=False):
         `depth` levels. strings: functions whose decompiled code contains the query text ("Pip-Boy", an INI key, an
         error text)."""
         if action == 'code':
-            return await invoke(service.func_code, query, max_lines)
+            return await invoke(service.func_code, query, max_lines, offset)
         if action in ('callers', 'callees'):
             return await invoke(service.func_graph, query, action, depth, limit)
         if action == 'strings':

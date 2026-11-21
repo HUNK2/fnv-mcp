@@ -5,7 +5,7 @@
   default annotation values; 198,281 with the brief parameters; 217,593 on the merged tree, where every parameter
   has a description (187 had none, about 19,000 characters). A new tool or a longer description spends from the
   headroom; raise BUDGET only with a reason in the commit.
-- The opt-in `core` toolset: 23 everyday tools (42,260 characters with every parameter described, about 10,600
+- The opt-in `core` toolset: 29 everyday tools (55,248 characters on 2026-11-21; 23 tools and 42,260 before, about 13,900
   tokens); the default list stays every tool; fnv_guide find marks a
   match outside the active toolsets."""
 import json
@@ -25,7 +25,7 @@ from geck_mcp.toolsets import ALWAYS, CORE_TOOLS, registered  # noqa: E402
 
 BEFORE = 231716          # characters at 4a3dc9f, the start of the tool quality pass
 BUDGET = 219500          # 217,593 measured with every parameter described, plus about 1% headroom
-CORE_BUDGET = 43000      # the core list: 42,260 measured, about 10,600 tokens
+CORE_BUDGET = 55800      # the core list of 29: 55,248 measured 2026-11-21 (six engine-loop tools added), about 13,900 tokens
 
 
 def listing_size(tools):
@@ -61,7 +61,7 @@ class ListBudgetTests(unittest.IsolatedAsyncioTestCase):
         everything = {t.name for t in await self.tools()}
         core = await self.tools(toolsets=['core'])
         self.assertEqual({t.name for t in core}, set(CORE_TOOLS) | ALWAYS)
-        self.assertEqual(len(core), 23)
+        self.assertEqual(len(core), 29)
         self.assertLessEqual(listing_size(core), CORE_BUDGET)
         self.assertTrue(set(CORE_TOOLS) <= everything)
         self.assertGreater(len(everything), 130)                   # the default is still every tool

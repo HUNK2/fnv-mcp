@@ -1432,7 +1432,7 @@ Example:
 
 **Kind:** read · **Toolset:** game
 
-list (default): every change made through the act tools (memory writes, engine calls, settings, console lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default 100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the largest answers (limit rows each, default 10).
+list (default): every change made through the act tools (memory writes, engine calls, settings, console lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default 100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the largest answers (limit rows each, default 10), and the tools never called in that range.
 
 **Actions:**
 
@@ -2702,7 +2702,7 @@ Fallout: New Vegas 1.4.0.525 engine functions. find (default): mode=name matches
 | `mode` | string | `auto`, `name`, `code`, `regex`, `address` | `"auto"` | For action=find: auto, name, code, regex or address search. |
 | `status` | string[] | each: `proven`, `class_proven`, `probable`, `decomp`, `rejected`, `unnamed` |  | For action=find: keep only these proof statuses (proven, class_proven, probable, decomp, unnamed). |
 | `limit` | integer | 1 to 200 | `25` | For find, callers, callees and strings: maximum number of functions returned. |
-| `offset` | integer | 0 to 100000 | `0` | For find and strings: how many results to skip, for paging. |
+| `offset` | integer | 0 to 100000 | `0` | For find and strings: how many results to skip, for paging. For code: the first source line returned (0 is the start; a cut answer gives next). |
 | `depth` | integer | 1 to 4 | `1` | For callers and callees: how many call levels to walk, 1 to 4. |
 | `max_lines` | integer | 10 to 3000 | `400` | For action=code: maximum number of source lines returned. Default 400. |
 

@@ -26,6 +26,12 @@ import project_fixture  # noqa: E402
 
 
 class ToolsetOfTests(unittest.TestCase):
+    def test_core_holds_the_five_most_used(self):
+        # The five tools that made 66% of 4,228 real calls (critique 2026-11-21).
+        from geck_mcp.toolsets import CORE_TOOLS
+        for name in ('fnv_native', 'fnv_func', 'fnv_input', 'fnv_console', 'fnv_mem_read'):
+            self.assertIn(name, CORE_TOOLS)
+
     def test_families(self):
         self.assertEqual(toolset_of('fnv_ref'), 'game')
         self.assertEqual(toolset_of('fnv_func'), 'game')

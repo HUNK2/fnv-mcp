@@ -14,7 +14,9 @@ CORE_TOOLS = frozenset({
     'fnv_status', 'fnv_setup_check', 'fnv_game', 'fnv_companion_install', 'fnv_spec', 'fnv_install',
     'fnv_player', 'fnv_ref', 'fnv_refs_near', 'fnv_console', 'fnv_place', 'fnv_world_edit',
     'fnv_photo', 'fnv_record', 'fnv_form', 'fnv_script_errors',
-    'fnv_crash', 'fnv_warnings', 'fnv_logs', 'fnv_test', 'fnv_undo', 'fnv_journal', 'fnv_guide'})
+    'fnv_crash', 'fnv_warnings', 'fnv_logs', 'fnv_test', 'fnv_undo', 'fnv_journal', 'fnv_guide',
+    # The engine loop that made most real calls (critique 2026-11-21): decomp lookup, C in the game, input, memory.
+    'fnv_native', 'fnv_func', 'fnv_input', 'fnv_mem_read', 'fnv_screenshot', 'fnv_wait_for'})
 # Registered whatever the toolsets: fnv_guide find names a hidden tool and the toolset that turns it on.
 ALWAYS = frozenset({'fnv_guide'})
 NAMING_TOOLS = frozenset({'fnv_probe', 'fnv_atlas'})

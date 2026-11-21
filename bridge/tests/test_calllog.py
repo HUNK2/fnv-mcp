@@ -63,6 +63,12 @@ class CallLogUnitTests(unittest.TestCase):
         self.assertEqual([r['t'] for r in self.lines()], [new['t']])
         self.assertEqual(prune(self.state, now)['calls'], 0)       # part of the state maintenance
 
+    def test_summary_lists_tools_never_called(self):
+        self.log.record('a', None, True, None, 1, 1, False)
+        out = self.log.summary(known=['a', 'b', 'c'])
+        self.assertEqual(out['neverCalled'], {'count': 2, 'tools': ['b', 'c']})
+        self.assertNotIn('neverCalled', self.log.summary())
+
     def test_summary(self):
         for ms, ok, code in ((10, True, None), (500, False, 'GAME_NOT_RUNNING'), (20, False, 'GAME_NOT_RUNNING')):
             self.log.record('fnv_ref', 'x', ok, code, ms, ms * 10, False)

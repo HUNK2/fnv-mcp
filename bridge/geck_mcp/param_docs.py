@@ -298,7 +298,8 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
               'status': 'For action=find: keep only these proof statuses (proven, class_proven, probable, decomp, '
                         'unnamed).',
               'limit': 'For find, callers, callees and strings: maximum number of functions returned.',
-              'offset': 'For find and strings: how many results to skip, for paging.',
+              'offset': 'For find and strings: how many results to skip, for paging. For code: the first source line '
+                        'returned (0 is the start; a cut answer gives next).',
               'depth': 'For callers and callees: how many call levels to walk, 1 to 4.',
               'max_lines': 'For action=code: maximum number of source lines returned. Default 400.'},
  'fnv_game': {'action': 'launch (start the game and wait until ready), quit, or restart (quit if running, then '
