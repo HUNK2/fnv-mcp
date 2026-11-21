@@ -4,6 +4,19 @@
 
 The first version of the fork. The entries below this one are geck-mcp-nv's own history, by 2Shay.
 
+- **Fixes from real use (2026-11-21, 4,228 calls):** the Python package is `fnv_mcp` (was `geck_mcp`) and the
+  server is registered as `fnv`. `fnv_native` follows the game's own module list (a game restart no longer leaves
+  `ALREADY_LOADED` or dead addresses), returns only the log lines each action wrote (a `call` answer: median 4,966
+  characters before, 514 after), pages its log with `since`, and rebuilds when an included header changes.
+  `fnv_game launch` ends a start that hangs (frame 0, a hung window, or a game never resumed) after
+  `fnv.startup_hang_seconds` (default: 45 s or three times the usual start) and starts once more, and keeps the
+  display on while the game runs. `fnv_input` holds and taps go through the frame injector while the game window
+  is not focused (key commands were ignored then). `fnv_raycast ground_at` casts a ray straight down, per point,
+  passing the player's own capsule. `fnv_logs` reads a locked log, `fnv_photo` label rects are in image pixels,
+  `fnv_plugin_build` plans hooks from the unpacked image. The `core` toolset holds the five most used tools (29
+  tools). `fnv_status` names the checkout and commit that answered. `tools/fnv_live_regress.py --suite loop`
+  checks this loop in the running game before a push.
+
 - **The fnv_* tools** (138, with `fnv_spec`): engine knowledge from the fnv_decomp decompilation (functions, classes, settings,
   commands, a symbol database with source lines and named locals), a crash doctor, game control and scenario
   tests, live inspection, full control of the running game through the engine companion (time control, a
