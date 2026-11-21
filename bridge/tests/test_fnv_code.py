@@ -53,6 +53,20 @@ class RangeAndRelocTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<I', out, 11)[0], 0x1000000C)
 
 
+class IncludeOrderTests(unittest.TestCase):
+    def test_unit_folder_before_include(self):
+        """The copy lives in the bridge state, so a quoted #include "Actor.h" must find the unit's own header next to
+        the original before decomp/include, which has other headers of the same names (2026-11-18: Load3D in
+        playercharacter.cpp failed with hundreds of errors)."""
+        decomp = Path('C:/decomp')
+        cmd = CodeTools._compile_cmd(decomp, {'compiler': 'sp1', 'flags': ['/MT']},
+                                     {'original': str(decomp / 'src/fallout/ai/playercharacter.cpp'),
+                                      'copy': 'C:/state/copy.cpp'}, Path('C:/state/unit.obj'))
+        includes = [a for a in cmd if a.startswith('/I')]
+        self.assertEqual(includes, ['/I' + str(decomp / 'src/fallout/ai'), '/I' + str(decomp / 'include')])
+        self.assertLess(cmd.index('/MT'), cmd.index(includes[0]))
+
+
 def live_for(tmp, resolve):
     engine = SimpleNamespace(resolve=resolve)
     project = SimpleNamespace(state_dir=tmp, fnv=SimpleNamespace(decomp_root=str(DECOMP), mo2_root=tmp,
@@ -80,6 +94,15 @@ class OfflineBuildTests(unittest.TestCase):
                 tools.edit('AIFormulas::CalculateSkillValue', 'not in the function', 'x')
             # the decomp checkout itself is untouched
             self.assertIn('float result = base;', (DECOMP / 'src/fallout_shared/aiformulas.cpp').read_text())
+
+
+    def test_unit_with_same_named_header_builds(self):
+        """PlayerCharacter::Load3D: playercharacter.cpp includes "PlayerCharacter.h", which also exists in include/."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = CodeTools(live_for(tmp, lambda n: 0x0094E1D0))
+            tools.checkout('0x0094E1D0')
+            built = tools.build('0x0094E1D0')
+            self.assertEqual(built['size'], built['originalSize'])
 
 
 @needs_zig
