@@ -255,6 +255,11 @@ class NativeTools:
             shutil.copyfile(SDK_SOURCE / 'fnvmcp_module.h', self.sdk / 'fnvmcp_module.h')
         digest = source_digest(text, path, self.sdk)
         out = self.modules / ('%s-%s.dll' % (name, digest))
+        if out.is_file():
+            # The same digest is the same build, and when it is loaded Windows will not let it be overwritten
+            # (seen live 2026-11-21: "failed to write output ... Permission denied").
+            return verdict('Built %s (unchanged: the existing build is reused)' % out.name,
+                           'Load it with fnv_native load name=%s.' % name, dll=str(out), name=name, reused=True)
         cmd = [self._zig(), 'cc', '-target', 'x86-windows-gnu', '-shared', '-O2', '-std=c11', '-Wall',
                '-I', str(self.sdk), '-o', str(out), str(path or target)]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)

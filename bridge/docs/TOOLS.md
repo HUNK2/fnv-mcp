@@ -520,7 +520,7 @@ Cast a ray through the game's Havok world (the engine's own TES::Pick): from sta
 | `from_ref` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `to_ref` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `layer` | string | `line_of_sight`, `path_pick`, `projectile` | `"line_of_sight"` | Which collision test to use: line_of_sight (default), path_pick or projectile. |
-| `ground_at` | object |  |  | Object with x and y in game units; instead of casting a ray, return the terrain height at that point. |
+| `ground_at` | object |  |  | Object with x and y in game units; instead of your ray, cast one straight down there and return the ground height (terrainHeight when it hits the landscape, onRef when an object is on top). |
 
 Example:
 

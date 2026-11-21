@@ -126,5 +126,81 @@ class PluginPlanTests(unittest.TestCase):
         self.assertIsNone(t._hooks_warning('api->hook(1, h, 0, 0);', ['0x00401000']))
 
 
+class GroundTests(unittest.TestCase):
+    """4b: fnv_raycast ground_at returned one value per cell (6360.0 at two points 2,000 units apart, live)."""
+
+    def ai(self, hits):
+        from geck_mcp import fnv_engine_ai
+        ai = fnv_engine_ai.EngineAITools(SimpleNamespace(live=SimpleNamespace(in_game=lambda: None), link=None))
+        self.cast = []
+
+        class Rays:
+            def cast(inner, segments, refs=False):
+                self.cast.append(segments)
+                return [hits]
+        return ai, Rays()
+
+    def test_ground_at_not_found_says_so(self):
+        ai, rays = self.ai({'hit': False})
+        out = ai.ground_height(100.0, 200.0, z=50.0, rays=rays)
+        self.assertFalse(out['found'])
+        self.assertIsNone(out['terrainHeight'])
+        self.assertTrue(out['note'])
+
+    def test_ground_at_is_a_ray_straight_down_from_above(self):
+        ai, rays = self.ai({'hit': True, 'point': (100.0, 200.0, 40.5), 'ref': 0})
+        out = ai.ground_height(100.0, 200.0, z=50.0, rays=rays)
+        (start, end), = self.cast[0]
+        self.assertEqual((start[0], start[1], end[0], end[1]), (100.0, 200.0, 100.0, 200.0))
+        self.assertGreater(start[2], 50.0)
+        self.assertLess(end[2], 40.5)
+        self.assertEqual(out['terrainHeight'], 40.5)
+
+    def test_a_hit_on_an_object_is_not_terrain(self):
+        ai, rays = self.ai({'hit': True, 'point': (1.0, 2.0, 300.0), 'ref': 0x12345678})
+        out = ai.ground_height(1.0, 2.0, z=0.0, rays=rays)
+        self.assertIsNone(out['terrainHeight'])
+        self.assertEqual(out['groundHeight'], 300.0)
+        self.assertEqual(out['onRef'], '0x12345678')
+
+
+class UnfocusedInputTests(unittest.TestCase):
+    """4c, found live 2026-11-21: a duration hold (xNVSE HoldKey) said accepted and moved nothing while the game
+    window was not focused (DirectInput ignores keys then); the frame injector works either way."""
+
+    def live(self, focused):
+        from geck_mcp import fnv_live
+        sent = self.sent = []
+
+        class Live(fnv_live.LiveService):
+            link = SimpleNamespace(batch=lambda ops: sent.append(ops) or [{'accepted': True}])
+
+        live = Live.__new__(Live)
+        live.in_game = lambda: None
+        live.changing = lambda reason: None
+        live.journal = SimpleNamespace(add=lambda e: {'id': 1})
+        live._scan_of = lambda control: 0x11
+        live._game_focused = lambda: focused
+        self.injected = []
+        live.inject = lambda *a: self.injected.append(a) or {'injected': True}
+        return live
+
+    def test_unfocused_hold_goes_through_the_injector(self):
+        out = self.live(False).input('hold', control='forward', duration_ms=500)
+        self.assertEqual(self.injected, [('hold', None, 0x11, 30, None, None)])
+        self.assertEqual(self.sent, [])
+        self.assertIn('not focused', out['via'])
+
+    def test_unfocused_tap_goes_through_the_injector(self):
+        self.live(False).input('tap', control='activate')
+        self.assertEqual(self.injected, [('tap', None, 0x11, 2, None, None)])
+
+    def test_focused_hold_keeps_the_key_commands(self):
+        out = self.live(True).input('hold', control='forward', duration_ms=500)
+        self.assertEqual(self.injected, [])
+        self.assertEqual(len(self.sent), 1)
+        self.assertTrue(out['accepted'])
+
+
 if __name__ == '__main__':
     unittest.main()

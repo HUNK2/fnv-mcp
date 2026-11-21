@@ -570,8 +570,9 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
  'fnv_quest': {'action': 'state (default): stages, objectives and script variables; targets: where each objective '
                          'marker points and why one is missing.'},
  'fnv_raycast': {'layer': 'Which collision test to use: line_of_sight (default), path_pick or projectile.',
-                 'ground_at': 'Object with x and y in game units; instead of casting a ray, return the terrain height '
-                              'at that point.'},
+                 'ground_at': 'Object with x and y in game units; instead of your ray, cast one straight down there and '
+                              'return the ground height (terrainHeight when it hits the landscape, onRef when an '
+                              'object is on top).'},
  'fnv_record': {'action': 'show (default) decodes one record; find searches records; users lists what references a '
                           'record.',
                 'query': 'For action=find: EditorID or name substring, form id, or Plugin.esp:LOCALID.',

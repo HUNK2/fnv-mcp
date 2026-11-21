@@ -172,6 +172,22 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(out['lines'][0]['seq'], 477)
         self.assertEqual(out['dropped'], 466)
 
+    def test_build_of_unchanged_source_reuses_the_dll(self):
+        # Live 2026-11-21: building the source of the loaded module again failed, "failed to write output ...
+        # Permission denied": the loaded DLL is the same file. The same digest is the same build.
+        from geck_mcp.fnv_native import source_digest
+        source = Path(self.tmp.name) / 'r.c'
+        source.write_text('int x;', encoding='utf-8')
+        self.t.zig = 'C:/no/such/zig.exe'
+        sdk = Path(self.tmp.name) / 'fnv' / 'sdk'
+        sdk.mkdir(parents=True, exist_ok=True)
+        (sdk / 'fnvmcp_module.h').write_text('// api', encoding='utf-8')
+        dll = Path(self.tmp.name) / 'fnv' / 'modules' / ('r-%s.dll' % source_digest('int x;', source, sdk))
+        dll.write_bytes(b'MZ')
+        out = self.t.build(str(source), 'r')
+        self.assertTrue(out['reused'])
+        self.assertEqual(Path(out['dll']), dll)
+
     def test_list_shows_the_newest_build_per_name(self):
         modules = Path(self.tmp.name) / 'fnv' / 'modules'
         for i, name in enumerate(('a-000000000001', 'a-000000000002', 'a-000000000003', 'b-000000000001')):
