@@ -28,7 +28,8 @@ part that fits what you are doing.
 ## Changing the MCP itself
 
 - The repository's [CLAUDE.md](../../CLAUDE.md) (also read by other agents through [AGENTS.md](../../AGENTS.md)): tests,
-  live testing, and the traps.
+  live testing, and the traps. `tools/fnv_live_regress.py --suite loop` checks the loop real use is made of
+  (native modules, decomp code, console, memory, input) in the running game before a push.
 - [FNV-TOOL-CONVENTIONS.md](FNV-TOOL-CONVENTIONS.md): how an action-style tool is shaped and what a new tool needs.
 - [FNV-COMPANION-V2.md](FNV-COMPANION-V2.md): the wire contract between the bridge and the engine companion.
 - [FNV-SYMDB.md](FNV-SYMDB.md): the compiler's symbol database for the decompiled functions.
