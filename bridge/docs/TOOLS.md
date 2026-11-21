@@ -3093,8 +3093,8 @@ C code running inside the game. headers functions=[names] classes=[names]: the m
 - `unload`: Remove its hooks, put writes back and free the DLL.
 - `reload`: Unload, rebuild and load again.
 - `call`: Call an exported function of a loaded module on the main thread.
-- `log`: What modules logged.
-- `list`: Loaded modules and built DLLs.
+- `log`: What modules logged: the newest lines, or the lines after since.
+- `list`: Loaded modules and the newest build of each module name.
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
@@ -3105,7 +3105,7 @@ C code running inside the game. headers functions=[names] classes=[names]: the m
 | `classes` | string[] | each: up to 200 characters |  | For action=headers: class names whose padded struct layouts are emitted from the symbol database. |
 | `export` | string | up to 100 characters |  | For action=call: name of the exported function in the loaded module to run on the main thread. |
 | `args` | integer \| number[] |  |  | For action=call: numeric arguments (integers or floats) passed to the exported function. |
-| `since` | integer | 0 or more |  | For action=log: return only log lines after this sequence number. Use the next value from the previous call; default 0 is everything. |
+| `since` | integer | 0 or more |  | For action=log: return log lines after this sequence number (at most 500). Use next from the last log answer, or logNext from a load, call or unload; default 0 is the newest 200 lines. |
 
 Example:
 

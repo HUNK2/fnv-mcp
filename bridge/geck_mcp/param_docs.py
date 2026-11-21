@@ -438,8 +438,9 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                 'export': 'For action=call: name of the exported function in the loaded module to run on the main '
                           'thread.',
                 'args': 'For action=call: numeric arguments (integers or floats) passed to the exported function.',
-                'since': 'For action=log: return only log lines after this sequence number. Use the next value from '
-                         'the previous call; default 0 is everything.'},
+                'since': 'For action=log: return log lines after this sequence number (at most 500). Use next from '
+                         'the last log answer, or logNext from a load, call or unload; default 0 is the newest 200 '
+                         'lines.'},
  'fnv_object': {'action': 'identify (default) says what memory a pointer is in; find lists live objects of a class; '
                           'referrers lists where an address is stored.',
                 'pointer': 'For identify and referrers: the address, as 0x....',

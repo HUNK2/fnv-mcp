@@ -59,7 +59,6 @@ class NativeAfterRestartTests(unittest.TestCase):
         link = FakeModLink(call_result)
         live = SimpleNamespace(link=link, ready=lambda: None, project=SimpleNamespace(state_dir=tempfile.gettempdir()))
         t = NativeTools(live)
-        t._log_tail = lambda: []
         t._export_in_memory = lambda base, name: 0x01A51090 if name == 'seh_catch' else None
         return t, link
 
@@ -67,7 +66,7 @@ class NativeAfterRestartTests(unittest.TestCase):
         t, link = self.tools({'ok': True, 'eax': '0x0000002a'})
         out = t.call('sehtest', 'seh_catch')
         self.assertEqual(out['value'], 42)
-        self.assertEqual(int(link.calls[-1][1], 16), 0x01A51090)
+        self.assertEqual(int([op for op in link.calls if op[0] == 'call'][-1][1], 16), 0x01A51090)
 
     def test_an_unknown_export_still_says_so(self):
         t, _ = self.tools({'ok': True, 'eax': '0x0'})
