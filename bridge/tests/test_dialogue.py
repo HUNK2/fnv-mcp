@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from geck_mcp.esp import build as builder, codec, dialogue
-from geck_mcp.esp.formids import FormIdMap, MasterIndex
-from geck_mcp.esp.records import SpecError
-from geck_mcp.esp.validate import validate
+from fnv_mcp.esp import build as builder, codec, dialogue
+from fnv_mcp.esp.formids import FormIdMap, MasterIndex
+from fnv_mcp.esp.records import SpecError
+from fnv_mcp.esp.validate import validate
 
 
 def sub(tag, data):

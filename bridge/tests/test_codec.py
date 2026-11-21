@@ -3,8 +3,8 @@ from pathlib import Path
 import struct
 import unittest
 
-from geck_mcp.esp import codec
-from geck_mcp.esp.codec import FormatError, Group, Plugin, Record, Subrecord
+from fnv_mcp.esp import codec
+from fnv_mcp.esp.codec import FormatError, Group, Plugin, Record, Subrecord
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'plugins'
 

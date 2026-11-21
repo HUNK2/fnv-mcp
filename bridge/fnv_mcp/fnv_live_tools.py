@@ -563,7 +563,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     script_debug = ScriptDebugger(live, eval_hook=statement_hook, dbg=debugger, data=data)
     from .fnv_scriptcov import ScriptCoverage
     script_coverage = ScriptCoverage(live, statement_hook, script_debug,
-                                     runner=lambda: __import__('geck_mcp.fnv_scenario', fromlist=['ScenarioRunner'])
+                                     runner=lambda: __import__('fnv_mcp.fnv_scenario', fromlist=['ScenarioRunner'])
                                      .ScenarioRunner(live), data=data)
     blame_tools = BlameTools(live, debugger=debugger, line_of=script_debug._line_of, statement_hook=statement_hook)
     script_log = ScriptLog(live, eval_hook=statement_hook, debugger=debugger)

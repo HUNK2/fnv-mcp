@@ -7,10 +7,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_deep import HookError  # noqa: E402
-from geck_mcp.fnv_link import LinkError  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_deep import HookError  # noqa: E402
+from fnv_mcp.fnv_link import LinkError  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
 
 
 def raising(error):
@@ -59,7 +59,7 @@ class OutcomeTests(unittest.TestCase):
         self.live = self.fake.live
 
     def test_uncoded_error_in_act_is_outcome_unknown(self):
-        with self.assertLogs('geck_mcp', level='ERROR'):
+        with self.assertLogs('fnv_mcp', level='ERROR'):
             r = self.live.run('fnv_place', raising(KeyError('pose')), kind='act')
         self.assertEqual(r['outcome'], 'outcome_unknown')
         self.assertFalse(r['error']['retrySafe'])
@@ -77,7 +77,7 @@ class OutcomeTests(unittest.TestCase):
     def test_non_string_code_is_fnv_error(self):
         error = OSError('http')
         error.code = 404
-        with self.assertLogs('geck_mcp', level='ERROR'):
+        with self.assertLogs('fnv_mcp', level='ERROR'):
             r = self.live.run('fnv_asset', raising(error), kind='act')
         self.assertEqual(r['error']['code'], 'INTERNAL_ERROR')
 
@@ -138,7 +138,7 @@ class OutcomeTests(unittest.TestCase):
 
 class CoverageNotStartedTests(unittest.TestCase):
     def test_coverage_stop_without_a_run_is_not_game_not_running(self):
-        from geck_mcp.fnv_coverage import CoverageTools
+        from fnv_mcp.fnv_coverage import CoverageTools
         with FakeLive() as fake:
             cov = CoverageTools(fake.live)
             r = fake.live.run('fnv_coverage', cov.stop)

@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_native import NativeTools, source_digest  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_native import NativeTools, source_digest  # noqa: E402
 
 RING = 1024
 
@@ -175,7 +175,7 @@ class Lifecycle(unittest.TestCase):
     def test_build_of_unchanged_source_reuses_the_dll(self):
         # Live 2026-11-21: building the source of the loaded module again failed, "failed to write output ...
         # Permission denied": the loaded DLL is the same file. The same digest is the same build.
-        from geck_mcp.fnv_native import source_digest
+        from fnv_mcp.fnv_native import source_digest
         source = Path(self.tmp.name) / 'r.c'
         source.write_text('int x;', encoding='utf-8')
         self.t.zig = 'C:/no/such/zig.exe'
@@ -198,7 +198,7 @@ class Lifecycle(unittest.TestCase):
         new.write_bytes(b'MZ')
         os.utime(old, (1000, 1000))
         os.utime(new, (2000, 2000))
-        from geck_mcp import fnv_native
+        from fnv_mcp import fnv_native
         real = fnv_native.source_digest
         fnv_native.source_digest = lambda *a: '000000000042'
         try:

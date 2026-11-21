@@ -10,7 +10,7 @@ from unittest import mock
 BRIDGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BRIDGE))
 
-from geck_mcp import fnv_game  # noqa: E402
+from fnv_mcp import fnv_game  # noqa: E402
 
 BARE = re.compile(r"""\[\s*['"](tasklist|powershell|powershell\.exe|cmd|cmd\.exe|taskkill|explorer\.exe)['"]""",
                   re.I)
@@ -19,7 +19,7 @@ BARE = re.compile(r"""\[\s*['"](tasklist|powershell|powershell\.exe|cmd|cmd\.exe
 class SystemPathTests(unittest.TestCase):
     def test_no_bare_names(self):
         found = []
-        for folder in ('geck_mcp', 'tools', 'engine_map'):
+        for folder in ('fnv_mcp', 'tools', 'engine_map'):
             for path in (BRIDGE / folder).rglob('*.py'):
                 for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
                     if BARE.search(line):

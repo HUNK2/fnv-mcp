@@ -1,7 +1,7 @@
 """Build a reproducible source-only download of fnv-mcp from a committed Git revision.
 
 The archive is fnv-mcp-<version>.zip with one top folder of the same name; the version comes from
-bridge/pyproject.toml and must agree with geck_mcp/__init__.py and the first CHANGELOG heading. Source, scenario
+bridge/pyproject.toml and must agree with fnv_mcp/__init__.py and the first CHANGELOG heading. Source, scenario
 (.yaml) and script (.gek) files go in; binaries, private state, game-derived fixtures and internal working notes
 stay out."""
 import argparse
@@ -84,13 +84,13 @@ def package(repo, revision, output, working_tree=False):
             if path.exists():
                 files[name] = path.read_bytes()
     version = tomllib.loads(files['bridge/pyproject.toml'].decode())['project']['version']
-    module = ast.parse(files['bridge/geck_mcp/__init__.py'].decode())
+    module = ast.parse(files['bridge/fnv_mcp/__init__.py'].decode())
     declared = [ast.literal_eval(n.value) for n in module.body if isinstance(n, ast.Assign)
                 and any(isinstance(t, ast.Name) and t.id == '__version__' for t in n.targets)]
     changelog = files.get('CHANGELOG.md', b'').decode()
     heading = next((line for line in changelog.splitlines() if line.startswith('## ')), '')
     if declared != [version] or version not in heading:
-        raise ValueError('release version markers disagree (pyproject, geck_mcp.__version__, CHANGELOG)')
+        raise ValueError('release version markers disagree (pyproject, fnv_mcp.__version__, CHANGELOG)')
     if folder is not None:
         output = folder / ('%s-%s.zip' % (NAME, version))
     manifest_path = output.with_suffix('.json')

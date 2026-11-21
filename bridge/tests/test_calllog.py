@@ -13,10 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp import fnv_calllog  # noqa: E402
-from geck_mcp.fnv_calllog import CallLog  # noqa: E402
-from geck_mcp.fnv_state import prune  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp import fnv_calllog  # noqa: E402
+from fnv_mcp.fnv_calllog import CallLog  # noqa: E402
+from fnv_mcp.fnv_state import prune  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 KEYS = {'t', 'tool', 'action', 'ok', 'code', 'ms', 'size', 'cut'}
 

@@ -13,11 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from geck_mcp import fnv_link  # noqa: E402
-from geck_mcp.config import FnvSettings  # noqa: E402
-from geck_mcp.fnv_live_tools import (FNV_LIVE_TOOLS, FULL_ONLY_ACTIONS, MUTATING_ACTIONS,  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
+from fnv_mcp.config import FnvSettings  # noqa: E402
+from fnv_mcp.fnv_live_tools import (FNV_LIVE_TOOLS, FULL_ONLY_ACTIONS, MUTATING_ACTIONS,  # noqa: E402
                                      READ_LEVEL_CONTROL, needs_full)
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 import project_fixture  # noqa: E402
 
 STEPS = [{'wait': 1}]
@@ -153,7 +153,7 @@ class GateFixture:
             self.pipe_ops.append(args[:1])
             raise fnv_link.LinkError('COMPANION_UNREACHABLE', 'no game in this test')
         patches = [mock.patch.object(fnv_link.EngineLink, 'connect', no_pipe),
-                   mock.patch('geck_mcp.fnv_game.game_processes', return_value=[])]
+                   mock.patch('fnv_mcp.fnv_game.game_processes', return_value=[])]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)

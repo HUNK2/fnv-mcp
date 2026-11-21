@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_link  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
 from test_engine_stops import PROLOGUE_LEN, StopHost, StopTestCase, build, hexint  # noqa: E402
 from engine_host import needs_zig, zig_path  # noqa: E402,F401
 

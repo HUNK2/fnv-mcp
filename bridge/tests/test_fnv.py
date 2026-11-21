@@ -17,9 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from engine_map import commands, demangle, generate, headers, source  # noqa: E402
-from geck_mcp import fnv_crash, fnv_engine  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
-from geck_mcp.fnv_tools import FNV_TOOLS, FnvService  # noqa: E402
+from fnv_mcp import fnv_crash, fnv_engine  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
+from fnv_mcp.fnv_tools import FNV_TOOLS, FnvService  # noqa: E402
 
 ACTOR_CPP = textwrap.dedent('''\
     #include "Actor.h"

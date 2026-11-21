@@ -9,9 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from w1_support import W1Live  # noqa: E402
-from geck_mcp import fnv_time  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_scenario import ScenarioError, ScenarioRunner, compare, _equal  # noqa: E402
+from fnv_mcp import fnv_time  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_scenario import ScenarioError, ScenarioRunner, compare, _equal  # noqa: E402
 
 
 class ScenarioLoadTests(unittest.TestCase):
@@ -103,18 +103,18 @@ class TimeValidationTests(unittest.TestCase):
 
 class InjectWaitTests(unittest.TestCase):
     def test_wait_frames_at_the_job_maximum_stays_in_step_range(self):
-        from geck_mcp.fnv_inject import Injector
+        from fnv_mcp.fnv_inject import Injector
         live = W1Live()
         inj = Injector.of(live)
         waiter = mock.MagicMock()
-        with mock.patch('geck_mcp.fnv_inject.shared_time', return_value=(None, waiter)):
+        with mock.patch('fnv_mcp.fnv_inject.shared_time', return_value=(None, waiter)):
             inj.wait_frames(10000)
         self.assertLessEqual(waiter.run.call_args.kwargs['frames'], fnv_time.STEP_MAX)
 
 
 class ReplayTests(unittest.TestCase):
     def test_play_refuses_a_path_name(self):
-        from geck_mcp.fnv_replay import ReplayTools
+        from fnv_mcp.fnv_replay import ReplayTools
         tools = ReplayTools(W1Live())
         with self.assertRaises(ConvError) as cm:
             tools.play('..\\x')
@@ -123,7 +123,7 @@ class ReplayTests(unittest.TestCase):
 
 class ControlPatchTests(unittest.TestCase):
     def _tools(self):
-        from geck_mcp.fnv_control import ControlTools
+        from fnv_mcp.fnv_control import ControlTools
         agent = SimpleNamespace(live=mock.MagicMock(), deep=mock.MagicMock())
         t = ControlTools(agent)
         t.live.reads.return_value = [b'\x90' * 5]
@@ -146,7 +146,7 @@ class ControlPatchTests(unittest.TestCase):
         self.assertEqual(int.from_bytes(data[1:], 'little'), (0xF0000000 - 0x00401005) & 0xFFFFFFFF)
 
     def test_a_write_reaching_into_a_hook_is_refused(self):
-        from geck_mcp.fnv_live import LiveError
+        from fnv_mcp.fnv_live import LiveError
         t = self._tools()
         t.deep.hooks.return_value = [{'target': '0x00401003', 'stolen': 5, 'label': 'h'}]
         with self.assertRaises(LiveError) as cm:
@@ -156,7 +156,7 @@ class ControlPatchTests(unittest.TestCase):
 
 class RenderTokenTests(unittest.TestCase):
     def test_modifier_with_console_text_is_refused(self):
-        from geck_mcp.fnv_render import PLAIN_WORD
+        from fnv_mcp.fnv_render import PLAIN_WORD
         self.assertIsNone(PLAIN_WORD.fullmatch('x\nquit'))
         self.assertIsNone(PLAIN_WORD.fullmatch('a;b'))
         self.assertIsNotNone(PLAIN_WORD.fullmatch('0011C532'))

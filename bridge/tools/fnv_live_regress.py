@@ -38,12 +38,12 @@ SCENARIOS = [
 
 def preflight(session, attach, start):
     """Problems that make the run meaningless (empty list: go)."""
-    from geck_mcp import fnv_link
+    from fnv_mcp import fnv_link
     problems = []
     # The game's pipe takes one client: an MCP server that used it lets go after 20 s idle (EngineLink). Wait for
     # that, before any call through the session (whose own link would then hold the pipe), and say so when it does
     # not happen. Only when a game runs: without one there is nothing to wait for.
-    from geck_mcp.fnv_game import game_processes
+    from fnv_mcp.fnv_game import game_processes
     if game_processes():
         probe = fnv_link.EngineLink(getattr(session.project.fnv, 'engine_pipe', None))
         try:

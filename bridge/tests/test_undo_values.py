@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_world  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp import fnv_world  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
 
 DH, NODE2 = 0x00900000, 0x00900400
 GLOBALS = {0x00910000: ('GameHour', 0x00000038, 's', 9.12),
@@ -74,7 +74,7 @@ class GlobalsTests(unittest.TestCase):
 
 class SpawnRefTests(unittest.TestCase):
     def setUp(self):
-        from geck_mcp.fnv_agent import AgentTools
+        from fnv_mcp.fnv_agent import AgentTools
         self.fake = FakeLive()
         self.addCleanup(self.fake.close)
         self.live = self.fake.live

@@ -4,11 +4,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from geck_mcp.authoring import Authoring, index_files
-from geck_mcp.config import Project
-from geck_mcp.esp import build as builder, codec, generic
-from geck_mcp.esp.formids import FormIdMap
-from geck_mcp.esp.records import SpecError
+from fnv_mcp.authoring import Authoring, index_files
+from fnv_mcp.config import Project
+from fnv_mcp.esp import build as builder, codec, generic
+from fnv_mcp.esp.formids import FormIdMap
+from fnv_mcp.esp.records import SpecError
 
 ROOT = Path(__file__).resolve().parent.parent
 

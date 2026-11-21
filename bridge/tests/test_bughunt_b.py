@@ -11,10 +11,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_fnv_create import FakeLive  # noqa: E402
-from geck_mcp import fnv_hands, fnv_world  # noqa: E402
-from geck_mcp.fnv_create import AuthorTools, PlaceTools  # noqa: E402
-from geck_mcp.fnv_eyes import EyesTools  # noqa: E402
-from geck_mcp.fnv_hands import HandsTools, menu_id_of  # noqa: E402
+from fnv_mcp import fnv_hands, fnv_world  # noqa: E402
+from fnv_mcp.fnv_create import AuthorTools, PlaceTools  # noqa: E402
+from fnv_mcp.fnv_eyes import EyesTools  # noqa: E402
+from fnv_mcp.fnv_hands import HandsTools, menu_id_of  # noqa: E402
 
 
 class PlaceRemoveTests(unittest.TestCase):
@@ -182,7 +182,7 @@ class WorldTests(unittest.TestCase):
             world._ini_path = lambda: ini
             world._layout = lambda: SimpleNamespace(ini=ini)
             real = fnv_world.fnv_layout if hasattr(fnv_world, 'fnv_layout') else None
-            from geck_mcp import fnv_layout
+            from fnv_mcp import fnv_layout
             old = fnv_layout.guard
             fnv_layout.guard = lambda layout, what: None
             try:

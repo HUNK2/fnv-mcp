@@ -13,7 +13,7 @@ from fakes import FakeLive, wire  # noqa: E402
 
 class CappedTests(unittest.TestCase):
     def test_capped(self):
-        from geck_mcp.fnv_args import capped
+        from fnv_mcp.fnv_args import capped
         self.assertEqual(capped(range(5000)), {'items': list(range(200)), 'total': 5000, 'truncated': True})
         self.assertEqual(capped(range(5000), newest_first=True)['items'], list(range(4800, 5000)))
         self.assertEqual(capped([1, 2]), {'items': [1, 2], 'total': 2, 'truncated': False})
@@ -37,7 +37,7 @@ class ToolCapTests(unittest.TestCase):
         self.assertTrue(r['truncated'])
 
     def test_hooks_list_capped(self):
-        from geck_mcp.fnv_deep import DeepTools
+        from fnv_mcp.fnv_deep import DeepTools
         for k in range(5000):
             hook = wire('hook')['hook']
             hook.update(id=k + 1, target='0x%08x' % (0x00400000 + 16 * k), label='trace:%d' % k)
@@ -59,7 +59,7 @@ class ToolCapTests(unittest.TestCase):
         self.assertEqual(r['next'], 200, 'call again with since=next for the rest')
 
     def test_place_list_capped(self):
-        from geck_mcp.fnv_create import PlaceTools
+        from fnv_mcp.fnv_create import PlaceTools
         for k in range(250):
             self.live.journal.add({'kind': 'place', 'ref': 'FF%06X' % k, 'base': '00000014', 'position': [0, 0, 0],
                                    'rotation': [0, 0, 0], 'scale': 1.0, 'undo': None})
@@ -81,7 +81,7 @@ class ToolCapTests(unittest.TestCase):
         self.assertTrue(r['outputTruncated'])
 
     def test_watch_timeline_capped(self):
-        from geck_mcp.fnv_agent import AgentTools
+        from fnv_mcp.fnv_agent import AgentTools
         agent = AgentTools(self.live, deep=None)
         agent._watch_items = lambda items: [{'kind': 'expr', 'label': 'x', 'op': ('eval', '00', '0')}]
         ticks = iter(range(10 ** 6))
@@ -98,8 +98,8 @@ class ToolCapTests(unittest.TestCase):
 
 class GlobalsTests(unittest.TestCase):
     def test_globals_set_lists_only_changed_with_new_value(self):
-        from geck_mcp import fnv_world
-        from geck_mcp.fnv_world import WorldTools
+        from fnv_mcp import fnv_world
+        from fnv_mcp.fnv_world import WorldTools
         with FakeLive() as fake:
             live = fake.live
             dh, node, names = 0x02000000, 0x02100000, ['GameHour', 'GameDay', 'TimeScale']

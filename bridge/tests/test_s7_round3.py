@@ -16,7 +16,7 @@ BRIDGE = Path(__file__).resolve().parents[1]
 
 
 def tool_source(name):
-    source = (BRIDGE / 'geck_mcp' / 'fnv_live_tools.py').read_text(encoding='utf-8')
+    source = (BRIDGE / 'fnv_mcp' / 'fnv_live_tools.py').read_text(encoding='utf-8')
     fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
     return fn
 
@@ -25,7 +25,7 @@ class NameExportPathTests(unittest.TestCase):
     """X1: fnv_name_export wrote to any path the call named, as a read-only tool."""
 
     def tools(self, tmp):
-        from geck_mcp import fnv_naming
+        from fnv_mcp import fnv_naming
         db_path = Path(tmp) / 'atlas.sqlite'
         db = sqlite3.connect(db_path)
         db.executescript('CREATE TABLE runs (id, started, source, probes, notes);'
@@ -102,7 +102,7 @@ class NameExportPathTests(unittest.TestCase):
             self.assertEqual(tools._export_path(str(old)), old.resolve())
 
     def test_registered_as_control_not_read(self):
-        from geck_mcp import fnv_live_tools
+        from fnv_mcp import fnv_live_tools
         self.assertEqual(fnv_live_tools.FNV_LIVE_TOOLS['fnv_name_export'][0], 'control')
         fn = tool_source('fnv_name_export')
         self.assertEqual([ast.unparse(d) for d in fn.decorator_list], ['server.tool(annotations=control)'])
@@ -129,7 +129,7 @@ class BareIdentifierTests(unittest.TestCase):
         return [bytes.fromhex(args[0]).decode('cp1252') for name, args in fake.link.ops if name == 'eval']
 
     def test_a_command_name_is_never_evaluated(self):
-        from geck_mcp.fnv_live import LiveError
+        from fnv_mcp.fnv_live import LiveError
         fake, live = self.live([{'name': 'QuitGame', 'short': 'qqq'}, {'name': 'KillAll', 'short': ''}])
         for name in ('QuitGame', 'qqq', 'killall'):
             with self.assertRaises(LiveError) as caught:
@@ -138,7 +138,7 @@ class BareIdentifierTests(unittest.TestCase):
         self.assertEqual(self.evals(fake), [])
 
     def test_without_the_command_list_a_bare_name_is_not_evaluated(self):
-        from geck_mcp.fnv_live import LiveError
+        from fnv_mcp.fnv_live import LiveError
         fake, live = self.live(None)
         with self.assertRaises(LiveError):
             live.resolve('QuitGame')
@@ -146,7 +146,7 @@ class BareIdentifierTests(unittest.TestCase):
 
     def test_a_plugin_command_is_not_evaluated_either(self):
         # S7 batch-1 review I4: plugin commands (JIP LN...) are not in the engine map's command list
-        from geck_mcp.fnv_live import LiveError
+        from fnv_mcp.fnv_live import LiveError
         fake, live = self.live([{'name': 'QuitGame', 'short': 'qqq'}])
         fake.link.expressions['GetJIPVersion'] = {'type': 'number', 'value': 57}
         with self.assertRaises(LiveError):
@@ -165,15 +165,15 @@ class ExpressionToolsAreActTests(unittest.TestCase):
     """W1: fnv_snapshot (capture and diff) and fnv_watch ran caller console lines and expressions as kind read."""
 
     def test_every_call_is_act(self):
-        from geck_mcp.fnv_live_tools import gated_kind
+        from fnv_mcp.fnv_live_tools import gated_kind
         for name, action in (('fnv_snapshot', None), ('fnv_snapshot', 'diff'), ('fnv_watch', 'sample'),
                              ('fnv_watch', 'frames')):
             self.assertEqual(gated_kind(name, action, 'read'), 'act', name)
 
     def test_read_mode_refuses_a_snapshot_with_a_console_item(self):
         from fakes import FakeLive
-        from geck_mcp.fnv_live_tools import gated_kind
-        from geck_mcp.fnv_scenario import snapshot
+        from fnv_mcp.fnv_live_tools import gated_kind
+        from fnv_mcp.fnv_scenario import snapshot
         with FakeLive(engine_control='read') as fake:
             out = fake.live.run('fnv_snapshot', lambda: snapshot(fake.live, [{'console': 'player.kill'}], 'x'),
                                 gated_kind('fnv_snapshot', None, 'read'))
@@ -270,7 +270,7 @@ class QuotedNameTests(unittest.TestCase):
             self.assertEqual([n for n, _ in fake.link.ops if n == 'eval'], [])
 
     def test_the_helper(self):
-        from geck_mcp.fnv_link import quoted
+        from fnv_mcp.fnv_link import quoted
         self.assertEqual(quoted('My Mod.esp'), '"My Mod.esp"')
         for bad in ('a"b.esp', 'a\nb.esp', 'a\rb.esp'):
             with self.assertRaises(ValueError):
@@ -281,8 +281,8 @@ class AssetPathTests(unittest.TestCase):
     """X2: fnv_asset_check's folder check was lexical (Data\\..\\.. escaped it) and ran after is_file()."""
 
     def tools(self, root):
-        from geck_mcp import fnv_records
-        from geck_mcp.fnv_records import RecordsTools
+        from fnv_mcp import fnv_records
+        from fnv_mcp.fnv_records import RecordsTools
         game_root = root / 'game'
         (game_root / 'Data').mkdir(parents=True)
         fnv = SimpleNamespace(mo2_root=root / 'mo2', mo2_profile='Dev')
@@ -298,7 +298,7 @@ class AssetPathTests(unittest.TestCase):
         return tools, game_root
 
     def test_dotdot_out_of_data_is_refused(self):
-        from geck_mcp.fnv_data import DataError
+        from fnv_mcp.fnv_data import DataError
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools, game_root = self.tools(root)
@@ -309,7 +309,7 @@ class AssetPathTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'BAD_PATH')
 
     def test_a_missing_file_outside_is_bad_path_not_not_found(self):
-        from geck_mcp.fnv_data import DataError
+        from fnv_mcp.fnv_data import DataError
         with tempfile.TemporaryDirectory() as tmp:
             tools, _ = self.tools(Path(tmp))
             with self.assertRaises(DataError) as caught:
@@ -328,7 +328,7 @@ class StaleCopyTests(unittest.TestCase):
 
     def test_indexing_one_copy_drops_the_other(self):
         from test_bugfix_a_c_s import tes4_plugin
-        from geck_mcp.fnv_data import RecordIndex
+        from fnv_mcp.fnv_data import RecordIndex
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             data, mod = root / 'Data' / 'Mine.esp', root / 'mods' / 'Mine' / 'Mine.esp'
@@ -356,8 +356,8 @@ class TwoServerPauseTests(unittest.TestCase):
     def test_the_other_servers_undo_resumes_and_the_pauser_sees_it(self):
         import struct
         from fakes import FakeLive
-        from geck_mcp import fnv_time
-        from geck_mcp.fnv_time import TimeControl
+        from fnv_mcp import fnv_time
+        from fnv_mcp.fnv_time import TimeControl
         with FakeLive() as fake:
             fake.link.put(fnv_time.TIME_GLOBAL, struct.pack('<If', 0, 0.0))
             counter = {'n': 0}
@@ -390,7 +390,7 @@ class SwapUndoTests(unittest.TestCase):
 
     def setup(self, fake):
         import struct
-        from geck_mcp.fnv_data import SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
+        from fnv_mcp.fnv_data import SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
         target, holder = 0x9000, 0x9800
         for base, data in ((target, 0x1111), (holder, 0x2222)):
             fake.link.put(base + SCRIPT_HEADER, bytes(0x10))
@@ -426,7 +426,7 @@ class SwapUndoTests(unittest.TestCase):
 
     def test_the_hot_swap_records_the_targets_code(self):
         import inspect
-        from geck_mcp import fnv_data
+        from fnv_mcp import fnv_data
         source = inspect.getsource(fnv_data)
         self.assertIn("'data': '0x%08X' % old_data", source)
 
@@ -441,13 +441,13 @@ class Batch2ReviewTests(unittest.TestCase):
         self.assertNotIn("mode in ('start', 'stop')", text)
 
     def test_i2_the_index_version_rebuilds_old_two_copy_indexes(self):
-        from geck_mcp import fnv_data
+        from fnv_mcp import fnv_data
         self.assertGreaterEqual(fnv_data.INDEX_VERSION, 3)
 
     def test_i3_a_half_done_undo_is_repaired_by_its_retry(self):
         import struct
         from fakes import FakeLive
-        from geck_mcp.fnv_data import SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
+        from fnv_mcp.fnv_data import SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
         spans = [(SCRIPT_HEADER, 0x10), (SCRIPT_DATA, 4), (SCRIPT_REFS, 8), (SCRIPT_VARS, 8)]
         target, holder = 0x9000, 0x9800
 
@@ -479,7 +479,7 @@ class FlowStaleStopTests(unittest.TestCase):
     """K4: fnv_flow trace took an old parked stop of a cleared break with the same bp id as its own hit."""
 
     def flow(self, stops):
-        from geck_mcp.fnv_flow import FlowTools
+        from fnv_mcp.fnv_flow import FlowTools
         flow = FlowTools.__new__(FlowTools)
         flow.dbg = SimpleNamespace(_stops=lambda: list(stops))
         times = iter(range(1000))
@@ -498,7 +498,7 @@ class FlowStaleStopTests(unittest.TestCase):
         self.assertEqual(self.flow([old, new])._await_bp(0, 1.0, addr=0x00402000, seen={5})['seq'], 9)
 
     def test_a_free_id_skips_ids_parked_stops_hold(self):
-        from geck_mcp.fnv_debugger import Debugger
+        from fnv_mcp.fnv_debugger import Debugger
         dbg = Debugger.__new__(Debugger)
         dbg.breaks = {}
         dbg.live = SimpleNamespace(link=SimpleNamespace(one=lambda *a: {'bps': []}))

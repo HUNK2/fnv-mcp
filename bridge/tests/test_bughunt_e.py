@@ -10,7 +10,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_conv, fnv_deep, fnv_link, fnv_perf, fnv_sampling, fnv_watch  # noqa: E402
+from fnv_mcp import fnv_conv, fnv_deep, fnv_link, fnv_perf, fnv_sampling, fnv_watch  # noqa: E402
 from test_fnv_debug import DebugTestBase  # noqa: E402
 from test_fnv_script_debug import LINE, ScriptDebugTestBase  # noqa: E402
 

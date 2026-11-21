@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp.param_docs import PARAM_DOCS  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp.param_docs import PARAM_DOCS  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 
 def own_description(schema):
@@ -62,7 +62,7 @@ class ParamDocTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('game units', rotation['description'])
 
     async def test_every_fix_names_a_real_parameter(self):
-        from geck_mcp.param_docs import PARAM_FIXES
+        from fnv_mcp.param_docs import PARAM_FIXES
         server = make_server(self.fixture.p)
         raw = {t.name: t.parameters.get('properties', {}) for t in server._tool_manager.list_tools()}
         for tool, params in PARAM_FIXES.items():
@@ -71,7 +71,7 @@ class ParamDocTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(10 <= len(new) <= 300 and old != new, '%s.%s' % (tool, param))
 
     async def test_every_entry_is_real_and_needed(self):
-        from geck_mcp.fnv_live_tools import register  # noqa: F401 - the listing below is the truth
+        from fnv_mcp.fnv_live_tools import register  # noqa: F401 - the listing below is the truth
         server = make_server(self.fixture.p)
         raw = {t.name: t.parameters.get('properties', {}) for t in server._tool_manager.list_tools()}
         problems = []

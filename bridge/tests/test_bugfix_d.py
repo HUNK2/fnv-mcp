@@ -9,12 +9,12 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_eyes, fnv_world  # noqa: E402
-from geck_mcp.esp.codec import Record, Subrecord  # noqa: E402
-from geck_mcp.fnv_create import FormTools  # noqa: E402
-from geck_mcp.fnv_eyes import EyesTools  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
-from geck_mcp.fnv_world import WorldTools  # noqa: E402
+from fnv_mcp import fnv_eyes, fnv_world  # noqa: E402
+from fnv_mcp.esp.codec import Record, Subrecord  # noqa: E402
+from fnv_mcp.fnv_create import FormTools  # noqa: E402
+from fnv_mcp.fnv_eyes import EyesTools  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp.fnv_world import WorldTools  # noqa: E402
 import test_fnv_eyes as te  # noqa: E402
 
 
@@ -234,7 +234,7 @@ class D7Refresh(unittest.TestCase):
         lines = []
         live = SimpleNamespace(values=lambda names, ref=0: [0], console=lambda line, ref=0: lines.append((line, ref)))
         tools = FormTools.__new__(FormTools)
-        from geck_mcp.fnv_create import AssetTools
+        from fnv_mcp.fnv_create import AssetTools
         tools = AssetTools.__new__(AssetTools)
         tools.live, tools.sleep, tools.clock = live, lambda s: None, lambda: 0
 
@@ -248,8 +248,8 @@ class D7Refresh(unittest.TestCase):
 
 class D14(unittest.TestCase):
     def test_sweep_validates_steps_and_index(self):
-        from geck_mcp.fnv_inspect import SystemsTools
-        from geck_mcp.fnv_conv import ConvError
+        from fnv_mcp.fnv_inspect import SystemsTools
+        from fnv_mcp.fnv_conv import ConvError
         tools = SystemsTools(SimpleNamespace(ready=lambda: None))
         with self.assertRaises(ConvError):
             tools.sweep('x', [1], 0, 0, 1, steps=0)

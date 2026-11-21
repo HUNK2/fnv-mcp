@@ -11,8 +11,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_data, fnv_records  # noqa: E402
-from geck_mcp.fnv_data import RecordIndex  # noqa: E402
+from fnv_mcp import fnv_data, fnv_records  # noqa: E402
+from fnv_mcp.fnv_data import RecordIndex  # noqa: E402
 
 
 def plugin(path, edid):
@@ -84,7 +84,7 @@ class SqliteTests(unittest.TestCase):
         other.commit()
 
     def test_atlas_connect_twice_no_schema_rerun(self):
-        from geck_mcp import fnv_atlas
+        from fnv_mcp import fnv_atlas
         path = self.dir / 'atlas.sqlite'
         db = fnv_atlas._connect(path)
         db.execute('DROP INDEX counts_address')
@@ -97,7 +97,7 @@ class SqliteTests(unittest.TestCase):
         self.assertGreater(db.execute('PRAGMA user_version').fetchone()[0], 0)
 
     def test_write_txn_rolls_back(self):
-        from geck_mcp.fnv_state import sqlite_connect, write_txn
+        from fnv_mcp.fnv_state import sqlite_connect, write_txn
         db = sqlite_connect(self.dir / 't.sqlite')
         self.addCleanup(db.close)
         db.execute('create table t(x)')

@@ -11,9 +11,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_blame, fnv_conv, fnv_debugger, fnv_deep, fnv_flow, fnv_scriptdbg, fnv_time, fnv_watch  # noqa: E402
-from geck_mcp.fnv_link import LinkError  # noqa: E402
-from geck_mcp.fnv_pred import ProcState, compile_predicate  # noqa: E402
+from fnv_mcp import fnv_blame, fnv_conv, fnv_debugger, fnv_deep, fnv_flow, fnv_scriptdbg, fnv_time, fnv_watch  # noqa: E402
+from fnv_mcp.fnv_link import LinkError  # noqa: E402
+from fnv_mcp.fnv_pred import ProcState, compile_predicate  # noqa: E402
 from test_fnv_debug import CALLER, CODE, STACK_TOP, DebugTestBase, FakeLink  # noqa: E402
 from test_fnv_flow import FUNC, make_live as make_flow_live  # noqa: E402
 from test_fnv_script_debug import (FORM_ID, LINE, PROCESS, PROCESS_BYTE, FakeClock, ScriptDebugTestBase,  # noqa: E402
@@ -39,7 +39,7 @@ class DebuggerFixes(DebugTestBase):
 
     def test_e1_freeze_thaw_and_status_work_when_the_companion_cannot_answer(self):
         proc = frozen_process()
-        with mock.patch('geck_mcp.fnv_procmem.GameProcess', return_value=proc):
+        with mock.patch('fnv_mcp.fnv_procmem.GameProcess', return_value=proc):
             self.assertEqual(self.run_tool('freeze')['state'], 'frozen')
             self.unreachable()                       # every later call would die in live.ready()
             self.assertEqual(self.run_tool('status')['state'], 'frozen')
@@ -48,7 +48,7 @@ class DebuggerFixes(DebugTestBase):
 
     def test_e1_e6_a_restarted_server_can_still_thaw(self):
         proc = frozen_process()
-        with mock.patch('geck_mcp.fnv_procmem.GameProcess', return_value=proc):
+        with mock.patch('fnv_mcp.fnv_procmem.GameProcess', return_value=proc):
             self.run_tool('freeze')
             fresh = fnv_debugger.Debugger(self.live, sleep=lambda s: None, clock=lambda: 0.0)   # nothing in memory
             self.unreachable()
@@ -60,7 +60,7 @@ class DebuggerFixes(DebugTestBase):
     def test_e6_thaw_with_nothing_on_record_resumes_a_stalled_game(self):
         proc = frozen_process()
         proc.read.return_value = b'\x10\x00\x00\x00'     # the frame counter stands still (S6.3: only then)
-        with mock.patch('geck_mcp.fnv_procmem.GameProcess', return_value=proc):
+        with mock.patch('fnv_mcp.fnv_procmem.GameProcess', return_value=proc):
             out = self.run_tool('thaw')
         proc.resume_all.assert_called_once_with([1000, 1001, 1002])
         self.assertTrue(out['forced'])
@@ -68,7 +68,7 @@ class DebuggerFixes(DebugTestBase):
     def test_e6_thaw_with_nothing_on_record_leaves_a_running_game(self):
         proc = frozen_process()
         proc.read.side_effect = [b'\x10\x00\x00\x00', b'\x40\x00\x00\x00']    # frames advance
-        with mock.patch('geck_mcp.fnv_procmem.GameProcess', return_value=proc):
+        with mock.patch('fnv_mcp.fnv_procmem.GameProcess', return_value=proc):
             out = self.run_tool('thaw')
         proc.resume_all.assert_not_called()
         self.assertFalse(out['forced'])

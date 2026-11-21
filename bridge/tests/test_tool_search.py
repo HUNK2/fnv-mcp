@@ -8,8 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_guide import GuideTools, tool_table, words  # noqa: E402
-from geck_mcp.fnv_live_tools import USE_WHEN  # noqa: E402
+from fnv_mcp.fnv_guide import GuideTools, tool_table, words  # noqa: E402
+from fnv_mcp.fnv_live_tools import USE_WHEN  # noqa: E402
 
 TABLE = [
     ('put a building on a slope', 'fnv_place'),          # the known failure: it answered fnv_plugin_build
@@ -133,7 +133,7 @@ class ToolSearchTableTests(unittest.TestCase):
         """Each "problem: first tool" line of the server instructions works as a search too: the problem's words
         find the line's first tool in the first three tools (a guide may rank above them)."""
         import re
-        from geck_mcp.server import INSTRUCTIONS
+        from fnv_mcp.server import INSTRUCTIONS
         lines = INSTRUCTIONS.split('First tool for each problem', 1)[1].split('): ', 1)[1]
         lines = lines.split(' Act tools change', 1)[0].rstrip('.').split('; ')
         self.assertGreaterEqual(len(lines), 12)
@@ -207,7 +207,7 @@ class ToolSearchServerTests(unittest.IsolatedAsyncioTestCase):
     async def test_find_through_the_server_gives_example_calls_with_required_parameters(self):
         import project_fixture
         from mcp import Client
-        from geck_mcp.server import make_server
+        from fnv_mcp.server import make_server
         fixture = project_fixture.ProjectFixture()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)

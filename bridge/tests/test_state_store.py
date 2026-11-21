@@ -12,20 +12,20 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_state  # noqa: E402
-from geck_mcp.fnv_state import GameIdentity, StateError, atomic_write, locked, read_json, update_json  # noqa: E402
+from fnv_mcp import fnv_state  # noqa: E402
+from fnv_mcp.fnv_state import GameIdentity, StateError, atomic_write, locked, read_json, update_json  # noqa: E402
 
 
 def _increment(path, n):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from geck_mcp.fnv_state import update_json as up
+    from fnv_mcp.fnv_state import update_json as up
     for _ in range(n):
         up(Path(path), lambda v: {'n': v['n'] + 1}, {'n': 0})
 
 
 def _hold(path, ready, release):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from geck_mcp.fnv_state import locked as lk
+    from fnv_mcp.fnv_state import locked as lk
     with lk(Path(path)):
         ready.set()
         release.wait(30)
@@ -61,7 +61,7 @@ class StateStoreTests(unittest.TestCase):
         path = self.dir / 'bad.json'
         path.write_text('{"half": ')
         default = {'items': []}
-        with self.assertLogs('geck_mcp.fnv_state', logging.WARNING) as logs:
+        with self.assertLogs('fnv_mcp.fnv_state', logging.WARNING) as logs:
             first = read_json(path, default)
             second = read_json(path, default)
         self.assertEqual(first, default)
@@ -141,7 +141,7 @@ class GameIdentityTests(unittest.TestCase):
         self.assertEqual(GameIdentity(4, None).key(), '4:?')
 
     def test_process_cached_one_second(self):
-        from geck_mcp import fnv_game
+        from fnv_mcp import fnv_game
         calls = []
 
         def image_pids(name):       # the process list: a snapshot since the speed work, tasklist.exe before
@@ -160,7 +160,7 @@ class GameIdentityTests(unittest.TestCase):
 class ProcStateTests(unittest.TestCase):
     def test_procstate_keeps_sections_when_start_unknown(self):
         from types import SimpleNamespace
-        from geck_mcp.fnv_pred import ProcState
+        from fnv_mcp.fnv_pred import ProcState
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         state = ProcState(SimpleNamespace(project=SimpleNamespace(state_dir=tmp.name)))

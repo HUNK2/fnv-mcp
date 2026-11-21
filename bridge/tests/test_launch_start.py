@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_game  # noqa: E402
+from fnv_mcp import fnv_game  # noqa: E402
 
 FLAG = fnv_game.AUDIO_CACHE_FLAG
 

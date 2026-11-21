@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_link  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
 
 PROLOGUE_LEN = 6  # hookme starts with 55 89 e5 83 ec 08: no relative jump, so no relocations
 

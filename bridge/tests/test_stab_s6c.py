@@ -17,8 +17,8 @@ class SubtitleTests(unittest.TestCase):
 
     def test_subtitles_one_per_poll_all_caught(self):
         # ported from research/stabilize/repro/subtitle/repro_subtitles_skip.py
-        from geck_mcp import fnv_inspect
-        from geck_mcp.fnv_deep import RECORD_WORDS, RING, DeepTools
+        from fnv_mcp import fnv_inspect
+        from fnv_mcp.fnv_deep import RECORD_WORDS, RING, DeepTools
         SEQ_ADDR, RING_ADDR, TEXT = 0x5000, 0x10000000, 0x20000000
         ring, state = {}, {'seq': 0}
 
@@ -84,7 +84,7 @@ class SessionRollbackTests(unittest.TestCase):
     """R12: a failed session start left prepare's crash-context hooks on and stopped a capture it had not started."""
 
     def run_start(self, capture_started):
-        from geck_mcp import fnv_session
+        from fnv_mcp import fnv_session
         calls = []
 
         class Capture:
@@ -139,7 +139,7 @@ class CrawlItemTests(unittest.TestCase):
     """R17: an item that failed mid-test (EquipItem raised) stayed in the player's inventory."""
 
     def test_crawl_item_failure_removes_test_copy(self):
-        from geck_mcp.fnv_crawl import CrawlTools
+        from fnv_mcp.fnv_crawl import CrawlTools
         lines, counts = [], iter([0, 1])
 
         class Live:
@@ -169,7 +169,7 @@ class OutsideNoteTests(unittest.TestCase):
     """R18: "terminated from outside" was said with an old companion and when the bridge itself force-quit."""
 
     def game(self, companion, quit_rows=()):
-        from geck_mcp import fnv_game
+        from fnv_mcp import fnv_game
         from fakes import project
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -196,7 +196,7 @@ class NameExportTests(unittest.TestCase):
 
     def test_name_export_empty_writes_nothing(self):
         import sqlite3
-        from geck_mcp import fnv_naming
+        from fnv_mcp import fnv_naming
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / 'atlas.sqlite'
             db = sqlite3.connect(db_path)
@@ -220,8 +220,8 @@ class AssetCheckTests(unittest.TestCase):
     """T7: fnv_asset_check took any path and surfaced raw parse errors."""
 
     def tools(self, tmp):
-        from geck_mcp.fnv_data import DataError  # noqa: F401
-        from geck_mcp.fnv_records import RecordsTools
+        from fnv_mcp.fnv_data import DataError  # noqa: F401
+        from fnv_mcp.fnv_records import RecordsTools
         game_root = Path(tmp) / 'game'
         (game_root / 'Data').mkdir(parents=True)
         fnv = SimpleNamespace(mo2_root=Path(tmp) / 'mo2', mo2_profile='Dev')
@@ -230,8 +230,8 @@ class AssetCheckTests(unittest.TestCase):
         return tools, game_root
 
     def test_asset_check_outside_data_refused(self):
-        from geck_mcp import fnv_records
-        from geck_mcp.fnv_data import DataError
+        from fnv_mcp import fnv_records
+        from fnv_mcp.fnv_data import DataError
         with tempfile.TemporaryDirectory() as tmp:
             tools, _ = self.tools(tmp)
             elsewhere = Path(tmp) / 'elsewhere.esp'
@@ -246,8 +246,8 @@ class AssetCheckTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'BAD_PATH')
 
     def test_malformed_plugin_is_bad_asset(self):
-        from geck_mcp import fnv_records
-        from geck_mcp.fnv_data import DataError
+        from fnv_mcp import fnv_records
+        from fnv_mcp.fnv_data import DataError
         with tempfile.TemporaryDirectory() as tmp:
             tools, game_root = self.tools(tmp)
             bad = game_root / 'Data' / 'Broken.esp'
@@ -271,7 +271,7 @@ class IgnoredParameterTests(unittest.TestCase):
 
     def test_ignored_params_rejected(self):
         import ast
-        root = Path(__file__).resolve().parents[1] / 'geck_mcp'
+        root = Path(__file__).resolve().parents[1] / 'fnv_mcp'
         wrong = []
         for name in ('fnv_live_tools.py', 'fnv_tools.py', 'fnv_spec.py'):
             source = (root / name).read_text(encoding='utf-8')

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 from test_stab_gate import GateFixture  # noqa: E402
 
 BRIDGE = Path(__file__).resolve().parents[1]
@@ -121,16 +121,16 @@ class QuitOwnershipTests(GateFixture, unittest.IsolatedAsyncioTestCase):
         await super().asyncSetUp()
         self.launched = time.time() - 600
         self.steps = []
-        patches = [mock.patch('geck_mcp.fnv_game.terminate', side_effect=lambda pid: self.steps.append('terminate')),
-                   mock.patch('geck_mcp.fnv_game.post_close',
+        patches = [mock.patch('fnv_mcp.fnv_game.terminate', side_effect=lambda pid: self.steps.append('terminate')),
+                   mock.patch('fnv_mcp.fnv_game.post_close',
                               side_effect=lambda pid: self.steps.append('post_close') or 1),
-                   mock.patch('geck_mcp.fnv_game.Game._exited', return_value=True)]
+                   mock.patch('fnv_mcp.fnv_game.Game._exited', return_value=True)]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
 
     def running(self, started):
-        patch = mock.patch('geck_mcp.fnv_game.game_processes', return_value=[(self.PID, filetime(started))])
+        patch = mock.patch('fnv_mcp.fnv_game.game_processes', return_value=[(self.PID, filetime(started))])
         patch.start()
         self.addCleanup(patch.stop)
 

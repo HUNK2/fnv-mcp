@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
 
 
 class ConsoleGuardTests(unittest.TestCase):

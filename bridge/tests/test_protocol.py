@@ -5,11 +5,11 @@ import unittest
 
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
-from geck_mcp import fnv_guide
-from geck_mcp.server import make_server
-from geck_mcp.fnv_tools import FNV_TOOLS
-from geck_mcp.fnv_live_tools import FNV_LIVE_TOOLS
-from geck_mcp.fnv_spec import FNV_SPEC_TOOLS
+from fnv_mcp import fnv_guide
+from fnv_mcp.server import make_server
+from fnv_mcp.fnv_tools import FNV_TOOLS
+from fnv_mcp.fnv_live_tools import FNV_LIVE_TOOLS
+from fnv_mcp.fnv_spec import FNV_SPEC_TOOLS
 import project_fixture
 
 ALL = set(FNV_TOOLS) | set(FNV_LIVE_TOOLS) | set(FNV_SPEC_TOOLS)

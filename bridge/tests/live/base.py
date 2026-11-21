@@ -34,7 +34,7 @@ class Session:
             return cls._instance
 
     def __init__(self, project_path, engine_control=None):
-        from geck_mcp.config import Project
+        from fnv_mcp.config import Project
         self.project_path = project_path
         self.project = Project.load(project_path)
         if engine_control is not None:
@@ -57,7 +57,7 @@ class Session:
 
     async def _serve(self):
         from mcp import Client
-        from geck_mcp.server import make_server
+        from fnv_mcp.server import make_server
         try:
             self.stop = asyncio.Event()
             async with Client(make_server(self.project)) as client:

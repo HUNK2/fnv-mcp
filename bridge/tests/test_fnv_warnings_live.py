@@ -9,8 +9,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_warnings  # noqa: E402
-from geck_mcp.fnv_warnings import WarningCapture, Warnings, format_printf  # noqa: E402
+from fnv_mcp import fnv_warnings  # noqa: E402
+from fnv_mcp.fnv_warnings import WarningCapture, Warnings, format_printf  # noqa: E402
 
 
 def dwords(x):

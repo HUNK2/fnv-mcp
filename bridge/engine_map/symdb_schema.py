@@ -1,5 +1,5 @@
 """Schema of the symbol database (state/symdb.sqlite). One source of truth for the builder
-(engine_map/symdb.py), the reader (geck_mcp/fnv_symdb.py) and the tests. See docs/FNV-SYMDB.md."""
+(engine_map/symdb.py), the reader (fnv_mcp/fnv_symdb.py) and the tests. See docs/FNV-SYMDB.md."""
 
 SCHEMA_VERSION = 1
 

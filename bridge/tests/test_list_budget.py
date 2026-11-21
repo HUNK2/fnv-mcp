@@ -19,9 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp.fnv_guide import GuideTools  # noqa: E402
-from geck_mcp.server import make_server, toolset_list  # noqa: E402
-from geck_mcp.toolsets import ALWAYS, CORE_TOOLS, registered  # noqa: E402
+from fnv_mcp.fnv_guide import GuideTools  # noqa: E402
+from fnv_mcp.server import make_server, toolset_list  # noqa: E402
+from fnv_mcp.toolsets import ALWAYS, CORE_TOOLS, registered  # noqa: E402
 
 BEFORE = 231716          # characters at 4a3dc9f, the start of the tool quality pass
 BUDGET = 219500          # 217,593 measured with every parameter described, plus about 1% headroom

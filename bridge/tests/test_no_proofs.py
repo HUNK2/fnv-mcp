@@ -21,11 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from geck_mcp import fnv_engine  # noqa: E402
-from geck_mcp.fnv_agent import AgentTools  # noqa: E402
-from geck_mcp.fnv_deep import WATCHES, DeepTools, HookError  # noqa: E402
-from geck_mcp.fnv_facts import WATCH_TARGETS  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp import fnv_engine  # noqa: E402
+from fnv_mcp.fnv_agent import AgentTools  # noqa: E402
+from fnv_mcp.fnv_deep import WATCHES, DeepTools, HookError  # noqa: E402
+from fnv_mcp.fnv_facts import WATCH_TARGETS  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 from test_stab_gate import GateFixture  # noqa: E402
 
 BRIDGE = Path(__file__).resolve().parents[1]

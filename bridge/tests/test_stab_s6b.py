@@ -9,14 +9,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_records  # noqa: E402
-from geck_mcp.fnv_data import decode_subrecord  # noqa: E402
+from fnv_mcp import fnv_records  # noqa: E402
+from fnv_mcp.fnv_data import decode_subrecord  # noqa: E402
 
 
 def game_data():
     """The game's Data folder from the project file, or None (tests that need it are skipped)."""
     try:
-        from geck_mcp.config import Project
+        from fnv_mcp.config import Project
         root = Path(__file__).resolve().parents[1] / 'projects' / 'hellowasteland.windows.json'
         data = Project.load(str(root)).game_root / 'Data'
         return data if (data / 'FalloutNV.esm').exists() else None
@@ -96,20 +96,20 @@ class Cp1252Tests(unittest.TestCase):
     """R16: strict cp1252 decodes raised on the bytes cp1252 leaves undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D)."""
 
     def test_undefined_cp1252_byte_in_full_modl_mast(self):
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         for raw in (b'Caf\x81', b'meshes\\x\x8d.nif', b'Mod\x9d.esp'):
             text = codec.text(raw)
             self.assertEqual(text.encode('cp1252', 'cp1252-bytes'), raw, 'reads back to the same bytes')
 
     def test_script_variable_with_an_undefined_byte(self):
-        from geck_mcp.esp import scripts
+        from fnv_mcp.esp import scripts
         slsd = struct.pack('<I', 1) + b'\0' * 12 + b'\0' + b'\0' * 7
         layout = scripts.semantic_layout([('SLSD', slsd.hex()), ('SCVR', b'var\x81\0'.hex())])
         self.assertEqual(layout[0][0], 'var\x81')
 
     def test_no_strict_cp1252_decode_left(self):
         import re
-        root = Path(__file__).resolve().parents[1] / 'geck_mcp'
+        root = Path(__file__).resolve().parents[1] / 'fnv_mcp'
         strict = re.compile(r"""\.decode\(\s*['"]cp1252['"]\s*\)""")
         found = ['%s:%d' % (path.relative_to(root), n) for path in root.rglob('*.py')
                  for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1) if strict.search(line)]
@@ -140,7 +140,7 @@ class BadChecksumTests(unittest.TestCase):
         return data, struct.pack('<I', len(data)) + bytes(stream)
 
     def test_bad_checksum_keeps_the_bytes_with_a_warning(self):
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         data, payload = self.bad_payload()
         warnings = []
         self.assertEqual(codec.decompress(payload, warnings), data)
@@ -148,12 +148,12 @@ class BadChecksumTests(unittest.TestCase):
         self.assertIn('checksum', warnings[0])
 
     def test_broken_stream_is_format_error(self):
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         with self.assertRaises(codec.FormatError):
             codec.decompress(struct.pack('<I', 10) + b'\x78\x9c not deflate')
 
     def test_record_carries_the_warning(self):
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         data, payload = self.bad_payload()
         rec = codec.Record('LAND', 0x150FC0, codec.COMPRESSED)
         rec._compressed = payload
@@ -162,7 +162,7 @@ class BadChecksumTests(unittest.TestCase):
 
     @unittest.skipUnless(DATA, 'needs the game Data folder')
     def test_vanilla_land_150fc0_parses(self):
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         data = (DATA / 'FalloutNV.esm').read_bytes()
         found = find_record(data, 0x00150FC0, b'LAND')
         self.assertIsNotNone(found)
@@ -177,7 +177,7 @@ class FuzzTests(unittest.TestCase):
 
     def seed_plugin(self):
         import zlib
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         body = sub(b'EDID', b'Thing\0') + sub(b'FULL', b'A thing\0') + sub(b'DATA', b'\x01' * 12)
         packed = struct.pack('<I', len(body)) + zlib.compress(body)
         recs = record(b'MISC', 0x01000800, body) + record(b'MISC', 0x01000801, packed, flags=codec.COMPRESSED)
@@ -201,7 +201,7 @@ class FuzzTests(unittest.TestCase):
             yield bytes(raw)
 
     def test_fuzzed_plugin_raises_format_error_only(self):
-        from geck_mcp.esp import codec, validate
+        from fnv_mcp.esp import codec, validate
         seed = self.seed_plugin()
         codec.parse(seed, lazy=False)                       # the seed itself is valid
         wrong = []
@@ -223,7 +223,7 @@ class XxxxTests(unittest.TestCase):
     """P4: a subrecord read with XXXX but small enough without it was written back without the XXXX."""
 
     def test_xxxx_round_trip_exact(self):
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         small = b'abcdefghij'
         body = (sub(b'EDID', b'Big\0') + b'XXXX' + struct.pack('<HI', 4, len(small)) + b'DATA' + struct.pack('<H', 0)
                 + small)
@@ -231,13 +231,13 @@ class XxxxTests(unittest.TestCase):
         self.assertEqual(codec.write(codec.parse(data, lazy=False)), data)
 
     def test_large_subrecord_still_gets_xxxx(self):
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         rec = codec.Record('MISC', 0x01000800)
         rec.subrecords = [codec.Subrecord('DATA', b'x' * 0x10000)]
         self.assertIn(b'XXXX', codec.encode_subrecords(rec.subrecords))
 
     def test_xxxx_flag_does_not_change_equality(self):
-        from geck_mcp.esp import codec
+        from fnv_mcp.esp import codec
         self.assertEqual(codec.Subrecord('DATA', b'1'), codec.Subrecord('DATA', b'1', xxxx=True))
 
 
@@ -247,7 +247,7 @@ class RecordFindWinnerTests(unittest.TestCase):
     def test_record_find_uses_load_order_winner(self):
         import sqlite3
         from types import SimpleNamespace
-        from geck_mcp.fnv_data import DataTools
+        from fnv_mcp.fnv_data import DataTools
         db = sqlite3.connect(':memory:')
         db.execute('create table records(file integer, owner text, local integer, type text, edid text, full text, '
                    'offset integer)')
@@ -271,7 +271,7 @@ class FormIndexTests(unittest.TestCase):
     def test_form_index_bounds(self):
         import sqlite3
         from types import SimpleNamespace
-        from geck_mcp.fnv_data import DataTools
+        from fnv_mcp.fnv_data import DataTools
         db = sqlite3.connect(':memory:')
         db.execute('create table records(file integer, owner text, local integer, type text, edid text, full text)')
         db.execute("insert into records values (1, 'mymod.esp', 0x800, 'MISC', 'Thing', null)")
@@ -288,7 +288,7 @@ class IndexGapTests(unittest.TestCase):
     """P7: placed grenades/mines and navmeshes were not indexed by EditorID; PlayerREF unknown; offset/limit unclamped."""
 
     def test_pgre_edid_indexed(self):
-        from geck_mcp.fnv_data import RecordIndex
+        from fnv_mcp.fnv_data import RecordIndex
         recs = [record(b'PGRE', 0x01000800, sub(b'EDID', b'FiendMineRef\0')),
                 record(b'PMIS', 0x01000801, sub(b'EDID', b'SomeMissileRef\0')),
                 record(b'NAVM', 0x01000802, sub(b'EDID', b'NVDLC04ElevNav02REF\0'))]
@@ -303,7 +303,7 @@ class IndexGapTests(unittest.TestCase):
     def test_playerref_is_known(self):
         import sqlite3
         from types import SimpleNamespace
-        from geck_mcp.fnv_data import DataTools
+        from fnv_mcp.fnv_data import DataTools
         db = sqlite3.connect(':memory:')
         db.execute('create table records(file integer, owner text, local integer, type text, edid text, full text)')
         tools = DataTools.__new__(DataTools)
@@ -313,7 +313,7 @@ class IndexGapTests(unittest.TestCase):
     def test_huge_offset_clamped(self):
         import sqlite3
         from types import SimpleNamespace
-        from geck_mcp.fnv_data import DataTools
+        from fnv_mcp.fnv_data import DataTools
         db = sqlite3.connect(':memory:')
         db.execute('create table records(file integer, owner text, local integer, type text, edid text, full text)')
         for k in range(5):
@@ -331,8 +331,8 @@ class LintVanillaTests(unittest.TestCase):
 
     @staticmethod
     def engine():
-        from geck_mcp import fnv_engine
-        from geck_mcp.config import Project
+        from fnv_mcp import fnv_engine
+        from fnv_mcp.config import Project
         root = Path(__file__).resolve().parents[1] / 'projects' / 'hellowasteland.windows.json'
         if not root.exists():       # a local project file (CI has none)
             raise unittest.SkipTest('needs the local project file and the engine map')
@@ -344,8 +344,8 @@ class LintVanillaTests(unittest.TestCase):
     @unittest.skipUnless(DATA, 'needs the game Data folder')
     def test_vanilla_scripts_lint_clean(self):
         from collections import Counter
-        from geck_mcp.esp import codec
-        from geck_mcp.fnv_data import lint_script
+        from fnv_mcp.esp import codec
+        from fnv_mcp.fnv_data import lint_script
         engine = self.engine()
         data = (DATA / 'FalloutNV.esm').read_bytes()
         edids = {}
@@ -373,7 +373,7 @@ class LintVanillaTests(unittest.TestCase):
         self.assertLessEqual(codes.get(('info', 'EXTRA_TOKENS_IGNORED'), 0), 132)
 
     def test_ref_space_cmd_showmessage_and_zero_param_extras(self):
-        from geck_mcp.fnv_data import lint_script
+        from fnv_mcp.fnv_data import lint_script
         engine = self.engine()
         source = ('scn T\nref r\nBegin GameMode\n  r. StopLook\n  ShowMessage SomeMsg rank\n  StopCombat player\n'
                   '  PlayerREF.Disable\nEnd\n')
@@ -387,13 +387,13 @@ class SpecCheckTests(unittest.TestCase):
     """P9: `$` matched before a trailing newline; model_path and text() took control characters."""
 
     def test_edid_trailing_newline_refused(self):
-        from geck_mcp.esp import records
+        from fnv_mcp.esp import records
         with self.assertRaises(records.SpecError):
             records.check_edid('Thing\n', 'records.Thing')
         records.check_edid('Thing', 'records.Thing')
 
     def test_spec_names_with_trailing_newline_refused(self):
-        from geck_mcp.esp import build, records
+        from fnv_mcp.esp import build, records
         base = {'schema': build.SCHEMA, 'project_id': 'p', 'plugin': 'x.esp', 'masters': ['FalloutNV.esm']}
         for field, value in (('plugin', 'x.esp\n'), ('project_id', 'p\n')):
             with self.assertRaises(records.SpecError, msg=field):
@@ -402,14 +402,14 @@ class SpecCheckTests(unittest.TestCase):
         self.assertIsNone(build.REF_ID_RE.match('ref1\n'))
 
     def test_model_path_refuses_control_and_device_names(self):
-        from geck_mcp.esp import records
+        from fnv_mcp.esp import records
         for bad in ('a\0.nif', 'a\n.nif', 'a\t.nif', 'a*.nif', 'con.nif', 'dir\\NUL.nif', 'x?.nif'):
             with self.assertRaises(records.SpecError, msg=repr(bad)):
                 records.model_path(bad, 'records.X.model')
         records.model_path('clutter\\cup.nif', 'records.X.model')
 
     def test_text_refuses_nul(self):
-        from geck_mcp.esp import records
+        from fnv_mcp.esp import records
         with self.assertRaises(records.SpecError):
             records.text('a\0b', 'records.X.name')
         records.text('two\nlines', 'records.X.name')
@@ -420,7 +420,7 @@ class SaveRotationTests(unittest.TestCase):
 
     def initial(self, rotation):
         from types import SimpleNamespace
-        from geck_mcp.fnv_save import Save
+        from fnv_mcp.fnv_save import Save
         block = b'\x01\x00\x00' + struct.pack('<6f', 1.0, 2.0, 3.0, *rotation)
         save = Save.__new__(Save)
         return save._initial(4, block, SimpleNamespace(resolve=lambda raw: 0x0000003C))

@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp.fnv_deep import HookError  # noqa: E402
-from geck_mcp.fnv_live_tools import FNV_LIVE_TOOLS, gated_kind  # noqa: E402
+from fnv_mcp.fnv_deep import HookError  # noqa: E402
+from fnv_mcp.fnv_live_tools import FNV_LIVE_TOOLS, gated_kind  # noqa: E402
 
 try:
     import capstone  # noqa: F401
@@ -65,7 +65,7 @@ class EngineGetPurityTests(unittest.TestCase):
     """H1: fnv_engine_get (read) ran proven "getters" that write memory, and called with no fault guard."""
 
     def setUp(self):
-        from geck_mcp.fnv_control import ControlTools
+        from fnv_mcp.fnv_control import ControlTools
         self.fake = FakeLive(engine_control='read')
         self.addCleanup(self.fake.close)
         self.live = self.fake.live
@@ -166,13 +166,13 @@ class EngineGetRealMapTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from geck_mcp import fnv_engine
-        from geck_mcp.fnv_deep import CleanImage
+        from fnv_mcp import fnv_engine
+        from fnv_mcp.fnv_deep import CleanImage
         cls.engine = fnv_engine.load(ENGINE_MAP)
         cls.image = CleanImage(CLEAN_EXE)
 
     def setUp(self):
-        from geck_mcp.fnv_control import ControlTools
+        from fnv_mcp.fnv_control import ControlTools
         self.fake = FakeLive(engine_control='read')
         self.addCleanup(self.fake.close)
         self.fake.live._engine = self.engine
@@ -218,7 +218,7 @@ class PerkEntriesGateTests(unittest.TestCase):
 
     def test_registration_passes_the_action(self):
         import ast
-        source = (BRIDGE / 'geck_mcp' / 'fnv_live_tools.py').read_text(encoding='utf-8')
+        source = (BRIDGE / 'fnv_mcp' / 'fnv_live_tools.py').read_text(encoding='utf-8')
         fn = next(n for n in ast.walk(ast.parse(source))
                   if isinstance(n, ast.AsyncFunctionDef) and n.name == 'fnv_perk_entries')
         call = next(n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'invoke')

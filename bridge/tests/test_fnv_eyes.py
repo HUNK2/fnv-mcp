@@ -8,9 +8,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_eyes  # noqa: E402
-from geck_mcp.fnv_eyes import Camera, EyesTools, direction, heading_to  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp import fnv_eyes  # noqa: E402
+from fnv_mcp.fnv_eyes import Camera, EyesTools, direction, heading_to  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
 
 
 def camera_looking(yaw, pitch, position=(0.0, 0.0, 0.0), fov=75.0, width=1280, height=720):

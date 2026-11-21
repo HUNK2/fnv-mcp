@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from w1_support import W1Live  # noqa: E402
-from geck_mcp import fnv_time  # noqa: E402
-from geck_mcp.fnv_scenario import ScenarioError, ScenarioRunner  # noqa: E402
+from fnv_mcp import fnv_time  # noqa: E402
+from fnv_mcp.fnv_scenario import ScenarioError, ScenarioRunner  # noqa: E402
 
 
 class ScenarioLoadTests(unittest.TestCase):
@@ -140,7 +140,7 @@ class ScenarioStepTests(unittest.TestCase):
         self.assertTrue(out['passed'])
 
     def test_wait_for_an_event_finds_one_that_arrives_during_the_wait(self):
-        with mock.patch('geck_mcp.fnv_scenario.time.sleep', side_effect=lambda s: self.link.add_event('script_error', 'x')):
+        with mock.patch('fnv_mcp.fnv_scenario.time.sleep', side_effect=lambda s: self.link.add_event('script_error', 'x')):
             out = self.runner.step({'wait': {'for': 'script_error', 'timeout': 5}}, None)
         self.assertTrue(out['passed'])
         self.assertEqual(out['actual']['type'], 'script_error')

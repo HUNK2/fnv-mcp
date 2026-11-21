@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_link  # noqa: E402
-from geck_mcp.fnv_game import Game  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
+from fnv_mcp.fnv_game import Game  # noqa: E402
 
 
 def bare_game(state):
@@ -24,7 +24,7 @@ def bare_game(state):
 
 def _sessions(state, tag, n):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from geck_mcp.fnv_game import Game as G
+    from fnv_mcp.fnv_game import Game as G
     game = G.__new__(G)
     game.state, game._session = Path(state), None
     for i in range(n):
@@ -33,7 +33,7 @@ def _sessions(state, tag, n):
 
 def _enable(root, tag, n):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from geck_mcp import fnv_link as fl
+    from fnv_mcp import fnv_link as fl
     for i in range(n):
         fl.enable_mod(root, 'Dev', '%s%d' % (tag, i))
 
@@ -77,7 +77,7 @@ class StateFileTests(unittest.TestCase):
         self.assertNotIn('journal', json.loads((self.dir / 'session.json').read_text()))
 
     def test_swaps_two_servers(self):
-        from geck_mcp.fnv_code import CodeTools
+        from fnv_mcp.fnv_code import CodeTools
         live = SimpleNamespace(project=SimpleNamespace(state_dir=str(self.dir)),
                                game=SimpleNamespace(process=lambda: (4242, 1)))
         a, b = CodeTools(live), CodeTools(live)

@@ -9,9 +9,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import geck_mcp  # noqa: E402
+import fnv_mcp  # noqa: E402
 from engine_map import generate  # noqa: E402
-from geck_mcp import envvars, fnv_link  # noqa: E402
+from fnv_mcp import envvars, fnv_link  # noqa: E402
 
 BRIDGE = Path(__file__).resolve().parents[1]
 NAME, VERSION = 'fnv-mcp', '0.5.0b1'
@@ -21,12 +21,12 @@ class VersionTests(unittest.TestCase):
     def test_one_name_and_one_version(self):
         project = tomllib.loads((BRIDGE / 'pyproject.toml').read_text(encoding='utf-8'))['project']
         self.assertEqual((project['name'], project['version']), (NAME, VERSION))
-        self.assertEqual((geck_mcp.NAME, geck_mcp.__version__), (NAME, VERSION))
+        self.assertEqual((fnv_mcp.NAME, fnv_mcp.__version__), (NAME, VERSION))
         self.assertEqual(generate.GENERATOR, '%s %s engine_map 1' % (NAME, VERSION))
 
     def test_the_server_announces_them(self):
-        from geck_mcp.config import Project
-        from geck_mcp.server import make_server
+        from fnv_mcp.config import Project
+        from fnv_mcp.server import make_server
         server = make_server(Project.load(BRIDGE / 'projects' / 'example-fnv.json'))
         self.assertEqual(server.name, NAME)
         self.assertEqual(server.version, VERSION)

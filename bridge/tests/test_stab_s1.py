@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_suite import CRASH_CODES, BisectTools, restore_markers  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_suite import CRASH_CODES, BisectTools, restore_markers  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_bugfix_f import make_plugin, stat_ids  # noqa: E402
@@ -244,7 +244,7 @@ class PendingRestoreTests(unittest.TestCase):                # R3
         self.assertEqual(self.path.read_bytes(), self.original)
 
     def test_status_lists_pending_restore(self):
-        from geck_mcp import fnv_game
+        from fnv_mcp import fnv_game
         self.dead_server()
         project = SimpleNamespace(fnv=SimpleNamespace(mo2_root=str(self.root), mo2_profile='Dev', engine_pipe=None),
                                   game_root=str(self.root / 'game'), state_dir=self.state)

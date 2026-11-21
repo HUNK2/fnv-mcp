@@ -9,10 +9,10 @@ from pathlib import Path
 
 from mcp.client import Client
 
-from geck_mcp import fnv_guide
-from geck_mcp.config import Project
-from geck_mcp.server import INSTRUCTIONS, make_server
-from geck_mcp.toolsets import TOOLSETS
+from fnv_mcp import fnv_guide
+from fnv_mcp.config import Project
+from fnv_mcp.server import INSTRUCTIONS, make_server
+from fnv_mcp.toolsets import TOOLSETS
 
 NEW_GUIDES = ('start', 'build-a-place', 'test-a-mod', 'quest-dialogue', 'npc-ai-combat', 'safety-undo')
 HEADINGS = ('## Steps', '## What the answers mean', '## Known traps', '## Checks that prove the fix')

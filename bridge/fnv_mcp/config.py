@@ -57,7 +57,7 @@ class Project(BaseModel):
     spec: Path | None = None
     # fnv_* tools (engine map, crash doctor); optional.
     fnv: FnvSettings | None = None
-    # Toolsets this server registers (geck_mcp/toolsets.py): game, naming, core (opt-in: the everyday tools only).
+    # Toolsets this server registers (fnv_mcp/toolsets.py): game, naming, core (opt-in: the everyday tools only).
     # Unset: game and naming.
     toolsets: list[Literal['game', 'naming', 'core']] | None = Field(default=None, max_length=3)
 

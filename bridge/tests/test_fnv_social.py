@@ -2,8 +2,8 @@
 import struct
 import unittest
 
-from geck_mcp import fnv_social
-from geck_mcp.fnv_social import SocialTools, _compare, _match, _record_values, _schedule_ok
+from fnv_mcp import fnv_social
+from fnv_mcp.fnv_social import SocialTools, _compare, _match, _record_values, _schedule_ok
 
 
 class FakeLive:

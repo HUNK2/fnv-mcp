@@ -13,9 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_game, fnv_link  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
-from geck_mcp.fnv_facts import FACTS  # noqa: E402
+from fnv_mcp import fnv_game, fnv_link  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
+from fnv_mcp.fnv_facts import FACTS  # noqa: E402
 
 WIRE = Path(__file__).resolve().parent / 'wire'
 
@@ -167,7 +167,7 @@ class FakeLive:
     Use as a context manager, or call close()."""
 
     def __init__(self, engine_control='full'):
-        from geck_mcp.fnv_live import LiveService
+        from fnv_mcp.fnv_live import LiveService
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         self.project = project(self.root, engine_control)

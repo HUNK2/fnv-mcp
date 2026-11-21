@@ -7,10 +7,10 @@ import struct
 import tempfile
 import unittest
 
-from geck_mcp.esp import build, codec
-from geck_mcp.esp.assets import AssetError, AssetIndex, bsa_names, nif_textures
-from geck_mcp.esp.formids import FormIdMap, MasterIndex
-from geck_mcp.esp.validate import validate
+from fnv_mcp.esp import build, codec
+from fnv_mcp.esp.assets import AssetError, AssetIndex, bsa_names, nif_textures
+from fnv_mcp.esp.formids import FormIdMap, MasterIndex
+from fnv_mcp.esp.validate import validate
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).parent / 'fixtures'

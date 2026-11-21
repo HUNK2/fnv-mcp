@@ -9,14 +9,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
 
-TOOLS = Path(__file__).resolve().parents[1] / 'geck_mcp' / 'fnv_live_tools.py'
+TOOLS = Path(__file__).resolve().parents[1] / 'fnv_mcp' / 'fnv_live_tools.py'
 
 
 class ParserTests(unittest.TestCase):
     def test_hex_int_names_parameter(self):
-        from geck_mcp import fnv_args
+        from fnv_mcp import fnv_args
         self.assertEqual(fnv_args.hex_int('start', '0x0087F9F0'), 0x0087F9F0)
         self.assertEqual(fnv_args.hex_int('start', '87f9f0'), 0x87F9F0)
         with self.assertRaises(ValueError) as caught:
@@ -24,7 +24,7 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "start: expected a hex number such as 0x0087F9F0, got 'zz'")
 
     def test_form_id_forms(self):
-        from geck_mcp import fnv_args
+        from fnv_mcp import fnv_args
         for text in ('0x14', '14', '00000014'):
             self.assertEqual(fnv_args.form_id(text), 0x14, text)
         self.assertEqual(fnv_args.form_id('FF000001'), 0xFF000001)
@@ -33,13 +33,13 @@ class ParserTests(unittest.TestCase):
                 fnv_args.form_id(bad)
 
     def test_record_tools_take_short_form_ids(self):
-        from geck_mcp.fnv_data import DataTools
+        from fnv_mcp.fnv_data import DataTools
         entries = [{'index': 0, 'name': 'FalloutNV.esm', 'fileId': 1}]
         for text in ('0x14', '14', '00000014'):
             self.assertEqual(tuple(DataTools._resolve(None, entries, text)), ('falloutnv.esm', 0x14), text)
 
     def test_ranged(self):
-        from geck_mcp import fnv_args
+        from fnv_mcp import fnv_args
         self.assertEqual(fnv_args.ranged('value', 255, 'u8'), 255)
         self.assertEqual(fnv_args.ranged('value', '0x10', 'u16'), 16)
         with self.assertRaises(ValueError) as caught:
@@ -49,7 +49,7 @@ class ParserTests(unittest.TestCase):
 
 class SinkRefTests(unittest.TestCase):
     def test_events_ref_names_parameter(self):
-        from geck_mcp.fnv_sampling import SinkTools
+        from fnv_mcp.fnv_sampling import SinkTools
         with FakeLive() as fake:
             r = fake.live.run('fnv_events', lambda: SinkTools(fake.live).read(0, 'zz'))
             self.assertEqual(r['error']['code'], 'INVALID_ARGUMENT')
@@ -77,7 +77,7 @@ class MemWriteTests(unittest.TestCase):
 
 class EngineGetTests(unittest.TestCase):
     def test_engine_get_arg_count_checked(self):
-        from geck_mcp.fnv_control import ControlTools
+        from fnv_mcp.fnv_control import ControlTools
         with FakeLive() as fake:
             live = fake.live
             fn = {'name': 'Actor::GetLevel', 'status': 'proven', 'address': '0x0087F9F0'}
@@ -105,8 +105,8 @@ class EnvelopeThroughServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         import project_fixture
         from unittest import mock
-        from geck_mcp import fnv_link
-        from geck_mcp.config import FnvSettings
+        from fnv_mcp import fnv_link
+        from fnv_mcp.config import FnvSettings
         self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
         root = Path(self.fixture.tmp.name)
@@ -118,7 +118,7 @@ class EnvelopeThroughServerTests(unittest.IsolatedAsyncioTestCase):
         def no_pipe(link, *args, **kwargs):
             raise fnv_link.LinkError('COMPANION_UNREACHABLE', 'no game in this test')
         for p in (mock.patch.object(fnv_link.EngineLink, 'connect', no_pipe),
-                  mock.patch('geck_mcp.fnv_game.game_processes', return_value=[])):
+                  mock.patch('fnv_mcp.fnv_game.game_processes', return_value=[])):
             p.start()
             self.addCleanup(p.stop)
 
@@ -127,7 +127,7 @@ class EnvelopeThroughServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def call(self, tool, args):
         from mcp import Client
-        from geck_mcp.server import make_server
+        from fnv_mcp.server import make_server
         async with Client(make_server(self.project)) as client:
             result = await client.call_tool(tool, args)
         return result.structured_content or {}

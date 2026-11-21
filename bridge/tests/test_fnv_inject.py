@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from w1_support import POLL_FN, FORCE_FN, W1Live  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_inject import OS_GLOBALS_PTR, Injector, scan_to_job  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_inject import OS_GLOBALS_PTR, Injector, scan_to_job  # noqa: E402
 
 
 class InjectorTests(unittest.TestCase):

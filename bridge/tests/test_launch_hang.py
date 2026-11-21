@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_display, fnv_game, fnv_layout  # noqa: E402
+from fnv_mcp import fnv_display, fnv_game, fnv_layout  # noqa: E402
 
 
 class FakeClock:

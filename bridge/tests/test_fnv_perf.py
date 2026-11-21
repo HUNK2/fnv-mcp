@@ -10,9 +10,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_coverage import CoverageTools  # noqa: E402
-from geck_mcp.fnv_inspect import FORMULAS, SystemsTools, _decode_group  # noqa: E402
-from geck_mcp.fnv_perf import ProfileTools, block_offsets, block_start, sample_threads  # noqa: E402
+from fnv_mcp.fnv_coverage import CoverageTools  # noqa: E402
+from fnv_mcp.fnv_inspect import FORMULAS, SystemsTools, _decode_group  # noqa: E402
+from fnv_mcp.fnv_perf import ProfileTools, block_offsets, block_start, sample_threads  # noqa: E402
 
 
 class BlockTests(unittest.TestCase):

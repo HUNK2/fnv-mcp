@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_link  # noqa: E402
-from geck_mcp.fnv_journal import Journal  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
+from fnv_mcp.fnv_journal import Journal  # noqa: E402
 
 ADDRESS = 0x00500000
 
@@ -67,7 +67,7 @@ class IntentTests(unittest.TestCase):
         self.assertFalse(self.live.journal.get(e['id'])['undone'])
 
     def test_confirmed_non_repeatable_still_runs(self):
-        from geck_mcp import fnv_live
+        from fnv_mcp import fnv_live
         ran = []
         self.addCleanup(fnv_live.UNDO_OPS.__setitem__, 'swap_script', fnv_live.UNDO_OPS['swap_script'])
         fnv_live.UNDO_OPS['swap_script'] = lambda live, entry, undo: ran.append(undo)
@@ -77,7 +77,7 @@ class IntentTests(unittest.TestCase):
         self.assertEqual(len(ran), 1)
 
     def test_repeatable_flags(self):
-        from geck_mcp.fnv_live import UNDO_OPS
+        from fnv_mcp.fnv_live import UNDO_OPS
         self.assertTrue(UNDO_OPS['write'].repeatable)
         self.assertTrue(UNDO_OPS['console_ref'].repeatable)
         self.assertTrue(UNDO_OPS['unhook'].repeatable)
@@ -87,7 +87,7 @@ class IntentTests(unittest.TestCase):
 class PlaceIntentTests(unittest.TestCase):
     def test_place_journaled_before_setpos(self):
         from test_fnv_create import FakeLive as CreateLive
-        from geck_mcp.fnv_create import PlaceTools
+        from fnv_mcp.fnv_create import PlaceTools
         with tempfile.TemporaryDirectory() as d:
             live = CreateLive(d)
             place = PlaceTools(live)
@@ -104,7 +104,7 @@ class PlaceIntentTests(unittest.TestCase):
 
     def test_place_confirmed_with_its_pose(self):
         from test_fnv_create import FakeLive as CreateLive
-        from geck_mcp.fnv_create import PlaceTools
+        from fnv_mcp.fnv_create import PlaceTools
         with tempfile.TemporaryDirectory() as d:
             live = CreateLive(d)
             out = PlaceTools(live).at('0003404A', position=[10, 20, 30])
@@ -123,7 +123,7 @@ class WorldEditIntentTests(unittest.TestCase):
         return agent
 
     def test_world_edit_delete_is_journaled(self):
-        from geck_mcp.fnv_world import WorldTools
+        from fnv_mcp.fnv_world import WorldTools
         with tempfile.TemporaryDirectory() as d:
             agent = self._agent(d)
             out = WorldTools(agent).world_edit('delete', ref='00000ABC')
@@ -133,7 +133,7 @@ class WorldEditIntentTests(unittest.TestCase):
             self.assertEqual(out['journalId'], e['id'])
 
     def test_world_edit_move_journaled_before_the_first_axis(self):
-        from geck_mcp.fnv_world import WorldTools
+        from fnv_mcp.fnv_world import WorldTools
         with tempfile.TemporaryDirectory() as d:
             agent = self._agent(d)
             tools = WorldTools(agent)

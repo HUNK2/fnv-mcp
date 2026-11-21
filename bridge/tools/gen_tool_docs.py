@@ -5,7 +5,7 @@ Run from bridge/:  python tools/gen_tool_docs.py         (writes docs/TOOLS.md)
 
 The tool list is the one a client sees (BridgeServer.list_tools, every toolset): descriptions, parameter types,
 ranges, defaults and descriptions come from the code. Groups, action lines, example calls and the rename table come
-from geck_mcp/tool_examples.py. tests/test_tool_docs.py fails when the committed file differs from this output."""
+from fnv_mcp/tool_examples.py. tests/test_tool_docs.py fails when the committed file differs from this output."""
 import asyncio
 import json
 import sys
@@ -21,9 +21,9 @@ OUT = ROOT / 'docs' / 'TOOLS.md'
 
 def listed_tools():
     """{name: Tool} as a client sees them, from a server built on a throwaway project with every toolset."""
-    from geck_mcp.config import Project
-    from geck_mcp.server import make_server
-    from geck_mcp.toolsets import TOOLSETS
+    from fnv_mcp.config import Project
+    from fnv_mcp.server import make_server
+    from fnv_mcp.toolsets import TOOLSETS
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         root = Path(tmp)
         project = Project(project_id='docs', game_root=root / 'game', state_dir=root / 'state',
@@ -109,8 +109,8 @@ def first_paragraph(text):
 
 
 def render():
-    from geck_mcp.fnv_guide import tool_table
-    from geck_mcp.tool_examples import ACTIONS, EXAMPLES, GROUPS, RENAMED_TOOLS
+    from fnv_mcp.fnv_guide import tool_table
+    from fnv_mcp.tool_examples import ACTIONS, EXAMPLES, GROUPS, RENAMED_TOOLS
     tools = listed_tools()
     table = tool_table()
     lines = ['# Tool reference', '',

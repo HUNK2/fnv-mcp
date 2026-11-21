@@ -4,7 +4,7 @@ removed, 2026-11-18.)"""
 import tempfile
 from pathlib import Path
 
-from geck_mcp.config import Project
+from fnv_mcp.config import Project
 
 
 class ProjectFixture:

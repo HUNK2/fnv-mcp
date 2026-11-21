@@ -15,7 +15,7 @@ from mcp import Client  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 # (tool, arguments in a shape that works today)
 OLD_SHAPES = [

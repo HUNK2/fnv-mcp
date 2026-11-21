@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.safe_paths import check_includes, inside, no_unc, plain_name, read_roots, write_roots  # noqa: E402
+from fnv_mcp.safe_paths import check_includes, inside, no_unc, plain_name, read_roots, write_roots  # noqa: E402
 
 BAD = ['', '..', '.', 'a/b', 'a\\b', '..\\..\\decoy', 'C:\\Windows', 'a:b', 'x.', 'x ', ' x', '-x', 'CON',
        'nul.txt', 'COM1', 'a' * 61, 'a\nb', 'a..b', 'lpt9.log', 'Aux']

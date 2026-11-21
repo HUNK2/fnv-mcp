@@ -9,9 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.esp import codec  # noqa: E402
+from fnv_mcp.esp import codec  # noqa: E402
 
-PACKAGE = Path(__file__).resolve().parents[1] / 'geck_mcp'
+PACKAGE = Path(__file__).resolve().parents[1] / 'fnv_mcp'
 BOMB = zlib.compress(b'\0' * 5_000_000, 9)          # about 5 KB that inflates to 5 MB
 
 

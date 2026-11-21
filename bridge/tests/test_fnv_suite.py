@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_crawl import CrawlTools  # noqa: E402
-from geck_mcp.fnv_suite import BisectTools  # noqa: E402
+from fnv_mcp.fnv_crawl import CrawlTools  # noqa: E402
+from fnv_mcp.fnv_suite import BisectTools  # noqa: E402
 
 MODS = ['Mod A', 'Mod B', 'Mod C', 'Mod D', 'Quest Breaker', 'Mod F', 'Mod G', 'Mod H']
 

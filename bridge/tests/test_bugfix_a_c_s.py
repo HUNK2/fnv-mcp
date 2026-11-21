@@ -14,10 +14,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_live, fnv_save, supervisor  # noqa: E402
-from geck_mcp.esp import codec, formids  # noqa: E402
-from geck_mcp.fnv_data import RecordIndex  # noqa: E402
-from geck_mcp.fnv_state import GameIdentity  # noqa: E402
+from fnv_mcp import fnv_live, fnv_save, supervisor  # noqa: E402
+from fnv_mcp.esp import codec, formids  # noqa: E402
+from fnv_mcp.fnv_data import RecordIndex  # noqa: E402
+from fnv_mcp.fnv_state import GameIdentity  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -333,7 +333,7 @@ class SmallDataTests(unittest.TestCase):
         self.assertNotIn('extraBytes', out)
 
     def test_project_file_with_bom(self):  # A13
-        from geck_mcp.config import Project
+        from fnv_mcp.config import Project
         with tempfile.TemporaryDirectory() as tmp:
             src = ROOT / 'projects' / 'example-plugin.json'
             text = src.read_text(encoding='utf-8')
@@ -353,7 +353,7 @@ class ExitNoteTests(unittest.TestCase):
     def test_note_of_an_older_game_is_not_for_the_last_launch(self):
         import os
         from unittest import mock
-        from geck_mcp import fnv_game
+        from fnv_mcp import fnv_game
         with tempfile.TemporaryDirectory() as tmp:
             notes = Path(tmp) / 'fnvmcp'
             notes.mkdir()
@@ -372,8 +372,8 @@ class EngineNameTests(unittest.TestCase):
     """S8: Class::Method names from class proofs."""
 
     def test_qualified_names(self):
-        from geck_mcp import fnv_engine
-        from geck_mcp.config import Project
+        from fnv_mcp import fnv_engine
+        from fnv_mcp.config import Project
         try:
             project = Project.load(ROOT / 'projects' / 'hellowasteland.windows.json')
             engine = fnv_engine.load(*fnv_engine.default_paths(project))

@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_eyes, fnv_game, fnv_plugin_build  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp import fnv_eyes, fnv_game, fnv_plugin_build  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
 
 PROLOGUE = b'\x55\x8b\xec\x83\xec\x10' + b'\x90' * 18
 HOOKED = b'\xe9\x00\x10\x00\x00\x90' + b'\x90' * 18
@@ -130,7 +130,7 @@ class GroundTests(unittest.TestCase):
     """4b: fnv_raycast ground_at returned one value per cell (6360.0 at two points 2,000 units apart, live)."""
 
     def ai(self, hits):
-        from geck_mcp import fnv_engine_ai
+        from fnv_mcp import fnv_engine_ai
         ai = fnv_engine_ai.EngineAITools(SimpleNamespace(live=SimpleNamespace(in_game=lambda: None), link=None))
         self.cast = []
 
@@ -204,7 +204,7 @@ class UnfocusedInputTests(unittest.TestCase):
     window was not focused (DirectInput ignores keys then); the frame injector works either way."""
 
     def live(self, focused):
-        from geck_mcp import fnv_live
+        from fnv_mcp import fnv_live
         sent = self.sent = []
 
         class Live(fnv_live.LiveService):

@@ -1,11 +1,11 @@
-"""Conventions helper of the action-style fnv_* tools (geck_mcp/fnv_conv.py)."""
+"""Conventions helper of the action-style fnv_* tools (fnv_mcp/fnv_conv.py)."""
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_conv  # noqa: E402
+from fnv_mcp import fnv_conv  # noqa: E402
 
 
 class FakeLive:

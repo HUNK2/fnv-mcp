@@ -12,7 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_live import LiveService  # noqa: E402
+from fnv_mcp.fnv_live import LiveService  # noqa: E402
 
 
 class JournalValueTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class JournalValueTests(unittest.TestCase):
 
 class ThreadNameTests(unittest.TestCase):
     def test_the_full_answer_has_no_glued_address_and_no_minus_one_lock(self):
-        from geck_mcp import fnv_perf
+        from fnv_mcp import fnv_perf
         engine = SimpleNamespace(symbolize=lambda address, mods, return_address=False: {
             'kind': 'function', 'name': 'E7CCD0Renderer::PresentFrame', 'functionAddress': '0x00E7CCD0'})
         self.assertEqual(fnv_perf.Namer(engine, [])(0xE7CCD4)['function'], 'Renderer::PresentFrame')
@@ -38,7 +38,7 @@ class ThreadNameTests(unittest.TestCase):
 
 class CallLogTests(unittest.TestCase):
     def test_cut_is_explained(self):
-        from geck_mcp.fnv_calllog import CallLog
+        from fnv_mcp.fnv_calllog import CallLog
         with tempfile.TemporaryDirectory() as d:
             log = CallLog(d)
             log.record('fnv_threads', 'list', True, None, 5, 30000, True)
@@ -49,8 +49,8 @@ class CallLogTests(unittest.TestCase):
 
 class SaveInspectTests(unittest.TestCase):
     def test_a_filter_leaves_the_globals_out(self):
-        from geck_mcp import fnv_save
-        from geck_mcp.fnv_tools import FnvService
+        from fnv_mcp import fnv_save
+        from fnv_mcp.fnv_tools import FnvService
         service = FnvService.__new__(FnvService)
         service.run = lambda tool, action: action()
         service._save_path = lambda save: Path('x.fos')
@@ -72,7 +72,7 @@ class SaveInspectTests(unittest.TestCase):
 class SaveNameTests(unittest.TestCase):
     def test_a_trailing_newline_is_not_a_save_name(self):
         # bug hunt 2026-11-18: SAVE_NAME.match let "x\n" through ("$" matches before a final newline)
-        from geck_mcp.fnv_game import GameError, parse_start
+        from fnv_mcp.fnv_game import GameError, parse_start
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / 'x.fos').write_bytes(b'')
             self.assertEqual(parse_start('save:x', d), ('save', 'x'))
@@ -83,7 +83,7 @@ class SaveNameTests(unittest.TestCase):
 
 class FindTests(unittest.TestCase):
     def test_plain_words_find_the_tool(self):
-        from geck_mcp.fnv_guide import GuideTools
+        from fnv_mcp.fnv_guide import GuideTools
         guide = GuideTools()
         for words, tool, action in (('make it night time', 'fnv_time', 'calendar'),
                                     ('the game froze', 'fnv_threads', 'hang'),

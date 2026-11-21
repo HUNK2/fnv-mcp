@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from geck_mcp.esp.formids import FIRST_LOCAL, FormIdError, FormIdMap, MasterIndex, Resolver
+from fnv_mcp.esp.formids import FIRST_LOCAL, FormIdError, FormIdMap, MasterIndex, Resolver
 
 
 def write_index(folder, master, entries):

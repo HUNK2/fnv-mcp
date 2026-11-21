@@ -2,7 +2,7 @@
 
 The CI macOS and Linux jobs failed on every fnv-mcp push: fnv_procmem imported msvcrt at load, and nearly every fnv
 module imports fnv_procmem, so server.py could not be imported off Windows. This test hides msvcrt and
-ctypes.WinDLL/windll in a child process (and a stub fcntl) and imports every geck_mcp module.
+ctypes.WinDLL/windll in a child process (and a stub fcntl) and imports every fnv_mcp module.
 """
 import subprocess
 import sys
@@ -22,9 +22,9 @@ for name in ('WinDLL', 'windll', 'OleDLL', 'oledll'):
     if hasattr(ctypes, name):
         delattr(ctypes, name)
 sys.path.insert(0, sys.argv[1])
-import geck_mcp
+import fnv_mcp
 bad = []
-for mod in pkgutil.walk_packages(geck_mcp.__path__, 'geck_mcp.'):
+for mod in pkgutil.walk_packages(fnv_mcp.__path__, 'fnv_mcp.'):
     try:
         importlib.import_module(mod.name)
     except Exception as e:  # noqa: BLE001

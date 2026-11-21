@@ -14,8 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from engine_map import symdb_schema  # noqa: E402
-from geck_mcp import fnv_crash, fnv_deep, fnv_engine, fnv_symdb  # noqa: E402
-from geck_mcp.fnv_tools import FnvService  # noqa: E402
+from fnv_mcp import fnv_crash, fnv_deep, fnv_engine, fnv_symdb  # noqa: E402
+from fnv_mcp.fnv_tools import FnvService  # noqa: E402
 import test_fnv  # noqa: E402
 
 COMMIT = 'a' * 40
@@ -468,7 +468,7 @@ class HangDoctorTests(SymdbBase):
         self.assertEqual([('locals' in n) for n in named], [True] * 6 + [False] * 2)
 
     def test_walk_stack_carries_ebp(self):
-        from geck_mcp import fnv_procmem
+        from fnv_mcp import fnv_procmem
         stack = struct.pack('<II', 0x0019F020, 0x00401012) + b'\0' * 0x20
         process = SimpleNamespace(u32=lambda a: None, read=lambda a, n: None)
         regs = {'eip': 0x401100, 'esp': 0x0019F000, 'ebp': 0x0019F000, 'stack': stack}

@@ -9,11 +9,11 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_time  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_live import LiveService  # noqa: E402
-from geck_mcp.fnv_pred import compile_predicate  # noqa: E402
-from geck_mcp.fnv_time import TimeControl, WaitFor  # noqa: E402
+from fnv_mcp import fnv_time  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_live import LiveService  # noqa: E402
+from fnv_mcp.fnv_pred import compile_predicate  # noqa: E402
+from fnv_mcp.fnv_time import TimeControl, WaitFor  # noqa: E402
 
 TG = fnv_time.TIME_GLOBAL
 FC = fnv_time.FRAME_COUNTER

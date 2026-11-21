@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from geck_mcp import server as server_module  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
+from fnv_mcp import server as server_module  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
 
 
 def project(folder):

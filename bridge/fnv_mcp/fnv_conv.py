@@ -7,7 +7,7 @@ import traceback
 from pathlib import Path
 
 PAGE_MAX = 500
-log = logging.getLogger('geck_mcp')
+log = logging.getLogger('fnv_mcp')
 
 
 class ConvError(Exception):
@@ -122,7 +122,7 @@ def internal_error(e):
     """(message, evidence) for an exception no tool meant to raise: the type and the place in the bridge code, never
     the exception's own text (it can be a Python detail or hold a path). The traceback goes to the bridge log."""
     frames = traceback.extract_tb(e.__traceback__) if e.__traceback__ else []
-    ours = [f for f in frames if 'geck_mcp' in f.filename.replace('\\', '/')]
+    ours = [f for f in frames if 'fnv_mcp' in f.filename.replace('\\', '/')]
     frame = (ours or frames or [None])[-1]
     where = '%s:%d' % (Path(frame.filename).name, frame.lineno) if frame else 'an unknown place'
     log.error('tool bug: %s in %s', type(e).__name__, where, exc_info=(type(e), e, e.__traceback__))

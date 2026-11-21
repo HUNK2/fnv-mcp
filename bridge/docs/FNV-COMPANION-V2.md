@@ -11,7 +11,7 @@ uses them. Wire version 1 stays valid: every old op keeps its format.
 - The companion hard-codes no engine address. The bridge resolves addresses from the engine map and sends them
   (config ops below).
 - `ping` is answered by the pipe thread, so it works while the main thread is held or stuck.
-- `COMPANION_VERSION` 2, `WIRE_VERSION` 2; `geck_mcp/fnv_link.py` `WIRE = 2`. New code lives in new files
+- `COMPANION_VERSION` 2, `WIRE_VERSION` 2; `fnv_mcp/fnv_link.py` `WIRE = 2`. New code lives in new files
   included by `fnvmcp_engine.c` (one translation unit, `#include "w1_gate.c"` and so on); each new file is
   added to `fnv_link.SOURCES` so the build id changes with it.
 

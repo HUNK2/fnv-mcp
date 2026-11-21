@@ -1,4 +1,4 @@
-"""The generated tool reference (docs/TOOLS.md) and the data it is made from (geck_mcp/tool_examples.py).
+"""The generated tool reference (docs/TOOLS.md) and the data it is made from (fnv_mcp/tool_examples.py).
 
 The reference is written by tools/gen_tool_docs.py from the server's own tool list, so it cannot drift from the
 code: this test fails when the committed file differs from what the script writes now. Run
@@ -16,9 +16,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tools'))
 
 import project_fixture  # noqa: E402
-from geck_mcp.action_params import unused_arguments  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
-from geck_mcp import tool_examples  # noqa: E402
+from fnv_mcp.action_params import unused_arguments  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
+from fnv_mcp import tool_examples  # noqa: E402
 
 
 def action_enum(schema):

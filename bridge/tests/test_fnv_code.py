@@ -12,9 +12,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp.fnv_code import DIR32, REL32, CodeTools  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_plugin_build import PluginTools  # noqa: E402
+from fnv_mcp.fnv_code import DIR32, REL32, CodeTools  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_plugin_build import PluginTools  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/: engine_host
 from engine_host import needs_zig, zig_path  # noqa: E402,F401
 
@@ -126,7 +126,7 @@ class PluginSharingNoteTests(unittest.TestCase):
     local use only."""
 
     def test_install_and_description_say_local_use(self):
-        from geck_mcp import fnv_plugin_build
+        from fnv_mcp import fnv_plugin_build
         self.assertIn('local use', fnv_plugin_build.SHARING_NOTE.lower())
         with tempfile.TemporaryDirectory() as tmp:
             live = live_for(tmp, lambda n: 0x00401000)
@@ -137,7 +137,7 @@ class PluginSharingNoteTests(unittest.TestCase):
             (folder / 'my_plugin.dll').write_bytes(b'MZ')
             out = tools.install('my plugin')
             self.assertEqual(out.get('note'), fnv_plugin_build.SHARING_NOTE)
-        from geck_mcp import fnv_live_tools
+        from fnv_mcp import fnv_live_tools
         import inspect
         self.assertIn(fnv_plugin_build.SHARING_NOTE.split('.')[0], ' '.join(inspect.getsource(fnv_live_tools).split()))
 
@@ -145,7 +145,7 @@ class PluginSharingNoteTests(unittest.TestCase):
 class CompanionHashTests(unittest.TestCase):
     def test_every_engine_source_is_in_the_build_hash(self):
         # A C file left out of the hash let a change reuse a stale build (seen with w5_code.c).
-        from geck_mcp import fnv_link
+        from fnv_mcp import fnv_link
         names = set(fnv_link.source_hashes())
         engine = {'engine/%s' % p.name for p in (fnv_link.NATIVE / 'engine').glob('*.c')}
         self.assertTrue(engine <= names, engine - names)

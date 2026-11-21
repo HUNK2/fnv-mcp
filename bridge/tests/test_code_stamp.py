@@ -10,9 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from geck_mcp import code_stamp  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp import code_stamp  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 BRIDGE = Path(__file__).resolve().parents[1]
 
@@ -42,7 +42,7 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
             path = Path(tmp) / 'game.json'
             path.write_text(json.dumps({'project_id': 'stamp', 'game_root': tmp, 'state_dir': 'state',
                                         'fnv': {'engine_control': 'read'}}), encoding='utf-8')
-            with mock.patch('geck_mcp.fnv_game.game_processes', return_value=[]):
+            with mock.patch('fnv_mcp.fnv_game.game_processes', return_value=[]):
                 async with Client(make_server(Project.load(path))) as client:
                     result = await client.call_tool('fnv_status', {})
             data = (result.structured_content or {}).get('data') or {}

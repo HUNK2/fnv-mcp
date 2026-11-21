@@ -7,9 +7,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_warnings  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_warnings import Warnings  # noqa: E402
+from fnv_mcp import fnv_warnings  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_warnings import Warnings  # noqa: E402
 
 ENGINE = [
     'MASTERFILE: Form (000A3E7C) in file ModOne.esp has wrong type 12 (expected 13)',

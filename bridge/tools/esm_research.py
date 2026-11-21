@@ -5,7 +5,7 @@
     python3 tools/esm_research.py dump FalloutNV.esm OUT.json EDID [EDID ...]
     python3 tools/esm_research.py types FalloutNV.esm OUT.json CREA WEAP ...   (all records of types)
 
-Standard library only (uses geck_mcp.esp.codec). Script evidence comes from the SCTX source text
+Standard library only (uses fnv_mcp.esp.codec). Script evidence comes from the SCTX source text
 Bethesda shipped inside FalloutNV.esm, so a function that appears there is known to compile and run
 in vanilla FNV.
 """
@@ -17,7 +17,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from geck_mcp.esp import codec  # noqa: E402
+from fnv_mcp.esp import codec  # noqa: E402
 
 from esm_index import default_data  # noqa: E402
 

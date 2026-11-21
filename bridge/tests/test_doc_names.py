@@ -1,7 +1,7 @@
 """The docs name only tools that exist, link only files that exist, and keep build history in docs/history/.
 
 Every `fnv_*` or `geck_*` name in the docs must be a current tool, an old name in the rename table
-(geck_mcp/tool_examples.RENAMED_TOOLS), a Python module of this repository, or one of NOT_TOOLS. Files under
+(fnv_mcp/tool_examples.RENAMED_TOOLS), a Python module of this repository, or one of NOT_TOOLS. Files under
 bridge/docs/history/ are the record of how the tools were built and are not checked: they keep the names and dates
 of their time. CHANGELOG.md is a record too and is not checked."""
 import re
@@ -13,14 +13,14 @@ BRIDGE = Path(__file__).resolve().parents[1]
 REPO = BRIDGE.parent
 sys.path.insert(0, str(BRIDGE))
 
-from geck_mcp.fnv_guide import TOOL_NAME, tool_table  # noqa: E402
-from geck_mcp.tool_examples import RENAMED_TOOLS  # noqa: E402
+from fnv_mcp.fnv_guide import TOOL_NAME, tool_table  # noqa: E402
+from fnv_mcp.tool_examples import RENAMED_TOOLS  # noqa: E402
 
 HISTORY = BRIDGE / 'docs' / 'history'
 # fnv_* and geck_* words in the docs that are not tools.
 NOT_TOOLS = {
     'fnv_decomp',            # the decompilation project
-    'geck_mcp',              # the Python package
+    'fnv_mcp',              # the Python package
     'fnv_engine_addresses',  # a header file the engine map writes
     'fnv_door',              # the made-up example tool in FNV-TOOL-CONVENTIONS.md
     'fnv_orig_',             # the prefix fnv_code gives the original function in edited code
@@ -44,7 +44,7 @@ def doc_files():
 
 def module_names():
     names = set()
-    for folder in (BRIDGE / 'geck_mcp', BRIDGE / 'tools', BRIDGE / 'engine_map', BRIDGE, REPO / 'tools'):
+    for folder in (BRIDGE / 'fnv_mcp', BRIDGE / 'tools', BRIDGE / 'engine_map', BRIDGE, REPO / 'tools'):
         names.update(p.stem for p in folder.glob('*.py'))
     return names
 

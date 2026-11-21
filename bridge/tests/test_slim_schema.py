@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp.server import make_server, slim_schema  # noqa: E402
+from fnv_mcp.server import make_server, slim_schema  # noqa: E402
 
 SCHEMA_LISTS = ('anyOf', 'oneOf', 'allOf', 'prefixItems')
 SCHEMA_MAPS = ('properties', '$defs', 'definitions', 'patternProperties')

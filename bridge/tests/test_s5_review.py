@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_game  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp import fnv_game  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
 
 
 def raising(error):
@@ -35,13 +35,13 @@ class NoGameLoadedTests(unittest.TestCase):
 
 class ConsoleAliasTests(unittest.TestCase):
     def test_i2_engine_aliases_refused(self):
-        from geck_mcp.fnv_live import LiveService
+        from fnv_mcp.fnv_live import LiveService
         for line in ('exit', 'CenterOnWorld wasteland 0 0', 'RunBatchScript x.txt', 'ForceSave', 'SystemSave',
                      'Autosave'):
             self.assertIsNotNone(LiveService.console_refused(line), line)
 
     def test_i3_load_and_restart_point_at_tools_that_work_with_a_game_running(self):
-        from geck_mcp.fnv_live import LiveService
+        from fnv_mcp.fnv_live import LiveService
         for word in ('load', 'loadgame', 'con_loadgame', 'restartgame'):
             self.assertIn('fnv_game restart', LiveService.CONSOLE_INSTEAD[word], word)
             self.assertNotIn('fnv_game launch', LiveService.CONSOLE_INSTEAD[word], word)
@@ -96,14 +96,14 @@ class EncodeTests(unittest.TestCase):
 
 class ParserTests(unittest.TestCase):
     def test_m7_uppercase_0x_prefix(self):
-        from geck_mcp import fnv_args
+        from fnv_mcp import fnv_args
         self.assertEqual(fnv_args.hex_int('start', '0X87F9F0'), 0x87F9F0)
         self.assertEqual(fnv_args.form_id('0X14'), 0x14)
 
 
 class EngineGetThisTests(unittest.TestCase):
     def test_m8_this_counts_as_an_argument_outside_thiscall(self):
-        from geck_mcp.fnv_control import ControlTools
+        from fnv_mcp.fnv_control import ControlTools
         with FakeLive() as fake:
             live = fake.live
             fn = {'name': 'GetActorThing', 'status': 'proven'}
@@ -133,7 +133,7 @@ class CapOrderTests(unittest.TestCase):
             self.assertEqual(r['failed'], [bad['id']])
 
     def test_m9_place_list_keeps_the_newest(self):
-        from geck_mcp.fnv_create import PlaceTools
+        from fnv_mcp.fnv_create import PlaceTools
         with FakeLive() as fake:
             for k in range(210):
                 fake.live.journal.add({'kind': 'place', 'ref': 'FF%06X' % k, 'base': '00000014',

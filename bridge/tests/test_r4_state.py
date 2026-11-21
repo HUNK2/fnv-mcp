@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fakes import FakeLive  # noqa: E402
-from geck_mcp import fnv_link  # noqa: E402
-from geck_mcp.fnv_live import LiveError  # noqa: E402
+from fnv_mcp import fnv_link  # noqa: E402
+from fnv_mcp.fnv_live import LiveError  # noqa: E402
 
 REF = 'FF000900'
 
@@ -164,8 +164,8 @@ class HotSwapIntentTests(unittest.TestCase):
     TARGET, HOLDER = 0x9000, 0x9800
 
     def setUp(self):
-        from geck_mcp import fnv_data
-        from geck_mcp.fnv_data import DataTools, SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
+        from fnv_mcp import fnv_data
+        from fnv_mcp.fnv_data import DataTools, SCRIPT_DATA, SCRIPT_HEADER, SCRIPT_REFS, SCRIPT_VARS
         self.fake = FakeLive()
         self.addCleanup(self.fake.close)
         self.spans = [(SCRIPT_HEADER, 0x10), (SCRIPT_DATA, 4), (SCRIPT_REFS, 8), (SCRIPT_VARS, 8)]

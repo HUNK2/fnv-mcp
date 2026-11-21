@@ -10,13 +10,13 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_agent, fnv_experiment, fnv_scenario  # noqa: E402
-from geck_mcp.esp import codec, records  # noqa: E402
-from geck_mcp.fnv_conv import ConvError  # noqa: E402
-from geck_mcp.fnv_coverage import CoverageTools  # noqa: E402
-from geck_mcp.fnv_crawl import CrawlTools  # noqa: E402
-from geck_mcp.fnv_link import LinkError  # noqa: E402
-from geck_mcp.fnv_suite import BisectTools  # noqa: E402
+from fnv_mcp import fnv_agent, fnv_experiment, fnv_scenario  # noqa: E402
+from fnv_mcp.esp import codec, records  # noqa: E402
+from fnv_mcp.fnv_conv import ConvError  # noqa: E402
+from fnv_mcp.fnv_coverage import CoverageTools  # noqa: E402
+from fnv_mcp.fnv_crawl import CrawlTools  # noqa: E402
+from fnv_mcp.fnv_link import LinkError  # noqa: E402
+from fnv_mcp.fnv_suite import BisectTools  # noqa: E402
 
 
 def make_plugin(path, ids):
@@ -421,7 +421,7 @@ class ExperimentArmTests(unittest.TestCase):                  # F9
 
 class AuthoringEncodingTests(unittest.TestCase):              # F6
     def test_spec_is_read_as_utf8(self):
-        from geck_mcp.authoring import Authoring
+        from fnv_mcp.authoring import Authoring
         spec = json.loads((Path(__file__).parent / 'fixtures' / 'coolworld.spec.json').read_text(encoding='utf-8'))
         spec['description'] = 'caf\u00e9 \u00fcber'
         with tempfile.TemporaryDirectory() as d:

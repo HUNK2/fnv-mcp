@@ -12,9 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp import Client  # noqa: E402
 
 import project_fixture  # noqa: E402
-from geck_mcp import fnv_brief, fnv_deep, fnv_perf, fnv_world  # noqa: E402
-from geck_mcp.action_params import ACTION_PARAMS  # noqa: E402
-from geck_mcp.server import make_server  # noqa: E402
+from fnv_mcp import fnv_brief, fnv_deep, fnv_perf, fnv_world  # noqa: E402
+from fnv_mcp.action_params import ACTION_PARAMS  # noqa: E402
+from fnv_mcp.server import make_server  # noqa: E402
 
 
 def size(answer):

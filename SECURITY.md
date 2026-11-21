@@ -3,7 +3,7 @@
 ## Reporting a problem
 
 Please report a security problem privately, through GitHub's "Report a vulnerability" button on the repository's
-Security tab, not in a public issue. Say which version (the server announces it to the MCP client when it connects; `bridge/geck_mcp/__init__.py`
+Security tab, not in a public issue. Say which version (the server announces it to the MCP client when it connects; `bridge/fnv_mcp/__init__.py`
 has it), what an agent or a file can
 make happen, and the steps to show it. You will get an answer when the report has been read; a fix is released as
 soon as it is ready, and the report is credited unless you ask otherwise.

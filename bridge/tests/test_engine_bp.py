@@ -211,7 +211,7 @@ class HookLimitTests(StopTestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         receipt = build(cls.tmp.name)
         cls.host = StopHost(receipt, Path(receipt['dll']).parent, cls.tmp.name, 300)
-        from geck_mcp import fnv_link
+        from fnv_mcp import fnv_link
         result = cls.host.link.one('hook', hexint(cls.host.t['hookme']), hexint(6), '-', hexint(2), hexint(0),
                                    hexint(0), hexint(0), hexint(1), '0', '0', hexint(0), hexint(0),
                                    fnv_link.hexs('act:limit'))
@@ -299,7 +299,7 @@ class PatchOverlapTests(StopTestCase):
         self.assertEqual(self.hook(self.t['bpTarget']).get('error'), 'in_use')
 
     def hook(self, target, label='k1'):
-        from geck_mcp import fnv_link
+        from fnv_mcp import fnv_link
         return self.host.link.one('hook', hexint(target), hexint(6), '-', hexint(0), hexint(0), hexint(0), hexint(0),
                                   hexint(1), '0', '0', hexint(0), hexint(0), fnv_link.hexs(label))
 

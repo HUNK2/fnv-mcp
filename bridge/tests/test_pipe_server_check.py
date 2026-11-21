@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from geck_mcp import fnv_game, fnv_link  # noqa: E402
+from fnv_mcp import fnv_game, fnv_link  # noqa: E402
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'named pipes')

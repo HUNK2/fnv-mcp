@@ -15,7 +15,7 @@ part that fits what you are doing.
 - [AGENT-GUIDE.md](AGENT-GUIDE.md): the five rules, the working loop and what to ask the user first. Copy it into
   your mod project for your agent.
 - Call `fnv_status` first, then `fnv_guide` (`action=list`, `topic`, `find`). The guides it serves are in
-  [geck_mcp/guides](../geck_mcp/guides): start with `start`, then `build-a-place`, `test-a-mod`, `quest-dialogue`,
+  [fnv_mcp/guides](../fnv_mcp/guides): start with `start`, then `build-a-place`, `test-a-mod`, `quest-dialogue`,
   `npc-ai-combat`, `safety-undo`, and for problems `crash`, `script`, `slow`, `check-plugin`, `change-engine`.
   Clients that show MCP prompts offer the same guides as prompts.
 - [TOOLS.md](TOOLS.md): every tool with its actions, parameters and an example call, by task. Generated from the

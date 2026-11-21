@@ -17,8 +17,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from geck_mcp import fnv_game, fnv_layout, fnv_link  # noqa: E402
-from geck_mcp.config import Project  # noqa: E402
+from fnv_mcp import fnv_game, fnv_layout, fnv_link  # noqa: E402
+from fnv_mcp.config import Project  # noqa: E402
 
 
 def write_plugin(path, masters=(), esm=False, mtime=None):
@@ -342,7 +342,7 @@ class DirectLoadOrderTests(Tmp):
         write_plugin(data / 'Off.esp', ['FalloutNV.esm'], mtime=now - 400)
         (self.root / 'appdata' / 'plugins.txt').write_text('FalloutNV.esm\r\nLate.esp\r\nEarly.esp\r\nDeadMoney.esm\r\n',
                                                          encoding='utf-8')
-        from geck_mcp.fnv_data import load_order
+        from fnv_mcp.fnv_data import load_order
         with mock.patch.object(fnv_layout, 'running_game', lambda project: None):
             entries = load_order(project)
         self.assertEqual([e['name'] for e in entries],
@@ -382,8 +382,8 @@ class ProtectionTests(Tmp):
         self.assertTrue(Path(out['listsBackup']).is_dir())
 
     def test_profile_set_on_the_direct_install(self):
-        from geck_mcp.fnv_data import DataTools
-        from geck_mcp.fnv_records import RecordsTools
+        from fnv_mcp.fnv_data import DataTools
+        from fnv_mcp.fnv_records import RecordsTools
         project = direct_project(self.root)
         write_plugin(self.root / 'game' / 'Data' / 'FalloutNV.esm', esm=True)
         write_plugin(self.root / 'game' / 'Data' / 'A.esp', ['FalloutNV.esm'])
@@ -403,13 +403,13 @@ class ProtectionTests(Tmp):
 
     def test_test_saves_need_the_setting(self):
         from fakes import FakeLink
-        from geck_mcp.fnv_live import LiveService
+        from fnv_mcp.fnv_live import LiveService
         project = direct_project(self.root)
         live = LiveService(project)
         live._game = fnv_game.Game(project)
         live._game.link = FakeLink()
         live._game.process = lambda fresh=False: (4242, 1)
-        from geck_mcp.fnv_agent import AgentTools
+        from fnv_mcp.fnv_agent import AgentTools
         agent = AgentTools(live, None, None, None)
         self.assertEqual(agent.test_save('list')['folder'], str(self.root / 'mygames' / 'Saves'))
         for action in ('save', 'load', 'delete'):
@@ -426,7 +426,7 @@ class ProtectionTests(Tmp):
 
 class SetupRowsTests(Tmp):
     def test_rows_for_a_project_without_mo2(self):
-        from geck_mcp.fnv_setup import setup_check
+        from fnv_mcp.fnv_setup import setup_check
         project = direct_project(self.root)
         plugins = self.root / 'game' / 'Data' / 'NVSE' / 'Plugins'
         plugins.mkdir(parents=True)
@@ -447,19 +447,19 @@ class SetupRowsTests(Tmp):
 
 class OtherPathsTests(Tmp):
     def test_the_saves_tools_read_the_real_saves(self):
-        from geck_mcp.fnv_tools import FnvService
+        from fnv_mcp.fnv_tools import FnvService
         with mock.patch.object(fnv_layout, 'running_game', lambda project: None):
             self.assertEqual(FnvService(direct_project(self.root)).saves_dir(), self.root / 'mygames' / 'Saves')
 
     def test_read_roots_include_the_users_game_folders(self):
-        from geck_mcp.safe_paths import read_roots
+        from fnv_mcp.safe_paths import read_roots
         roots = read_roots(direct_project(self.root))
         self.assertIn(self.root / 'mygames', roots)
         self.assertIn(self.root / 'appdata', roots)
 
     def test_loose_roots_of_the_records_tools(self):
-        from geck_mcp.fnv_data import DataTools
-        from geck_mcp.fnv_records import RecordsTools
+        from fnv_mcp.fnv_data import DataTools
+        from fnv_mcp.fnv_records import RecordsTools
         records = RecordsTools(DataTools(direct_project(self.root), None))
         with mock.patch.object(fnv_layout, 'running_game', lambda project: None):
             _, roots = records._asset_index([])
