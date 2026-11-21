@@ -174,6 +174,25 @@ def idle_seconds():
         return None
 
 
+def read_shared(path):
+    """The bytes of a file another process holds open for writing (the game keeps falloutnv_error.log and
+    falloutnv_havok.log open): CreateFileW with every share flag, which Python's open() does not ask for."""
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                     wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    handle = kernel32.CreateFileW(str(path), 0x80000000, 0x7, None, 3, 0x80, None)   # GENERIC_READ, share all
+    if handle in (None, wintypes.HANDLE(-1).value):
+        raise PermissionError(13, 'The file is locked by another process', str(path))
+    try:
+        chunks, buf, got = [], ctypes.create_string_buffer(1 << 16), wintypes.DWORD()
+        while kernel32.ReadFile(handle, buf, len(buf), ctypes.byref(got), None) and got.value:
+            chunks.append(buf.raw[:got.value])
+        return b''.join(chunks)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def not_ready_cause(checks):
     """(cause, sentence) for a launch whose companion never answered (COMPANION_NOT_READY, tool quality part 3).
     checks: crash_log (path or None), companion_present (bool or None), pipe_exists, window_hung, idle_seconds.
@@ -1248,7 +1267,18 @@ class Game:
             if not path.exists():
                 out[name] = {'path': str(path), 'missing': True}
                 continue
-            data = path.read_bytes()
+            try:
+                data = path.read_bytes()
+            except PermissionError:
+                try:        # the game holds it open (falloutnv_error.log, falloutnv_havok.log while it runs)
+                    data = read_shared(path)
+                except OSError:
+                    out[name] = {'path': str(path), 'locked': True,
+                                 'note': 'The game holds this file open; read it after fnv_game quit.'}
+                    continue
+            except OSError as e:
+                out[name] = {'path': str(path), 'unreadable': str(e)[:200]}
+                continue
             key = str(path)
             previous = cursors.get(key, {})
             start = 0
