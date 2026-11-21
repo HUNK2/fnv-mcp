@@ -196,6 +196,30 @@ def not_ready_cause(checks):
                        'the game with fnv_screenshot (a dialog or a hang), then fnv_game quit and launch again.')
 
 
+HANG_FLOOR_SECONDS = 45.0
+
+
+def hang_after(history, floor=HANG_FLOOR_SECONDS):
+    """Seconds after its process appears that a starting game counts as hung: the larger of floor and three times
+    the median of the last five times a launch reached companion_ready (so a slow machine or a large load order is
+    not ended early)."""
+    times = sorted(float(t) for t in (history or [])[-5:] if t)
+    if not times:
+        return floor
+    n = len(times)
+    median = times[n // 2] if n % 2 else (times[n // 2 - 1] + times[n // 2]) / 2
+    return max(float(floor), 3 * median)
+
+
+class StartupHung(Exception):
+    """The companion answers but the game draws no frames (frame 0, or its window is hung) past hang_after()."""
+
+    def __init__(self, seconds, ping):
+        super().__init__('startup hung after %.0f s' % seconds)
+        self.seconds = seconds
+        self.ping = ping
+
+
 MO2_BLOCKING_DIALOGS = ('Cannot launch program', 'Plugin error', 'Executable not found')
 
 
@@ -521,6 +545,8 @@ class Game:
             out['pendingRestore'] = [{k: m.get(k) for k in ('plugin', 'profile', 'pid', 'startedAt', 'marker')
                                       if m.get(k) is not None} for m in pending]
         if not proc:
+            from . import fnv_display
+            fnv_display.release()       # the game this server launched is gone: let the display sleep again
             crash = self.crash_since(session.get('launchedAt'))
             last = self.last_exit(session.get('launchedAt'))
             out.update(phase='not_running', crashedSinceLaunch=crash, lastExit=last)
@@ -611,7 +637,7 @@ class Game:
                 return path
         raise GameError('GAME_MISSING', 'Neither nvse_loader.exe nor %s is in %s' % (GAME_EXE, self.game_root))
 
-    def launch(self, start='menu', timeout=180, via='auto'):
+    def launch(self, start='menu', timeout=180, via='auto', retry_hang=True):
         proc = self.process()
         if proc:
             raise GameError('ALREADY_RUNNING', 'The game is already running (pid %d); use fnv_game restart or fnv_game quit' % proc[0],
@@ -627,9 +653,17 @@ class Game:
                 raise GameError('MO2_MISSING', 'ModOrganizer.exe not found in %s' % self.mo2_root)
         else:
             self.direct_program()
-        return self._launch(start, timeout, kind, value, layout)
+        return self._launch(start, timeout, kind, value, layout, retry_hang=retry_hang)
 
-    def _launch(self, start, timeout, kind, value, layout=None):
+    def hang_seconds(self):
+        """hang_after() for this project: fnv.startup_hang_seconds replaces the floor, and 0 turns the early end off."""
+        setting = getattr(self.project.fnv, 'startup_hang_seconds', None) if self.project.fnv else None
+        if setting is not None and float(setting) <= 0:
+            return 0
+        times = self.session().get('readyTimes') or []
+        return hang_after(times, float(setting)) if setting is not None else hang_after(times)
+
+    def _launch(self, start, timeout, kind, value, layout=None, retry_hang=True):
         layout = layout or fnv_layout.configured(self.project)
         direct = layout.kind == fnv_layout.DIRECT
         leftover = stale = None
@@ -638,21 +672,74 @@ class Game:
             stale = self.clear_stale_mo2_state()
         launched = time.time()
         self.forget_process()
+        from . import fnv_display
+        fnv_display.hold()      # keep the display on while this game runs (a sleeping display hangs the start)
+        timeline = []
+        if stale:
+            timeline.append({'t': 0, 'event': 'stale_mo2_state_moved', 'files': stale})
+        if leftover:
+            timeline.append({'t': 0, 'event': 'leftover_mo2_closed', **leftover})
+        self.save_session(pid=None, launchedAt=launched, start=start, ready=False, via=layout.kind)
+        deadline = time.monotonic() + timeout
+        retried = False
+        pid = self._spawn(direct, launched, deadline, timeline)
+        try:
+            pid = self._wait_companion(pid, deadline, launched, layout, direct, timeline)
+        except StartupHung as hung:
+            checks = self.not_ready_checks(layout, launched, pid)
+            timeline.append({'t': round(time.time() - launched, 1), 'event': 'startup_hung', 'pid': pid,
+                             'seconds': round(hung.seconds, 1), 'frame': hung.ping.get('frame'), **checks})
+            if not retry_hang:
+                raise self._hung_error(checks, hung, retried=False, timeline=timeline) from None
+            # End only the process this launch started, then start once more: the game's own start woke the
+            # display, so the second start draws (measured 12.4 s, 2026-11-17).
+            terminate(pid)
+            self._exited(pid, 10)
+            self.forget_process()
+            self.link.close()
+            if not direct:
+                self.close_stale_mo2()
+            retried = True
+            deadline = time.monotonic() + timeout
+            pid = self._spawn(direct, launched, deadline, timeline)
+            try:
+                pid = self._wait_companion(pid, deadline, launched, layout, direct, timeline)
+            except StartupHung as again:
+                checks = self.not_ready_checks(layout, launched, pid)
+                raise self._hung_error(checks, again, retried=True, timeline=timeline) from None
+        try:        # which companion build: an older one writes no exit notes (fnv_status uses it; R18)
+            self.save_session(companion=self.ping().get('companion'))
+        except Exception:  # noqa: BLE001 - only the status note depends on it
+            pass
+        self._wait(lambda: self.phase()[0] == 'main_menu' or None, deadline, 'NO_MAIN_MENU', 'Main menu not reached', pid)
+        timeline.append({'t': round(time.time() - launched, 1), 'event': 'main_menu'})
+        result = self.start_from_menu(kind, value, deadline, pid)
+        timeline.append({'t': round(time.time() - launched, 1), 'event': 'ready', 'phase': result['phase']})
+        self.save_session(ready=True)
+        return {**result, 'pid': pid, 'via': layout.kind, 'timeline': timeline, 'retried': retried,
+                'seconds': round(time.time() - launched, 1)}
+
+    def _hung_error(self, checks, hung, retried, timeline):
+        cause, sentence = not_ready_cause({**checks, 'pipe_exists': True})
+        if retried:
+            sentence = 'Started twice and hung both times. ' + sentence
+        return GameError('COMPANION_NOT_READY', sentence, {'cause': cause, **checks, 'retried': retried,
+                                                           'hungAfterSeconds': round(hung.seconds, 1),
+                                                           'timeline': timeline})
+
+    def _spawn(self, direct, launched, deadline, timeline):
+        """Start the game (MO2 or the direct program) and wait for its process; returns its pid."""
+        spawned = time.time()
         if direct:
             program = self.direct_program()
             method = self.start_program(program, '', self.game_root)
-            first = {'t': 0, 'event': 'direct_run', 'method': method, 'command': str(program)}
+            timeline.append({'t': round(spawned - launched, 1), 'event': 'direct_run', 'method': method,
+                             'command': str(program)})
         else:
             method = self.shell_launch(self.mo2_root / 'ModOrganizer.exe')
-            first = {'t': 0, 'event': 'mo2_run', 'method': method,
-                     'command': 'ModOrganizer.exe -p "%s" run -e "%s"' % (self.profile, self.executable)}
-        self.save_session(pid=None, launchedAt=launched, start=start, ready=False, via=layout.kind)
-        timeline = [first]
-        if stale:
-            timeline.insert(0, {'t': 0, 'event': 'stale_mo2_state_moved', 'files': stale})
-        if leftover:
-            timeline.insert(0, {'t': 0, 'event': 'leftover_mo2_closed', **leftover})
-        deadline = time.monotonic() + timeout
+            timeline.append({'t': round(spawned - launched, 1), 'event': 'mo2_run', 'method': method,
+                             'command': 'ModOrganizer.exe -p "%s" run -e "%s"' % (self.profile, self.executable)})
+        self._spawned_at = time.monotonic()
 
         def started():
             proc = self.process()
@@ -675,9 +762,27 @@ class Game:
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'process', 'pid': pid})
         self.save_session(pid=pid)
         self.link.close()
+        return pid
+
+    def _companion_ready(self, pid, appeared, threshold):
+        """True once the companion reports deferredInit; raises StartupHung when the game answers but draws nothing
+        past threshold seconds (0: never)."""
+        ping = self.ping()
+        if ping.get('deferredInit'):
+            return True
+        elapsed = time.monotonic() - appeared
+        if threshold and elapsed >= threshold and not ping.get('error') \
+                and (ping.get('frame') == 0 or window_hung(pid)):
+            raise StartupHung(elapsed, ping)
+        return None
+
+    def _wait_companion(self, pid, deadline, launched, layout, direct, timeline):
+        """Wait until the companion of pid is ready; follows a Steam handover. Returns the pid that became ready."""
+        threshold = self.hang_seconds()
+        appeared = time.monotonic()
         while True:
             try:
-                self._wait(lambda: (self.ping().get('deferredInit') or None), deadline, 'COMPANION_NOT_READY',
+                self._wait(lambda: self._companion_ready(pid, appeared, threshold), deadline, 'COMPANION_NOT_READY',
                            'The engine companion did not answer (is it installed and enabled in the dev profile?)', pid)
                 break
             except GameError as e:
@@ -691,21 +796,14 @@ class Game:
                 if successor is None:
                     raise
                 pid = successor[0]
+                appeared = time.monotonic()
                 timeline.append({'t': round(time.time() - launched, 1), 'event': 'handed_over', 'pid': pid})
                 self.save_session(pid=pid)
                 self.link.close()
+        took = time.monotonic() - getattr(self, '_spawned_at', appeared)
+        self.save_session(readyTimes=((self.session().get('readyTimes') or [])[-4:] + [round(took, 1)]))
         timeline.append({'t': round(time.time() - launched, 1), 'event': 'companion_ready'})
-        try:        # which companion build: an older one writes no exit notes (fnv_status uses it; R18)
-            self.save_session(companion=self.ping().get('companion'))
-        except Exception:  # noqa: BLE001 - only the status note depends on it
-            pass
-        self._wait(lambda: self.phase()[0] == 'main_menu' or None, deadline, 'NO_MAIN_MENU', 'Main menu not reached', pid)
-        timeline.append({'t': round(time.time() - launched, 1), 'event': 'main_menu'})
-        result = self.start_from_menu(kind, value, deadline, pid)
-        timeline.append({'t': round(time.time() - launched, 1), 'event': 'ready', 'phase': result['phase']})
-        self.save_session(ready=True)
-        return {**result, 'pid': pid, 'via': layout.kind, 'timeline': timeline,
-                'seconds': round(time.time() - launched, 1)}
+        return pid
 
     HANDOVER_SECONDS = 20
 
@@ -1049,6 +1147,8 @@ class Game:
             pass
 
     def _quit_result(self, pid, steps, how):
+        from . import fnv_display
+        fnv_display.release()
         self.forget_process()
         self.link.close()
         self.save_session(pid=None, ready=False)

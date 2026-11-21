@@ -63,7 +63,11 @@ damaged file. Most are tracked as GitHub issues.
 
 - **The game hangs at startup when the monitors are asleep.** A launch while the display is off, or turning off,
   stops the game before its first frame: `fnv_game launch` ends with `COMPANION_NOT_READY`, and the Windows System
-  log has a Kernel-Power event 566 (`ScMonitorPower`) in the second of the launch. Fix: keep the display on for as
+  log has a Kernel-Power event 566 (`ScMonitorPower`) in the second of the launch. Since 2026-11-21 `fnv_game
+  launch` handles it: a game that answers but draws no frames for 45 s (or three times its usual start time) is
+  ended and started once more (the timeline shows `startup_hung`, the answer `retried: true`), and the server keeps
+  the display on while a game it launched runs. `fnv.startup_hang_seconds` changes the 45 s; 0 turns this off.
+  If the second start hangs too, wake the display. Keep the display on for as
   long as you test, with a separate helper that stays running across all launches and calls
   `SetThreadExecutionState(0x80000003)` (display and system required, continuous). In PowerShell, in a window of
   its own:

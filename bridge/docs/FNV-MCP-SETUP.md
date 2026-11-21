@@ -184,6 +184,7 @@ Paths in the project file may be relative to the project file. `fnv_*` keys go i
 | `plugin` | none | The `.esp` `fnv_spec` builds |
 | `spec` | none | The JSON spec `fnv_spec` builds the plugin from |
 | `fnv.engine_control` | `read` | `read` or `full` (see "Safety levels") |
+| `fnv.startup_hang_seconds` | 45 | A starting game that answers but draws no frames this long is ended and started once more (0: never; a machine whose starts are slower gets three times its usual start time) |
 | `fnv.engine_map` | `<state_dir>/engine_map.json` | The engine map from `engine_map.generate` |
 | `fnv.decomp_root` | the path in the map | Your fnv_decomp checkout |
 | `fnv.symdb` | `<state_dir>/symdb.sqlite` | The symbol database (optional) |
