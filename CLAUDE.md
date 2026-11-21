@@ -1,10 +1,10 @@
-# fnv-mcp (geck-mcp-nv)
+# fnv-mcp
 
 MCP server for building and testing Fallout: New Vegas mods in the running game. Python package `bridge/geck_mcp`,
-branch `fnv/engine-knowledge`.
+branch `main`, checkout `C:\DecompModGithubnv-mcp-code` (the only one; `geck-mcp-nv` is the old one).
 
 ## Git
-- "Push" / "GitHub" means the private remote `fnv-mcp` (`git push fnv-mcp fnv/engine-knowledge:main`). Never push
+- "Push" / "GitHub" means the private remote `fnv-mcp` (`git push fnv-mcp main`). Never push
   to `origin` (public fork) or open anything upstream (`2Shay96/geck-mcp-nv`).
 - Commit only when asked. Never commit the unpacked game image, the fnvdecomp API key or personal data.
 
@@ -20,8 +20,9 @@ branch `fnv/engine-knowledge`.
 ## Live testing
 - Drive the working tree in-process with a script (`Client(make_server(Project.load(...)))`), run in the app's
   Terminal panel. MO2 launches from the Bash tool fail (its job object: ERROR_ACCESS_DENIED).
-- The companion pipe has one instance: never use the geck MCP tools and an in-process script at the same time.
-  The running geck MCP server keeps old code until the user reconnects geck in `/mcp`.
+- The companion pipe has one instance: never use the MCP server's tools and an in-process script at the same time.
+  The registered server runs from this checkout with `--reload`: it reloads itself when `bridge/geck_mcp` or the
+  project file changes. `fnv_status` data `server` names the folder and commit that answered.
 - A sleeping monitor hangs the game at startup (COMPANION_NOT_READY; Kernel-Power event 566 `ScMonitorPower` in
   the launch second). Keep a separate display-on helper running across all live runs
   (`SetThreadExecutionState(0x80000003)`); after a hang, `fnv_game quit force` and launch again.

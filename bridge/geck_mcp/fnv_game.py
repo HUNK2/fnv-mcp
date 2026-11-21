@@ -511,6 +511,8 @@ class Game:
         out = {'running': bool(proc), 'pid': proc[0] if proc else None, 'exiting': bool(getattr(self, 'exiting', False)),
                'install': layout.describe(),
                'session': {k: session.get(k) for k in ('pid', 'launchedAt', 'start', 'ready')}}
+        from .code_stamp import stamp
+        out['server'] = stamp()     # which checkout and commit answered (critique fix 2026-11-21)
         if layout.kind == fnv_layout.MO2 and self.mo2_root:
             out['profile'] = {'mo2': str(self.mo2_root), 'name': self.profile}
         from .fnv_suite import restore_markers
