@@ -1,4 +1,4 @@
-"""Entry point of the geck MCP server (stdio).
+"""Entry point of the fnv-mcp server (stdio).
 
 By default this process serves directly. `--reload` (or FNV_MCP_RELOAD=1; the old name GECK_MCP_RELOAD works too)
 starts a small supervisor (fnv_mcp/supervisor.py) instead, for development: it runs the server as a child process

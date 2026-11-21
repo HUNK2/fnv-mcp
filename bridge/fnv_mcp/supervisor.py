@@ -282,7 +282,7 @@ class Supervisor:
             for rid in failed:
                 del self.in_flight[rid]
                 self.emit({'jsonrpc': '2.0', 'id': json.loads(rid), 'error': {
-                    'code': -32603, 'message': 'The geck server process exited during this call (a crash or a '
+                    'code': -32603, 'message': 'The fnv-mcp server process exited during this call (a crash or a '
                     'kill). A new one starts on the next call; check the game and editor state before retrying.'}})
             for rid in [r for r, owner in self.server_requests.items() if owner is child]:
                 del self.server_requests[rid]
@@ -414,7 +414,7 @@ class Supervisor:
             if child is None:
                 if has_id and method is not None:
                     self.emit({'jsonrpc': '2.0', 'id': message['id'], 'error': {
-                        'code': -32603, 'message': 'The geck server process could not start; the error is in the '
+                        'code': -32603, 'message': 'The fnv-mcp server process could not start; the error is in the '
                         'MCP server log (stderr). Fix it and call again.'}})
                 return
             if has_id and method is not None:

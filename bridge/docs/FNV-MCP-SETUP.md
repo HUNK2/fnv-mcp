@@ -81,13 +81,13 @@ Nothing here downloads files or ships game files, the decompilation or anything 
 6. **Register the MCP server** with your client. With Claude Code (use your own absolute paths):
 
    ```powershell
-   claude mcp add fnv-mcp -- C:\path\to\bridge\.venv\Scripts\python.exe C:\path\to\bridge\run_mcp.py --project C:\path\to\bridge\projects\my-fnv.json
+   claude mcp add fnv -- C:\path\to\bridge\.venv\Scripts\python.exe C:\path\to\bridge\run_mcp.py --project C:\path\to\bridge\projects\my-fnv.json
    ```
 
    For a client with a JSON file, the entry is:
 
    ```json
-   "fnv-mcp": {
+   "fnv": {
      "command": "C:/path/to/bridge/.venv/Scripts/python.exe",
      "args": ["C:/path/to/bridge/run_mcp.py", "--project", "C:/path/to/bridge/projects/my-fnv.json"]
    }
@@ -218,8 +218,8 @@ GECK editor and legacy tools (`launcher`, `helper`, `records`, `source_roots`, `
 
 Nothing here runs by itself; there is no uninstall tool. Close the game and the MCP client first.
 
-1. **The MCP registration.** With Claude Code: `claude mcp remove fnv-mcp`. For a client with a JSON file, delete
-   the `"fnv-mcp"` entry.
+1. **The MCP registration.** With Claude Code: `claude mcp remove fnv`. For a client with a JSON file, delete
+   the `"fnv"` entry.
 2. **xNVSE in the game folder.** xNVSE cannot go through MO2, so `tools\fnv_setup_dev_profile.py --apply`
    copied its loader and DLLs into the game folder (`nvse_loader.exe`, `nvse_*.dll`; its `Data` part is the MO2
    mod `xNVSE Data`). Every file it added is listed under `gameFilesAdded` in
