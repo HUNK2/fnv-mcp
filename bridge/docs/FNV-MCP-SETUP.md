@@ -254,8 +254,10 @@ The open problems are listed in [KNOWN-ISSUES.md](KNOWN-ISSUES.md). The ones met
 
 - Turn Discord's in-game overlay off globally (Discord > User Settings > Game Overlay): its hook crashed the
   game at startup with JIP LN loaded on the test machine, even with the per-game switch off.
-- Every quit leaves a Crash Logger log (a plugin faults in its exit cleanup, with or without the companion);
-  the crash doctor marks such logs `duringShutdown`.
+- Every quit used to leave a Crash Logger log: xNVSE 6.4.9 faults in its exit cleanup (a static destructor reads
+  objects in the game's heap after the game has freed it), with or without the companion. The companion (from
+  2026-11-22) ends the process after the game's exit message, before that cleanup, so a quit leaves no log;
+  without the companion such logs remain, and the crash doctor marks them `duringShutdown`.
 - The game opens its pause menu when its window loses focus. Test runs keep the world running (the companion
   closes the pause menu and message boxes during a run; `allow_menus: true` opts out).
 - MCP clients that put their server in a job object without breakaway stop MO2 from starting the game; the

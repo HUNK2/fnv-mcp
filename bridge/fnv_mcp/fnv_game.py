@@ -1162,6 +1162,9 @@ class Game:
             asked = any(r.get('pid') == note.get('pid') and at - 60 <= r.get('time', 0) <= at + 5 for r in rows)
         return {'pid': note.get('pid'), 'how': note.get('how'), 'at': at, 'frame': note.get('frame'),
                 'servingRequest': note.get('servingRequest'), 'askedByBridge': asked,
+                # the companion ended the process after the exit message, before xNVSE's exit cleanup (its fault
+                # there left a Crash Logger log on every quit under MO2)
+                'fastExit': bool(note.get('fastExit')),
                 'forLastLaunch': None if launched_at is None else at >= float(launched_at)}
 
     def _bridge_quit(self, launched_at):

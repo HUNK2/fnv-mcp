@@ -499,9 +499,11 @@ int main(int argc, char **argv) {
         send(20, NULL);
         Sleep(5);
     }
-    send(1, NULL);
+    /* argv[3] (optional): the code main returns; argv[4] "noexit": leave out the exit message (a game that ends
+     * without quitting). The companion's fast exit ends the process with 0 after an exit message. */
+    if (!(argc > 4 && !strcmp(argv[4], "noexit"))) send(1, NULL);
     Sleep(200); /* let a hook thread that is still running finish before the result is printed */
     printf("{\"exitHookThreadDone\":%u}\n", (unsigned)hook_thread_done);
     fflush(stdout);
-    return 0;
+    return argc > 3 ? atoi(argv[3]) : 0;
 }

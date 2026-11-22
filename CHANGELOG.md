@@ -4,6 +4,13 @@
 
 The first version of the fork. The entries below this one are geck-mcp-nv's own history, by 2Shay.
 
+- **No crash log on every quit under MO2 (2026-11-22):** each quit of the game under MO2 faulted after the game's
+  own exit, in xNVSE 6.4.9's static destructor for per-cell objects it keeps in the game's heap
+  (`nvse_1_4+0x74CF3`, `LdrShutdownProcess`), and Crash Logger wrote a log for it: 207 of 251 logs. After the
+  exit message the engine companion now ends the process when Windows detaches it, before xNVSE's destructors
+  run (NVTF's fast exit does the same). Its exit note says `fastExit`, and `fnv_status` `lastExit.fastExit`.
+  The companion must be built and installed again (`fnv_companion_install`).
+
 - **Fixes from real use (2026-11-21, 4,228 calls):** the Python package is `fnv_mcp` (was `geck_mcp`) and the
   server is registered as `fnv`. `fnv_native` follows the game's own module list (a game restart no longer leaves
   `ALREADY_LOADED` or dead addresses), returns only the log lines each action wrote (a `call` answer: median 4,966

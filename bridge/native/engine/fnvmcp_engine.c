@@ -1930,23 +1930,39 @@ static volatile LONG context_files, serving_request, exiting;
  * (the console's qqq or a script's QuitGame give the console exit message; closing the window or the menu's Quit give
  * the plain one), whether the companion was serving a request then, and the frame. fnv_status / fnv_crash_explain and
  * the bridge's quit log read it to tell who closed the game. */
-static void exit_note(unsigned type) {
-    char path[MAX_PATH + 64], text[256];
-    if (!context_dir[0]) return;
-    snprintf(path, sizeof(path), "%s\\exit-%lu.json", context_dir, (unsigned long)pid);
-    FILETIME now;
-    GetSystemTimeAsFileTime(&now);
-    int n = snprintf(text, sizeof(text),
-                     "{\"schema\":1,\"pid\":%lu,\"how\":\"%s\",\"fileTime\":\"%llu\",\"frame\":%ld,"
-                     "\"servingRequest\":%s,\"thread\":%lu,\"mainThread\":%lu}\n",
-                     (unsigned long)pid, type == MSG_EXIT_CONSOLE ? "console" : "window_or_menu",
-                     ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime, frame,
-                     serving_request ? "true" : "false", (unsigned long)GetCurrentThreadId(), (unsigned long)main_thread);
-    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+static char exit_path[MAX_PATH + 64], exit_text[256];
+static int exit_len;
+static void write_exit_note(void) {
+    HANDLE f = CreateFileA(exit_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) return;
     DWORD written;
-    WriteFile(f, text, n > 0 ? (DWORD)n : 0, &written, NULL);
+    WriteFile(f, exit_text, exit_len > 0 ? (DWORD)exit_len : 0, &written, NULL);
     CloseHandle(f);
+}
+static void exit_note(unsigned type) {
+    if (!context_dir[0]) return;
+    snprintf(exit_path, sizeof(exit_path), "%s\\exit-%lu.json", context_dir, (unsigned long)pid);
+    FILETIME now;
+    GetSystemTimeAsFileTime(&now);
+    exit_len = snprintf(exit_text, sizeof(exit_text),
+                        "{\"schema\":1,\"pid\":%lu,\"how\":\"%s\",\"fileTime\":\"%llu\",\"frame\":%ld,"
+                        "\"servingRequest\":%s,\"thread\":%lu,\"mainThread\":%lu}\n",
+                        (unsigned long)pid, type == MSG_EXIT_CONSOLE ? "console" : "window_or_menu",
+                        ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime, frame,
+                        serving_request ? "true" : "false", (unsigned long)GetCurrentThreadId(),
+                        (unsigned long)main_thread);
+    if (exit_len < 0 || exit_len >= (int)sizeof(exit_text)) exit_len = 0;
+    write_exit_note();
+}
+/* The note again, now saying the companion ended the process itself (fast_exit). */
+static void exit_note_fast(void) {
+    static const char fast[] = ",\"fastExit\":true}\n";
+    if (!exit_path[0] || exit_len < 2 || exit_text[exit_len - 2] != '}' ||
+        exit_len - 2 + (int)sizeof(fast) > (int)sizeof(exit_text))
+        return;
+    memcpy(exit_text + exit_len - 2, fast, sizeof(fast));
+    exit_len += (int)sizeof(fast) - 1 - 2;
+    write_exit_note();
 }
 static char op_now[256]; /* the op being served (its text before parsing), for the crash context */
 static const char *console_line_now;
@@ -2816,4 +2832,22 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
     if (!thread) return false;
     CloseHandle(thread);
     return true;
+}
+
+/* Fast exit. Every quit of the game under MO2 faulted after the game's own exit: xNVSE 6.4.9's static destructor
+ * for a map of per-cell objects it allocates from the game's heap (nvse_1_4+0x74CF3, from execute_onexit_table in
+ * LdrShutdownProcess) reads them after the game has torn that heap down, and Crash Logger wrote a log for it, 207 of
+ * 251 logs under MO2 by 2026-11-22. Nothing is left to do then: the game has saved and closed, and every plugin has
+ * had the exit message. So once the game has sent its exit message, the companion ends the process when Windows
+ * detaches it. xNVSE loaded the companion, so the companion is detached first (Windows detaches in reverse load
+ * order) and xNVSE's destructors never run; plugins loaded after the companion have been detached already. This is
+ * what NVTF's fast exit does. A FreeLibrary (reserved NULL) or a process that ends without the exit message (a crash,
+ * a kill) is left alone. The exit code is 0, the game's own on a normal quit. */
+BOOL WINAPI DllMain(HINSTANCE dll, DWORD reason, LPVOID reserved) {
+    (void)dll;
+    if (reason == DLL_PROCESS_DETACH && reserved && exiting) {
+        exit_note_fast();
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+    return TRUE;
 }
