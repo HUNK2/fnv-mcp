@@ -10,7 +10,8 @@ Spec (JSON):
                            "position": [x,y,z], "rotation": [deg,deg,deg], "scale": 1.0}]}},
   "release": {}   # reserved for Milestone 3
 }
-Only interior cells in this version. Standard library only.
+  "worlds":  {"<world EditorID>": {"cells": {"<label>": {"grid": [x, y], "objects": [...]}}}}
+Exterior cells are the master's, overridden to hold the objects (esp/worlds.py). Standard library only.
 """
 import hashlib
 import json
@@ -20,7 +21,7 @@ from . import codec, records
 from .codec import Group, Plugin
 from .formids import FormIdError, FormIdMap, MasterIndex, Resolver
 from .records import SpecError
-from . import dialogue, generic
+from . import dialogue, generic, worlds as world_files
 
 SCHEMA = 1
 GENERATED_MARK = '[geck-bridge generated: %s]'
@@ -37,7 +38,7 @@ TOP_ORDER = ['GMST', 'TXST', 'MICN', 'GLOB', 'CLAS', 'FACT', 'HDPT', 'HAIR', 'EY
              'HUNG', 'SLPD']
 REF_ID_RE = re.compile(r'^[A-Za-z0-9_.-]{1,64}\Z')
 TOP_KEYS = {'schema', 'project_id', 'plugin', 'author', 'description', 'masters', 'records',
-            'cells', 'release'}
+            'cells', 'worlds', 'release'}
 
 
 def load_spec(text):
@@ -74,12 +75,21 @@ def check_spec(spec):
         if not isinstance(spec.get(field, {}), dict):
             raise SpecError(field, 'expected an object keyed by EditorID')
     seen = {}
-    for field in ('records', 'cells'):
-        for edid in spec.get(field, {}):
-            records.check_edid(edid, '%s.%s' % (field, edid))
-            if edid.lower() in seen:
-                raise SpecError('%s.%s' % (field, edid), 'EditorID also used in %s' % seen[edid.lower()])
-            seen[edid.lower()] = field
+    if not isinstance(spec.get('worlds', {}), dict):
+        raise SpecError('worlds', 'expected an object keyed by the world\'s EditorID')
+    labels = [('records', k) for k in spec.get('records', {})] + [('cells', k) for k in spec.get('cells', {})]
+    for world, wspec in spec.get('worlds', {}).items():
+        records.check_edid(world, 'worlds.%s' % world)
+        if not isinstance(wspec, dict) or set(wspec) - {'world', 'cells'} or \
+                not isinstance(wspec.get('cells', {}), dict):
+            raise SpecError('worlds.%s' % world, 'give "cells" (an object keyed by a label) and optionally "world" '
+                            '(the world\'s "@EditorID" when the key is a label)')
+        labels += [('worlds.%s.cells' % world, k) for k in wspec.get('cells', {})]
+    for field, edid in labels:
+        records.check_edid(edid, '%s.%s' % (field, edid))
+        if edid.lower() in seen:
+            raise SpecError('%s.%s' % (field, edid), 'EditorID also used in %s' % seen[edid.lower()])
+        seen[edid.lower()] = field
     for edid, rec in spec.get('records', {}).items():
         kinds = set(records.BUILDERS) | generic.GENERIC_TYPES
         # bug hunt 2026-11-18: a list or object as "type" is unhashable and raised TypeError on the set test
@@ -99,25 +109,39 @@ def check_spec(spec):
             if rec.get('type') != 'DIAL':
                 raise SpecError('records.%s.infos' % edid, 'lines (infos) belong to a topic (DIAL)')
             dialogue.check_lines(edid, rec, 'records.%s' % edid)
+    for world, wspec in spec.get('worlds', {}).items():
+        for cell_id, cell in wspec.get('cells', {}).items():
+            where = 'worlds.%s.cells.%s' % (world, cell_id)
+            if not isinstance(cell, dict) or set(cell) - {'grid', 'objects'}:
+                raise SpecError(where, 'give "grid" [x, y] and "objects"')
+            grid = cell.get('grid')
+            if not isinstance(grid, list) or len(grid) != 2 or not all(
+                    isinstance(v, int) and not isinstance(v, bool) and -128 <= v <= 127 for v in grid):
+                raise SpecError(where + '.grid', 'the cell\'s grid as [x, y], two integers')
+            check_objects(cell.get('objects', []), where)
     for cell_id, cell in spec.get('cells', {}).items():
         if not isinstance(cell, dict):
             raise SpecError('cells.%s' % cell_id, 'expected an object')
-        refs = set()
-        objects = cell.get('objects', [])
-        if not isinstance(objects, list):
-            raise SpecError('cells.%s.objects' % cell_id, 'expected a list')
-        for i, obj in enumerate(objects):
-            where = 'cells.%s.objects[%d]' % (cell_id, i)
-            if not isinstance(obj, dict) or 'base' not in obj:
-                raise SpecError(where, 'each object needs a "base"')
-            ref_id = obj.get('ref_id')
-            if ref_id is not None:
-                if not isinstance(ref_id, str) or not REF_ID_RE.match(ref_id):
-                    raise SpecError(where + '.ref_id', 'letters, digits, . _ - only (max 64)')
-                if ref_id in refs:
-                    raise SpecError(where + '.ref_id', 'duplicate ref_id %r in this cell' % ref_id)
-                refs.add(ref_id)
+        check_objects(cell.get('objects', []), 'cells.%s' % cell_id)
     return spec
+
+
+def check_objects(objects, owner):
+    """The objects of one cell: each has a base; ref_ids are well formed and unique in the cell."""
+    if not isinstance(objects, list):
+        raise SpecError('%s.objects' % owner, 'expected a list')
+    refs = set()
+    for i, obj in enumerate(objects):
+        where = '%s.objects[%d]' % (owner, i)
+        if not isinstance(obj, dict) or 'base' not in obj:
+            raise SpecError(where, 'each object needs a "base"')
+        ref_id = obj.get('ref_id')
+        if ref_id is not None:
+            if not isinstance(ref_id, str) or not REF_ID_RE.match(ref_id):
+                raise SpecError(where + '.ref_id', 'letters, digits, . _ - only (max 64)')
+            if ref_id in refs:
+                raise SpecError(where + '.ref_id', 'duplicate ref_id %r in this cell' % ref_id)
+            refs.add(ref_id)
 
 
 def ref_key(cell_id, index, obj):
@@ -133,6 +157,9 @@ def allocation_keys(spec):
         keys += [ref_key(cell_id, i, obj) for i, obj in enumerate(cell.get('objects', []))]
     for topic, rec in records_.items():
         keys += [dialogue.info_key(topic, line) for line in rec.get('infos', [])]
+    for wspec in spec.get('worlds', {}).values():
+        for cell_id, cell in wspec.get('cells', {}).items():
+            keys += [ref_key(cell_id, i, obj) for i, obj in enumerate(cell.get('objects', []))]
     return keys
 
 
@@ -205,26 +232,8 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
     for cell_id, cell_spec in spec.get('cells', {}).items():
         cell_form = full[cell_id]
         cell = records.cell_interior(cell_form, cell_id, {k: v for k, v in cell_spec.items()})
-        refs = []
-        references[cell_id] = []
-        for i, obj in enumerate(cell_spec.get('objects', [])):
-            where = 'cells.%s.objects[%d]' % (cell_id, i)
-            key = ref_key(cell_id, i, obj)
-            if not obj.get('ref_id'):
-                warnings.append('%s has no ref_id; its FormID depends on list position' % where)
-            try:
-                base, base_type = resolver.resolve_typed(obj['base'])
-            except FormIdError as e:
-                raise SpecError(where + '.base', str(e))
-            kind = records.placement_type(base_type, where + '.base')
-            if base_type is None:
-                warnings.append('%s base type unknown (raw FormID); placed as REFR' % where)
-            refs.append(records.refr(full[key], base, obj, where, record_type=kind))
-            references[cell_id].append({'refId': obj.get('ref_id'), 'formId': '%08X' % full[key],
-                                        'base': '%08X' % base, 'baseSpec': obj['base'],
-                                        'baseType': base_type, 'recordType': kind,
-                                        'editorId': obj.get('editor_id')})
-        refs.sort(key=lambda r: r.form_id)
+        refs = place_objects(cell_id, cell_spec.get('objects', []), 'cells.%s' % cell_id, full, resolver, warnings,
+                             references)
         persistent = [r for r in refs if r.flags & 0x400]
         temporary = [r for r in refs if not r.flags & 0x400]
         children = []
@@ -263,6 +272,11 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
                 block_groups.append(Group(int_label(block), 2, children=subs))
             groups.append(Group(b'CELL', 0, children=block_groups))
 
+    if spec.get('worlds'):
+        wrld = build_worlds(spec, full, resolver, masters, master_records, warnings, references)
+        at = next((i for i, g in enumerate(groups) if TOP_ORDER.index(g.label.decode('ascii')) >
+                   TOP_ORDER.index('WRLD')), len(groups))
+        groups.insert(at, wrld)
     count = sum(1 for g in groups for _ in walk(g))
     description = spec.get('description') or ''
     mark = GENERATED_MARK % spec['project_id']
@@ -284,6 +298,102 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
         'references': references, 'warnings': warnings, 'uncompiledScripts': uncompiled,
     }
     return data, receipt
+
+
+def place_objects(cell_id, objects, owner, full, resolver, warnings, references):
+    """The references of one cell (sorted by FormID); their receipt rows go to references[cell_id]."""
+    refs = []
+    references[cell_id] = []
+    for i, obj in enumerate(objects):
+        where = '%s.objects[%d]' % (owner, i)
+        key = ref_key(cell_id, i, obj)
+        if not obj.get('ref_id'):
+            warnings.append('%s has no ref_id; its FormID depends on list position' % where)
+        try:
+            base, base_type = resolver.resolve_typed(obj['base'])
+        except FormIdError as e:
+            raise SpecError(where + '.base', str(e))
+        kind = records.placement_type(base_type, where + '.base')
+        if base_type is None:
+            warnings.append('%s base type unknown (raw FormID); placed as REFR' % where)
+        refs.append(records.refr(full[key], base, obj, where, record_type=kind))
+        references[cell_id].append({'refId': obj.get('ref_id'), 'formId': '%08X' % full[key],
+                                    'base': '%08X' % base, 'baseSpec': obj['base'],
+                                    'baseType': base_type, 'recordType': kind,
+                                    'editorId': obj.get('editor_id')})
+    refs.sort(key=lambda r: r.form_id)
+    return refs
+
+
+def _copy(master_records, masters, owner, local, rtype, where, drop=()):
+    try:
+        _source, rec = master_records.winning(masters, owner, local, rtype)
+    except Exception as e:   # MasterError
+        raise SpecError(where, str(e))
+    rec.subrecords = [s for s in rec.subrecords if s.tag not in drop]
+    return rec
+
+
+def build_worlds(spec, full, resolver, masters, master_records, warnings, references):
+    """The WRLD top group: per world, its override, the persistent cell (when an object is persistent) and the
+    exterior cells at the spec's grids, each with its references."""
+    worlds = []
+    for label, wspec in sorted(spec['worlds'].items()):
+        where = 'worlds.%s' % label
+        if master_records is None:
+            raise SpecError(where, 'exterior cells need the master files (the game Data folder)')
+        try:
+            world_form = resolver.resolve(wspec.get('world', '@' + label), expect_types={'WRLD'})
+        except FormIdError as e:
+            raise SpecError(where, str(e))
+        if world_form >> 24 >= len(masters):
+            raise SpecError(where, '%s is not a master world' % label)
+        owner = masters[world_form >> 24]
+        try:
+            f = master_records.file(owner)
+            own = len(f.masters)
+            layout = world_files.world_layout(f.path, (own << 24) | (world_form & 0xFFFFFF))
+        except Exception as e:   # MasterError, WorldError
+            raise SpecError(where, str(e))
+        top = world_form & 0xFF000000
+
+        world = _copy(master_records, masters, owner, world_form & 0xFFFFFF, 'WRLD', where, drop=('OFST',))
+        persistent_refs, blocks = [], {}
+        for cell_id, cell_spec in sorted(wspec.get('cells', {}).items()):
+            cw = '%s.cells.%s' % (where, cell_id)
+            grid = tuple(cell_spec['grid'])
+            if grid not in layout['cells']:
+                raise SpecError(cw + '.grid', 'no exterior cell at %d, %d in %s' % (grid[0], grid[1], label))
+            raw, block, sub_block = layout['cells'][grid]
+            refs = place_objects(cell_id, cell_spec.get('objects', []), cw, full, resolver, warnings, references)
+            persistent_refs += [r for r in refs if r.flags & 0x400]
+            temporary = [r for r in refs if not r.flags & 0x400]
+            cell_form = top | (raw & 0xFFFFFF)
+            entry = blocks.setdefault(block, {}).setdefault(sub_block, {})
+            if cell_form not in entry:
+                entry[cell_form] = [_copy(master_records, masters, owner, raw & 0xFFFFFF, 'CELL', cw), []]
+            entry[cell_form][1] += temporary
+        children = []
+        if persistent_refs:
+            if layout['persistent'] is None:
+                raise SpecError(where, '%s has no persistent cell for persistent objects' % label)
+            pform = top | (layout['persistent'] & 0xFFFFFF)
+            children += [_copy(master_records, masters, owner, layout['persistent'] & 0xFFFFFF, 'CELL', where),
+                         Group(struct_label(pform), 6, children=[
+                             Group(struct_label(pform), 8, children=sorted(persistent_refs, key=lambda r: r.form_id))])]
+        for block in sorted(blocks):
+            subs = []
+            for sub_block in sorted(blocks[block]):
+                items = []
+                for cell_form, (cell, temporary) in sorted(blocks[block][sub_block].items()):
+                    items.append(cell)
+                    if temporary:
+                        items.append(Group(struct_label(cell_form), 6, children=[
+                            Group(struct_label(cell_form), 9, children=sorted(temporary, key=lambda r: r.form_id))]))
+                subs.append(Group(sub_block, 5, children=items))
+            children.append(Group(block, 4, children=subs))
+        worlds += [world, Group(struct_label(world.form_id), 1, children=children)]
+    return Group(b'WRLD', 0, children=worlds)
 
 
 def override_topic(edid, rec_spec, resolver, masters, templates):
