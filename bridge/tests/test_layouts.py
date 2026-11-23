@@ -55,12 +55,25 @@ class VanillaLayouts(unittest.TestCase):
                             if any(isinstance(v, list) and any(str(x).startswith('0x') for x in v)
                                    for v in values.values()):
                                 continue        # flag bits with no name: shown as hex, not writable by name
+                            if (rtype, tag) in layouts.BY_LIST:
+                                checked += 1    # written through its list: checked whole in the next test
+                                continue
                             subs = [Subrecord(s.tag, s.data)]
                             named = {('%s.%s' % (tag, k)): v for k, v in values.items()}
                             layouts.set_fields(rtype, subs, named, resolve, 'test')
                             self.assertEqual(subs[0].data, s.data, '%s %s %s' % (rtype, rec.editor_id, tag))
                             checked += 1
                     self.assertGreater(checked, 0, 'no vanilla %s %s checked' % (rtype, tag))
+
+    def test_body_parts_write_back(self):
+        for rec in self.records['BPTD']:
+            parts = layouts.read_lists('BPTD', rec.subrecords)['parts']
+            items = [dict({k: v for k, v in p.items() if k not in ('part', 'node')}, part=i) for i, p in enumerate(parts)]
+            if any(isinstance(v, list) and any(str(x).startswith('0x') for x in v) for p in items for v in p.values()):
+                continue
+            subs = list(rec.subrecords)
+            layouts.set_fields('BPTD', subs, {'parts': items}, resolve, 'test')
+            self.assertEqual([s.data for s in subs], [s.data for s in rec.subrecords], rec.editor_id)
 
     def test_known_values(self):
         by = {r.editor_id: r for r in self.records['ARMO'] + self.records['BOOK']}

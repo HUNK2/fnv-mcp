@@ -44,6 +44,12 @@ DOOR_FLAGS = {'automatic': 0x02, 'hidden': 0x04, 'minimal_use': 0x08, 'sliding':
 TERM_DIFFICULTY = {'very_easy': 0, 'easy': 1, 'average': 2, 'hard': 3, 'very_hard': 4, 'requires_key': 5}
 TERM_FLAGS = {'leveled': 0x1, 'unlocked': 0x2, 'alternate_colors': 0x4, 'hide_welcome_text': 0x8}
 MENU_FLAGS = {'add_note': 0x1, 'force_redraw': 0x2}
+RACE_FLAGS = {'playable': 0x1, 'child': 0x4}
+BODY_PART_FLAGS = {'severable': 0x01, 'ik_data': 0x02, 'ik_biped_data': 0x04, 'explodable': 0x08, 'ik_is_head': 0x10,
+                   'ik_headtracking': 0x20, 'to_hit_chance_absolute': 0x40}
+BODY_PART_TYPE = {name: i for i, name in enumerate([
+    'torso', 'head_1', 'head_2', 'left_arm_1', 'left_arm_2', 'right_arm_1', 'right_arm_2', 'left_leg_1', 'left_leg_2',
+    'left_leg_3', 'right_leg_1', 'right_leg_2', 'right_leg_3', 'brain', 'weapon'])}
 SOUND_TYPE = {'walk': 0, 'sneak': 1, 'run': 2, 'sneak_armor': 3, 'run_armor': 4, 'walk_armor': 5}
 
 COMMON = {'name': ('FULL', 'text'), 'model': ('MODL', 'text'), 'icon': ('ICON', 'text'), 'small_icon': ('MICO', 'text'),
@@ -76,10 +82,14 @@ WHOLE = {
     'PERK': {'name': ('FULL', 'text'), 'description': ('DESC', 'text'), 'icon': ('ICON', 'text'),
              'small_icon': ('MICO', 'text')},
     'IDLE': {'animation': ('MODL', 'text')},
+    'RACE': {'name': ('FULL', 'text'), 'description': ('DESC', 'text'), 'older': ('ONAM', 'form'),
+             'younger': ('YNAM', 'form'), 'facegen_main_clamp': ('PNAM', 'f'), 'facegen_face_clamp': ('UNAM', 'f')},
+    'BPTD': {'model': ('MODL', 'text'), 'ragdoll': ('RAGA', 'form')},
 }
 for _t in WHOLE.values():
     _t.setdefault('model', ('MODL', 'text'))
 WHOLE['RCPE'].pop('model')
+WHOLE['RACE'].pop('model')
 WHOLE['PERK'].pop('model')
 
 STRUCTS = {
@@ -107,6 +117,31 @@ STRUCTS = {
                       (None, '1s', None)]},
     'PERK': {'DATA': [('trait', 'B', None), ('min_level', 'B', None), ('ranks', 'B', None), ('playable', 'B', None),
                       ('hidden', 'B', None)]},
+    'RACE': {'DATA': [
+                      ('skill_1', 'b', SKILL_AV), ('boost_1', 'b', None),
+                      ('skill_2', 'b', SKILL_AV), ('boost_2', 'b', None),
+                      ('skill_3', 'b', SKILL_AV), ('boost_3', 'b', None),
+                      ('skill_4', 'b', SKILL_AV), ('boost_4', 'b', None),
+                      ('skill_5', 'b', SKILL_AV), ('boost_5', 'b', None),
+                      ('skill_6', 'b', SKILL_AV), ('boost_6', 'b', None),
+                      ('skill_7', 'b', SKILL_AV), ('boost_7', 'b', None),
+                      (None, '2s', None), ('male_height', 'f', None), ('female_height', 'f', None),
+                      ('male_weight', 'f', None), ('female_weight', 'f', None), ('flags', 'I', RACE_FLAGS)],
+             'VTCK': [('male_voice', 'I', 'form'), ('female_voice', 'I', 'form')],
+             'DNAM': [('male_default_hair', 'I', 'form'), ('female_default_hair', 'I', 'form')],
+             'CNAM': [('male_default_hair_color', 'B', None), ('female_default_hair_color', 'B', None)]},
+    'BPTD': {'BPND': [
+        ('damage_mult', 'f', None), ('flags', 'B', BODY_PART_FLAGS), ('part_type', 'B', BODY_PART_TYPE),
+        ('health_percent', 'B', None), ('actor_value', 'b', None), ('to_hit_chance', 'B', None),
+        ('explodable_explosion_chance', 'B', None), ('explodable_debris_count', 'H', None),
+        ('explodable_debris', 'I', 'form'), ('explodable_explosion', 'I', 'form'), ('tracking_max_angle', 'f', None),
+        ('explodable_debris_scale', 'f', None), ('severable_debris_count', 'i', None), ('severable_debris', 'I', 'form'),
+        ('severable_explosion', 'I', 'form'), ('severable_debris_scale', 'f', None),
+        ('gore_translate_x', 'f', None), ('gore_translate_y', 'f', None), ('gore_translate_z', 'f', None),
+        ('gore_rotate_x', 'f', None), ('gore_rotate_y', 'f', None), ('gore_rotate_z', 'f', None),
+        ('severable_impact_dataset', 'I', 'form'), ('explodable_impact_dataset', 'I', 'form'),
+        ('severable_decal_count', 'B', None), ('explodable_decal_count', 'B', None), (None, '2s', None),
+        ('limb_replacement_scale', 'f', None)]},
     'IDLE': {'ANAM': [('parent', 'I', 'form'), ('previous', 'I', 'form')],
              'DATA': [('group_section', 'B', None), ('loop_min', 'B', None), ('loop_max', 'B', None),
                       (None, '1s', None), ('replay_delay', 'h', None), ('flags', 'B', None), (None, '1s', None)]},
@@ -124,12 +159,15 @@ LIST_TAGS = {'LVLI': {'LVLO', 'COED'}, 'LVLN': {'LVLO', 'COED'}, 'LVLC': {'LVLO'
                       'CTDA'},
              'PERK': {'PRKE', 'PRKC', 'CTDA', 'EPFT', 'EPFD', 'EPF2', 'EPF3', 'PRKF', 'SCHR', 'SCDA', 'SCTX', 'SCRO',
                       'SLSD', 'SCVR', 'SCRV'},
-             'IDLE': {'CTDA'}}
+             'IDLE': {'CTDA'},
+             'BPTD': {'BPTN', 'BPNN', 'BPNT', 'BPNI', 'BPND', 'NAM1', 'NAM4', 'NAM5'}}
 LISTS = {'LVLI': ('entries',), 'LVLN': ('entries',), 'LVLC': ('entries',),
          'RCPE': ('ingredients', 'outputs', 'conditions'), 'TERM': ('menu',), 'PERK': ('effects', 'conditions'),
-         'IDLE': ('conditions',)}
+         'IDLE': ('conditions',), 'BPTD': ('parts',)}
 
 TYPES = sorted(set(WHOLE) | set(STRUCTS))
+# Struct subrecords that repeat per list item: set through their list (BPTD parts), read per subrecord.
+BY_LIST = {('BPTD', 'BPND')}
 
 # Subrecord order of a record made without a template (FNVEdit's order); '*' is where a list's parts go. A tag not
 # named here stays after the one before it (MODT after MODL).
@@ -178,6 +216,8 @@ def fields_of(rtype):
             continue
         out[name] = (tag, None, kind, None)
     for tag, layout in STRUCTS.get(rtype, {}).items():
+        if (rtype, tag) in BY_LIST:
+            continue
         for i, (name, code, table) in enumerate(layout):
             if name is None:
                 continue
@@ -210,14 +250,26 @@ def describe(rtype):
 
 
 def _is_flags(table):
-    return table in (BIPED, ARMOR_GENERAL, ARMOR_FLAGS, AMMO_FLAGS, BOOK_FLAGS, LEVELED_FLAGS, DOOR_FLAGS,
-                     TERM_FLAGS, MENU_FLAGS)
+    return any(table is t for t in (BIPED, ARMOR_GENERAL, ARMOR_FLAGS, AMMO_FLAGS, BOOK_FLAGS, LEVELED_FLAGS,
+                                    DOOR_FLAGS, TERM_FLAGS, MENU_FLAGS, RACE_FLAGS, BODY_PART_FLAGS))
 
 
 # -- encode / decode ----------------------------------------------------------------------------------------------
 
 def _struct(layout, upto=None):
     return struct.Struct('<' + ''.join(code for _n, code, _t in layout[:upto]))
+
+
+def f32(value):
+    """The shortest decimal that is the same float32 (1.5707963 stays itself; 0.1f reads 0.1, not 0.100000001)."""
+    if value != value or value in (float('inf'), float('-inf')):
+        return value
+    packed = struct.pack('<f', value)
+    for digits in range(6, 10):
+        short = float('%.*g' % (digits, value))
+        if struct.pack('<f', short) == packed:
+            return short
+    return value
 
 
 def decode(rtype, tag, data, form_name=None):
@@ -245,7 +297,7 @@ def decode(rtype, tag, data, form_name=None):
         elif table == 'form':
             value = (form_name(value) if form_name else None) or '%08X' % value
         elif code == 'f':
-            value = round(value, 6)
+            value = f32(value)
         out[name] = value
     return out
 
@@ -583,7 +635,42 @@ def perk_effects(rtype, subs, effects, resolve, where):
     subs[:] = subs[:first] + made
 
 
-LIST_BUILDERS = {'entries': leveled_entries, 'ingredients': recipe_ingredients, 'outputs': recipe_outputs,
+def body_parts(rtype, subs, items, resolve, where):
+    """[{"part": "Head" | 0, <BPND field>: value, ...}]: changes the data (BPND) of existing body parts, found by
+    their name (BPTN) or their position. A part's other subrecords (node names, models) are kept."""
+    if not isinstance(items, list):
+        raise SpecError(where, 'a list of {"part": name or index, field: value}')
+    starts = [i for i, s in enumerate(subs) if s.tag == 'BPTN']
+    names = [cstring(subs[i].data).lower() for i in starts]
+    layout = {name: (i, code, table) for i, (name, code, table) in enumerate(STRUCTS['BPTD']['BPND']) if name}
+    for n, item in enumerate(items):
+        w = '%s[%d]' % (where, n)
+        if not isinstance(item, dict) or 'part' not in item:
+            raise SpecError(w, 'give "part" (its name or position) and the fields to change')
+        part = item['part']
+        if isinstance(part, str):
+            if part.lower() not in names:
+                raise SpecError(w + '.part', 'no body part %r (parts: %s)' % (part, ', '.join(names)))
+            k = names.index(part.lower())
+        else:
+            k = _int(part, w + '.part', 0, len(starts) - 1)
+        end = starts[k + 1] if k + 1 < len(starts) else len(subs)
+        at = next((i for i in range(starts[k], end) if subs[i].tag == 'BPND'), None)
+        if at is None:
+            raise SpecError(w, 'body part %s has no data (BPND)' % names[k])
+        data = bytearray(subs[at].data)
+        for field, value in item.items():
+            if field == 'part':
+                continue
+            if field not in layout:
+                raise SpecError('%s.%s' % (w, field), 'unknown body part field (known: %s)' % ', '.join(layout))
+            index, code, table = layout[field]
+            struct.pack_into('<' + code, data, _struct(STRUCTS['BPTD']['BPND'], index).size,
+                             _value(code, table, value, resolve, '%s.%s' % (w, field)))
+        subs[at] = Subrecord('BPND', bytes(data))
+
+
+LIST_BUILDERS = {'parts': body_parts, 'entries': leveled_entries, 'ingredients': recipe_ingredients, 'outputs': recipe_outputs,
                  'menu': terminal_menu, 'effects': perk_effects, 'conditions': record_conditions}
 
 
@@ -619,6 +706,16 @@ def read_lists(rtype, subs, form_name=None):
             elif items and s.tag == 'TNAM' and len(s.data) == 4:
                 items[-1]['submenu'] = form(struct.unpack('<I', s.data)[0])
         out['menu'] = items
+    elif rtype == 'BPTD':
+        parts = []
+        for s in subs:
+            if s.tag == 'BPTN':
+                parts.append({'part': cstring(s.data)})
+            elif parts and s.tag == 'BPNN':
+                parts[-1]['node'] = cstring(s.data)
+            elif parts and s.tag == 'BPND':
+                parts[-1].update(decode('BPTD', 'BPND', s.data, form_name) or {})
+        out['parts'] = parts
     elif rtype == 'PERK':
         effects, current = [], None
         for s in subs:
@@ -635,7 +732,7 @@ def read_lists(rtype, subs, form_name=None):
                 elif current['kind'] == 'ability' and len(s.data) == 4:
                     current['ability'] = form(struct.unpack('<I', s.data)[0])
             elif current is not None and s.tag == 'EPFD' and len(s.data) == 4:
-                current['value'] = round(struct.unpack('<f', s.data)[0], 6)
+                current['value'] = f32(struct.unpack('<f', s.data)[0])
             elif s.tag == 'PRKF':
                 current = None
         out['effects'] = effects
