@@ -196,7 +196,8 @@ def canonical_order(rtype, subs):
     parts = LIST_TAGS.get(rtype, set())
     keyed, last, in_list = [], -1, False
     for i, s in enumerate(subs):
-        in_list = (s.tag in parts and s.tag not in order) or (in_list and (s.tag in parts or s.tag == 'DATA'))
+        inside = rtype in OWN_TAGS_IN_LIST and s.tag == 'DATA'      # a PERK effect's DATA
+        in_list = (s.tag in parts and s.tag not in order) or (in_list and (s.tag in parts or inside))
         if in_list and '*' in order:
             last = order.index('*')          # a list's parts (and the DATA or CTDA inside them) stay together
         elif s.tag in order:
@@ -366,10 +367,15 @@ def set_fields(rtype, subs, values, resolve, where):
     return subs
 
 
+# Lists whose items hold subrecords with the record's own tags: a PERK effect (from PRKE on) has a DATA. In other
+# types a DATA after a list (an IDLE's or RCPE's after its conditions) is the record's own (live run 2026-11-23).
+OWN_TAGS_IN_LIST = {'PERK': 'PRKE'}
+
+
 def _own(rtype, subs, tag):
-    """Indices of the record's own `tag` subrecords: those before its list parts (a PERK's effects have DATA too)."""
-    stop = LIST_TAGS.get(rtype, set()) - {tag}
-    first = next((i for i, s in enumerate(subs) if s.tag in stop), len(subs))
+    """Indices of the record's own `tag` subrecords: not those inside a list item that has the same tag."""
+    start = OWN_TAGS_IN_LIST.get(rtype)
+    first = next((i for i, s in enumerate(subs) if s.tag == start), len(subs)) if start else len(subs)
     return [i for i, s in enumerate(subs[:first]) if s.tag == tag]
 
 

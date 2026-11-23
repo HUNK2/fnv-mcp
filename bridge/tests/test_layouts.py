@@ -115,6 +115,27 @@ class SetFields(unittest.TestCase):
         self.assertEqual(struct.unpack('<i', get['ETYP'])[0], 7)
         self.assertEqual(get['EITM'], struct.pack('<I', 0x0001F00D))
 
+    def test_data_after_conditions_is_the_records_own(self):
+        # Live run 2026-11-23: an IDLE keeps its DATA after its conditions (EDID MODL CTDA ANAM DATA), and "set"
+        # took that DATA for part of the condition list, wrote a second DATA, and the game read the first one.
+        ctda = sub('CTDA', b'\0' * 28)
+        idle = [sub('EDID', b'I\0'), sub('MODL', b'a.kf\0'), ctda, sub('ANAM', b'\0' * 8),
+                sub('DATA', bytes([7, 0, 0, 0xFF, 0, 0, 0, 0]))]
+        layouts.set_fields('IDLE', idle, {'replay_delay': 3}, resolve, 'r')
+        self.assertEqual([s.tag for s in idle], ['EDID', 'MODL', 'CTDA', 'ANAM', 'DATA'])
+        self.assertEqual(idle[4].data, bytes([7, 0, 0, 0xFF, 3, 0, 0, 0]))
+        recipe = [sub('EDID', b'R\0'), sub('FULL', b'R\0'), ctda, sub('DATA', struct.pack('<iIII', 0, 0, 0, 0)),
+                  sub('RCIL', struct.pack('<I', 0x1F00D)), sub('RCQY', struct.pack('<I', 1))]
+        layouts.set_fields('RCPE', recipe, {'skill_level': 25}, resolve, 'r')
+        self.assertEqual([s.tag for s in recipe], ['EDID', 'FULL', 'CTDA', 'DATA', 'RCIL', 'RCQY'])
+        self.assertEqual(struct.unpack('<iIII', recipe[3].data)[1], 25)
+        perk = [sub('EDID', b'P\0'), sub('FULL', b'P\0'), ctda, sub('DATA', bytes([0, 1, 1, 1, 0])),
+                sub('PRKE', bytes([2, 0, 0])), sub('DATA', bytes([1, 1, 0])), sub('PRKF', b'')]
+        layouts.set_fields('PERK', perk, {'ranks': 3}, resolve, 'r')
+        self.assertEqual([s.tag for s in perk], ['EDID', 'FULL', 'CTDA', 'DATA', 'PRKE', 'DATA', 'PRKF'])
+        self.assertEqual(perk[3].data[2], 3)
+        self.assertEqual(perk[5].data, bytes([1, 1, 0]), 'the effect\'s DATA is the effect\'s')
+
     def test_a_missing_struct_subrecord_is_made(self):
         subs = [sub('EDID', b'K\0')]
         layouts.set_fields('KEYM', subs, {'value': 5}, resolve, 'r')
