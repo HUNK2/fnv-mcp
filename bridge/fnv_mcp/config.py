@@ -44,6 +44,9 @@ class FnvSettings(BaseModel):
     # plugins.txt (default: %LOCALAPPDATA%\FalloutNV). Only needed when those folders are somewhere else.
     game_user_dir: Path | None = None
     game_appdata_dir: Path | None = None
+    # What the call log (state/fnv/calls.jsonl) keeps of each call's arguments: "names" (default), "values" (also
+    # the values, cut to 200 characters, the profile folder as %USERPROFILE%) or "off". The log stays on this machine.
+    call_log_arguments: Literal['off', 'names', 'values'] = 'names'
 
 
 class Project(BaseModel):

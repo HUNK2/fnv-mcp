@@ -1,6 +1,7 @@
 """Tool quality part 1: the call log. One JSON line per tool call in <state_dir>/fnv/calls.jsonl with time, tool,
-action, ok, error code, elapsed ms, answer size and whether the answer was cut. No argument values and no answer
-content. Pruned to 30 days by the state maintenance; fnv_journal action=calls summarises it."""
+action, ok, error code, elapsed ms, answer size and whether the answer was cut; argument names by default (values
+only with fnv.call_log_arguments "values": test_calllog_args.py), never answer content. Pruned to 30 days by the
+state maintenance; fnv_journal action=calls summarises it."""
 import json
 import sys
 import time

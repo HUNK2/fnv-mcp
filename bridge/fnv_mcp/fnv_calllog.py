@@ -1,12 +1,15 @@
 """The call log (tool quality part 1): one JSON line per tool call in <state_dir>/fnv/calls.jsonl.
 
 A line says when, which tool and action, whether it worked, the error code, how long it took, how many characters
-the answer had and whether it was cut. It holds no argument values and no answer content: arguments can carry
-paths and script text. Written by BridgeServer for every call (the SDK's own refusals included), kept 30 days by
-the state maintenance at server start (fnv_state.prune), read by fnv_journal action=calls."""
+the answer had and whether it was cut, and the arguments given (tool gaps 2): by default their names only
+(fnv.call_log_arguments "names"); with "values" also their values, each cut to 200 characters, the line kept under
+2 KB and the user's profile folder written as %USERPROFILE%; with "off" neither. Never the answer's content. Written
+by BridgeServer for every call (the SDK's own refusals included), kept 30 days by the state maintenance at server
+start (fnv_state.prune), read by fnv_journal action=calls."""
 import collections
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -17,22 +20,82 @@ log = logging.getLogger(__name__)
 
 KEEP_DAYS = 30
 ACTION = re.compile(r'^[a-z_]{1,40}$')      # an action name; anything else is not recorded
+MODES = ('off', 'names', 'values')
+VALUE_MAX = 200         # characters of one argument value
+LINE_MAX = 2048         # characters of one line
+NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
+# The tools whose text arguments are what agents type into the game: their first word is counted.
+TYPED = {'fnv_console': 'line', 'fnv_run_script': 'source'}
+WORD = re.compile(r'^\s*(?:[A-Za-z0-9_]+\.)?([A-Za-z][A-Za-z0-9_]*)')
 
 
 def log_path(state_dir):
     return Path(state_dir) / 'fnv' / 'calls.jsonl'
 
 
-class CallLog:
-    def __init__(self, state_dir):
-        self.path = log_path(state_dir)
+def _homes():
+    """The user's profile folder, as it may be written in a value (both slashes)."""
+    home = os.environ.get('USERPROFILE') or str(Path.home())
+    return sorted({home, home.replace('\\', '/')}, key=len, reverse=True) if home else []
 
-    def record(self, tool, action, ok, code, elapsed_ms, size, cut):
+
+def scrub(text):
+    for home in _homes():
+        text = re.sub(re.escape(home), '%USERPROFILE%', text, flags=re.I)
+    return text
+
+
+def _value(value, limit=VALUE_MAX):
+    """One argument value for the log: numbers, booleans and null as they are; text scrubbed and cut; anything else
+    (lists, objects) as is when its JSON is short, else as cut JSON text."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        text = scrub(value)
+    else:
+        text = scrub(json.dumps(value, default=str))
+        if len(text) <= limit:
+            return json.loads(text)
+    return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
+def arguments(args, mode):
+    """(the line's 'args' value, cut) for the given mode, or (None, False) when nothing is written."""
+    if mode == 'off' or not isinstance(args, dict) or not args:
+        return None, False
+    names = sorted(str(k)[:64] for k in args if NAME.match(str(k)))
+    if mode != 'values':
+        return names, False
+    return {k: _value(args[k]) for k in names}, False
+
+
+class CallLog:
+    def __init__(self, state_dir, arguments='names'):
+        self.path = log_path(state_dir)
+        self.mode = arguments if arguments in MODES else 'names'
+
+    def record(self, tool, action, ok, code, elapsed_ms, size, cut, args=None):
         """Append one line. Never raises: the log must not fail the call it describes."""
         line = {'t': round(time.time(), 3), 'tool': str(tool)[:80],
                 'action': action if isinstance(action, str) and ACTION.match(action) else None,
                 'ok': bool(ok), 'code': None if ok else (str(code)[:60] if code else 'UNKNOWN'),
                 'ms': int(elapsed_ms), 'size': int(size), 'cut': bool(cut)}
+        try:
+            given, _ = arguments(args, self.mode)
+            if given is not None:
+                line['args'] = given
+                if isinstance(given, dict) and len(json.dumps(line)) > LINE_MAX:
+                    # Too long: every value shorter in turn, then values dropped (the names stay).
+                    for limit in (60, 20):
+                        line['args'] = {k: _value(args[k], limit) for k in given}
+                        if len(json.dumps(line)) + 16 <= LINE_MAX:
+                            break
+                    else:
+                        line['args'] = {k: None for k in given}
+                    line['argsCut'] = True
+        except Exception as e:  # noqa: BLE001 - an odd argument loses its args, not the line
+            log.warning('call log arguments not written: %s', e)
+            line.pop('args', None)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with locked(self.path, timeout=2.0):
@@ -56,10 +119,13 @@ class CallLog:
                 out.append(row)
         return out
 
-    def summary(self, since_seconds=None, limit=10, known=None):
+    def summary(self, since_seconds=None, limit=10, known=None, tool=None):
         """Calls and failures per tool and code, the slowest and largest answers; with known (the registered tool
-        names), also the tools never called in that range."""
+        names), also the tools never called in that range; with tool, only that tool's calls. consoleWords: the
+        first word of each fnv_console line and fnv_run_script source, when values are logged."""
         rows = self.read(since_seconds)
+        if tool:
+            rows = [r for r in rows if r.get('tool') == tool]
         failed = [r for r in rows if not r.get('ok')]
         per_tool = {}
         for r in rows:
@@ -86,7 +152,21 @@ class CallLog:
                 'perTool': tools[:max(limit, 1) * 5],
                 'perCode': [{'code': c, 'count': n} for c, n in codes.most_common()],
                 'slowest': top('ms'), 'largest': top('size'), 'path': str(self.path)}
-        if known is not None:
+        words = collections.Counter()
+        for r in rows:
+            given = r.get('args')
+            field = TYPED.get(r.get('tool'))
+            if field and isinstance(given, dict) and isinstance(given.get(field), str):
+                m = WORD.match(given[field])
+                if m:
+                    words[m.group(1).lower()] += 1
+        out['consoleWords'] = [{'word': w, 'count': n} for w, n in words.most_common(max(limit, 1) * 3)]
+        out['consoleWordsNote'] = ('the first word of each fnv_console line and fnv_run_script source: commands '
+                                   'agents type, often for lack of a tool. Only lines logged with values count '
+                                   '(fnv.call_log_arguments "values"; now "%s").' % self.mode)
+        if tool:
+            out['tool'] = tool
+        if known is not None and not tool:
             never = sorted(set(known) - set(per_tool))
             out['neverCalled'] = {'count': len(never), 'tools': never[:40]}
         return out

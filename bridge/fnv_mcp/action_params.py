@@ -79,7 +79,7 @@ ACTION_PARAMS = {
         'tree': {'speaker', 'topic', 'scope', 'include_text', 'limit'},
     }},
     'fnv_threads': {'actions': {'list': {'brief'}, 'hang': {'samples', 'interval_ms', 'all_threads', 'brief'}}},
-    'fnv_journal': {'actions': {'list': {'limit', 'include_undone'}, 'calls': {'limit', 'since_seconds'}}},
+    'fnv_journal': {'actions': {'list': {'limit', 'include_undone'}, 'calls': {'limit', 'since_seconds', 'tool'}}},
     'fnv_memory': {'actions': {
         'address_space': {'seconds'},
         'pools': set(),

@@ -1069,16 +1069,18 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                           limit: Annotated[int, Field(ge=1, le=1000)] | None = None, include_undone: bool = True,
                           since_seconds: Annotated[int, Field(ge=0, le=31 * 86400, description=(
                               'calls: only the calls of the last N seconds (default: the whole log, 30 days)'))]
-                          | None = None) -> result_type:
+                          | None = None,
+                          tool: Annotated[str, Field(max_length=80)] | None = None) -> result_type:
         """list (default): every change made through the act tools (memory writes, engine calls, settings, console
-        lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default
-        100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the
-        largest answers (limit rows each, default 10), and the tools never called in that range."""
+        lines, actor actions, input), with old and new values and whether it can be or was undone. calls: the
+        bridge's own call log: calls and failures per tool and error code, the slowest and largest answers, the
+        tools never called, the console words typed (consoleWords); tool: one tool."""
         def answer():
             if action == 'calls':
                 from .fnv_calllog import CallLog
                 known = [t.name for t in server._tool_manager.list_tools()]
-                return CallLog(project.state_dir).summary(since_seconds, limit or 10, known=known)
+                mode = getattr(project.fnv, 'call_log_arguments', 'names')
+                return CallLog(project.state_dir, mode).summary(since_seconds, limit or 10, known=known, tool=tool)
             return live.journal_list(limit or 100, include_undone)
         return await invoke('fnv_journal', answer, action=action)
 
@@ -1155,7 +1157,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         return await invoke('fnv_loadorder', data.loadorder)
 
     RecordRef = Annotated[str, Field(min_length=1, max_length=200, description=(
-        'EditorID, load-order form id, or Plugin.esp:LOCALID'))]
+        'EditorID or @EditorID, load-order form id, or Plugin.esp:LOCALID'))]
 
     @server.tool(annotations=read)
     async def fnv_record(action: Literal['show', 'find', 'users'] = 'show',

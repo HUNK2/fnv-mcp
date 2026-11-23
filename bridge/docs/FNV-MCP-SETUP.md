@@ -185,6 +185,7 @@ Paths in the project file may be relative to the project file. `fnv_*` keys go i
 | `spec` | none | The JSON spec `fnv_spec` builds the plugin from |
 | `fnv.engine_control` | `read` | `read` or `full` (see "Safety levels") |
 | `fnv.startup_hang_seconds` | 45 | A starting game that answers but draws no frames this long is ended and started once more (0: never; a machine whose starts are slower gets three times its usual start time) |
+| `fnv.call_log_arguments` | `names` | What the call log (`<state_dir>/fnv/calls.jsonl`, read by `fnv_journal action=calls`) keeps of each call's arguments: `names`, `values` (also the values, each cut to 200 characters, your profile folder written as `%USERPROFILE%`) or `off`. The log stays on this machine |
 | `fnv.engine_map` | `<state_dir>/engine_map.json` | The engine map from `engine_map.generate` |
 | `fnv.decomp_root` | the path in the map | Your fnv_decomp checkout |
 | `fnv.symdb` | `<state_dir>/symdb.sqlite` | The symbol database (optional) |

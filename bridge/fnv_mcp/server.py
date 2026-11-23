@@ -216,7 +216,8 @@ class BridgeServer(MCPServer):
                 'elapsedMs': 0, 'replayed': False}
 
     async def _handle_call_tool(self, ctx, params):
-        """Every call, logged (fnv_calllog): tool, action, ok, code, time, answer size, cut. No argument values."""
+        """Every call, logged (fnv_calllog): tool, action, ok, code, time, answer size, cut, and the arguments as
+        fnv.call_log_arguments says (names by default)."""
         started = time.monotonic()
         result = None
         try:
@@ -240,7 +241,8 @@ class BridgeServer(MCPServer):
             ok = result is not None and not getattr(result, 'is_error', False)
             size = sum(len(getattr(c, 'text', '') or '') for c in getattr(result, 'content', None) or ())
             cut, code = False, None if ok else 'INTERNAL_ERROR'
-        self._call_log.record(params.name, action, ok, code, elapsed_ms, size, cut)
+        self._call_log.record(params.name, action, ok, code, elapsed_ms, size, cut,
+                              args=params.arguments if isinstance(params.arguments, dict) else None)
 
     async def _handle_call_tool_inner(self, ctx, params):
         tool = self._tool_manager.get_tool(params.name)
@@ -409,7 +411,7 @@ INSTRUCTIONS = ('Start with fnv_status: it says whether the game is running and 
 def make_server(project, maintain=False):
     from .fnv_calllog import CallLog
     server = BridgeServer(NAME, version=__version__, project_id=project.project_id, instructions=INSTRUCTIONS,
-                          call_log=CallLog(project.state_dir))
+                          call_log=CallLog(project.state_dir, getattr(project.fnv, 'call_log_arguments', 'names')))
     observe = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                               idempotentHint=True, openWorldHint=False)
     ui = ToolAnnotations(readOnlyHint=False, destructiveHint=False,

@@ -363,10 +363,10 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                  'mod_name': "MO2 mod folder name to install into. Default: the plugin's name. Not used on the direct "
                              'install.'},
  'fnv_inventory': {'limit': 'Maximum number of item stacks returned, 1 to 1000. Default 300.'},
- 'fnv_journal': {'action': 'What to do: list (the journal of changes made through the act tools, default) or calls (a '
-                           "summary of the bridge's own call log).",
-                 'limit': 'Maximum number of entries returned, newest last, 1 to 1000. Default 100.',
-                 'include_undone': 'If true (default), also list changes that were already undone.'},
+ 'fnv_journal': {'action': "list (default): the changes made by the act tools; calls: the bridge's own call log.",
+                 'limit': 'Rows, newest last, 1 to 1000 (list: default 100; calls: 10 per table).',
+                 'include_undone': 'If true (default), also list changes that were already undone.',
+                 'tool': 'calls: one tool only.'},
  'fnv_leveled_roll': {'level': "The level to roll at, 1 to 255. Default: the player's level.",
                       'rolls': 'How many times to roll the list, 1 to 5000. Default 200.',
                       'seed': 'Seed the random generator first (0 to 4294967295) so the rolls repeat exactly. Needs '

@@ -1433,7 +1433,7 @@ Example:
 
 **Kind:** read · **Toolset:** game
 
-list (default): every change made through the act tools (memory writes, engine calls, settings, console lines, actor actions, input), with old and new values and whether it can be or was undone (limit, default 100). calls: the bridge's own call log: calls and failures per tool and per error code, the slowest and the largest answers (limit rows each, default 10), and the tools never called in that range.
+list (default): every change made through the act tools (memory writes, engine calls, settings, console lines, actor actions, input), with old and new values and whether it can be or was undone. calls: the bridge's own call log: calls and failures per tool and error code, the slowest and largest answers, the tools never called, the console words typed (consoleWords); tool: one tool.
 
 **Actions:**
 
@@ -1442,10 +1442,11 @@ list (default): every change made through the act tools (memory writes, engine c
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `action` | string | `list`, `calls` | `"list"` | What to do: list (the journal of changes made through the act tools, default) or calls (a summary of the bridge's own call log). |
-| `limit` | integer | 1 to 1000 |  | Maximum number of entries returned, newest last, 1 to 1000. Default 100. |
+| `action` | string | `list`, `calls` | `"list"` | list (default): the changes made by the act tools; calls: the bridge's own call log. |
+| `limit` | integer | 1 to 1000 |  | Rows, newest last, 1 to 1000 (list: default 100; calls: 10 per table). |
 | `include_undone` | boolean |  | `true` | If true (default), also list changes that were already undone. |
 | `since_seconds` | integer | 0 to 2678400 |  | calls: only the calls of the last N seconds (default: the whole log, 30 days) |
+| `tool` | string | up to 80 characters |  | calls: one tool only. |
 
 Example:
 
@@ -2076,7 +2077,7 @@ Records of the plugins in the load order (masters, DLC, mods). show (default) re
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
 | `action` | string | `show`, `find`, `users` | `"show"` | show (default) decodes one record; find searches records; users lists what references a record. |
-| `record` | string | up to 200 characters |  | EditorID, load-order form id, or Plugin.esp:LOCALID |
+| `record` | string | up to 200 characters |  | EditorID or @EditorID, load-order form id, or Plugin.esp:LOCALID |
 | `query` | string | up to 200 characters | `""` | For action=find: EditorID or name substring, form id, or Plugin.esp:LOCALID. |
 | `record_type` | string | pattern `^[A-Za-z_]{4}$` |  | For action=find: keep only this record type, such as WEAP, NPC_ or QUST. |
 | `plugin` | string | up to 120 characters |  | For action=find: keep only records of this plugin. |
