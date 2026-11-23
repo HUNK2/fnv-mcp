@@ -43,6 +43,7 @@ from .codec import Subrecord, zstring
 from .formids import HEX8, FormIdError
 from .masters import MasterError
 from .records import SpecError, check_edid, record
+from . import layouts
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_DIR = ROOT / 'state' / 'templates'
@@ -209,7 +210,7 @@ def build_generic(form_id, edid, spec, resolver, where=None, masters=None, templ
     where = where or 'records.%s' % edid
     check_edid(edid, where)
     rtype = spec['type']
-    allowed = {'type', 'template', 'fields', 'flags'}
+    allowed = {'type', 'template', 'fields', 'flags', 'set'}
     unknown = set(spec) - allowed
     if unknown:
         raise SpecError(where, 'unknown field(s): %s' % ', '.join(sorted(unknown)))
@@ -219,7 +220,12 @@ def build_generic(form_id, edid, spec, resolver, where=None, masters=None, templ
                                    where + '.template')
     subs = [s for s in subs if s.tag != 'EDID']
     subs.insert(0, Subrecord('EDID', zstring(edid)))
+    if not spec.get('template') and 'OBND' in layouts.STRUCTS.get(rtype, {}) and spec.get('set') is not None:
+        subs.insert(1, Subrecord('OBND', bytes(12)))          # a bound object GECK makes has bounds
     apply_fields(subs, spec.get('fields', []), resolver, where)
+    set_named(rtype, subs, spec.get('set'), resolver, where)
+    if not spec.get('template'):
+        subs = layouts.canonical_order(rtype, subs)
     rec = record(rtype, form_id, subs)
     rec.flags = int(spec.get('flags', 0))
     return rec
@@ -234,8 +240,18 @@ def build_override(key, spec, resolver, masters, master_records, where=None):
     source, rec = master_record(target, spec['type'], resolver, masters, master_records, where + '.override')
     subs = list(rec.subrecords)
     apply_fields(subs, spec.get('fields', []), resolver, where)
+    set_named(spec['type'], subs, spec.get('set'), resolver, where)
     rec.subrecords = subs
     return rec, source
+
+
+def set_named(rtype, subs, values, resolver, where):
+    """The spec's "set": named fields and lists (esp/layouts.py), applied after the raw "fields"."""
+    if values is None:
+        return
+    if rtype not in layouts.TYPES:
+        raise SpecError(where + '.set', 'no named fields for %s yet; use "fields" (tags and offsets)' % rtype)
+    layouts.set_fields(rtype, subs, values, lambda v, w: _resolve(resolver, v, w), where + '.set')
 
 
 def script_text(base_dir, spec, edid, where):

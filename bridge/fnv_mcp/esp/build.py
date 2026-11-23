@@ -90,6 +90,9 @@ def check_spec(spec):
                 isinstance(override, str) and (override.startswith('@') or re.match(r'^[0-9A-Fa-f]{8}\Z', override))):
             raise SpecError('records.%s.override' % edid, 'true (the key is the master record\'s EditorID), '
                             '"@EditorID" or an 8-digit FormID')
+        if 'set' in rec and (rec.get('type') not in generic.layouts.TYPES or not isinstance(rec['set'], dict)):
+            raise SpecError('records.%s.set' % edid, 'named fields exist for %s; for %s use "fields"'
+                            % (', '.join(generic.layouts.TYPES), rec.get('type')))
         if override and 'template' in rec:
             raise SpecError('records.%s.template' % edid, 'an override starts from the master record: no template')
         if 'infos' in rec:
@@ -286,7 +289,7 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
 def override_topic(edid, rec_spec, resolver, masters, templates):
     """A master topic copied from its template dump (same EditorID) with the master's FormID, so new lines can
     be added to it (GREETING and the like)."""
-    unknown = set(rec_spec) - {'type', 'override', 'fields', 'infos'}
+    unknown = set(rec_spec) - {'type', 'override', 'fields', 'infos', 'set'}
     if unknown:
         raise SpecError('records.%s' % edid, 'unknown field(s) for an override: %s' % ', '.join(sorted(unknown)))
     try:

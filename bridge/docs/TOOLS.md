@@ -209,7 +209,7 @@ The JSON spec to a plugin, installing it, the load order.
 
 **Kind:** control · **Toolset:** game
 
-Build a plugin (.esp) from the project's JSON spec, offline (no GECK, no game). validate [spec]: dry run of the project spec, or of an inline spec object: structure, references via the master index, meshes and textures; writes nothing. build: writes the plugin and a receipt (FormIDs, references, validation) into the build folder and keeps FormIDs stable across builds; refuses when validation fails. A script is emitted compiled once fnv_scripts_compile has cached it from the game. inspect [which=build|installed]: masters, record counts and cells of the build or of the installed copy (the MO2 dev profile mod, else Data). lookup query [record_type] [limit]: records by EditorID in the spec and the indexed masters, with the "@EditorID" reference to use in the spec. Install a build with fnv_install.
+Build a plugin (.esp) from the project's JSON spec, offline (no GECK, no game). validate [spec]: dry run of the project spec, or of an inline spec object: structure, references via the master index, meshes and textures; writes nothing. build: writes the plugin and a receipt (FormIDs, references, validation) into the build folder and keeps FormIDs stable across builds; refuses when validation fails. A script is emitted compiled once fnv_scripts_compile has cached it from the game. inspect [which=build|installed]: masters, record counts and cells of the build or of the installed copy (the MO2 dev profile mod, else Data). lookup query [record_type] [limit]: records by EditorID in the spec and the indexed masters, with the "@EditorID" reference to use in the spec. fields [record_type]: the named fields a type takes in a record's "set" (ARMO value, weight...; lists such as LVLI entries); "template": "@EditorID" starts a record from a master's, "override": true changes a master record in place. Install a build with fnv_install.
 
 **Actions:**
 
@@ -217,14 +217,15 @@ Build a plugin (.esp) from the project's JSON spec, offline (no GECK, no game). 
 - `build`: Write the plugin and a receipt into the build folder.
 - `inspect`: Masters, record counts and cells of the build or the installed copy.
 - `lookup`: Find records by EditorID in the spec and the indexed masters.
+- `fields`: The named fields and lists a record type takes in "set".
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `action` | string | `validate`, `build`, `inspect`, `lookup` | required | What to do: validate (dry run, writes nothing), build (write the plugin and receipt), inspect (summarise a plugin on disk), lookup (find records by EditorID for the spec). |
+| `action` | string | `validate`, `build`, `inspect`, `lookup`, `fields` | required | What to do: validate (dry run, writes nothing), build (write the plugin and receipt), inspect (summarise a plugin on disk), lookup (find records by EditorID for the spec), fields (the named fields a record type takes in "set"). |
 | `spec` | object |  |  | For action=validate: an inline spec object to check instead of the project spec file. Omitted checks the project spec. |
 | `which` | string | `build`, `installed` | `"build"` | For action=inspect: build (default) is the last build; installed is the copy fnv_install put in the MO2 dev profile, else the one in Data. |
 | `query` | string | up to 100 characters |  | For action=lookup: part of an EditorID (2 to 100 characters) to find in the spec and the indexed masters. |
-| `record_type` | string | pattern `^[A-Z_]{4}$` |  | For action=lookup: keep only records of this four-letter type, such as STAT or MISC. |
+| `record_type` | string | pattern `^[A-Z_]{4}$` |  | For action=lookup: keep only records of this four-letter type, such as STAT or MISC. For action=fields: the type whose named fields to list (ARMO, LVLI, TERM...). |
 | `limit` | integer | 1 to 100 | `25` | For action=lookup: maximum master records returned. Default 25. |
 
 Example:

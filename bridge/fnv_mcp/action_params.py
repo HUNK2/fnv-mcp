@@ -14,6 +14,7 @@ ACTION_PARAMS = {
         'build': set(),
         'inspect': {'which'},
         'lookup': {'query', 'record_type', 'limit'},
+        'fields': {'record_type'},
     }},
     'fnv_place': {'actions': {
         'at': {'base', 'position', 'near', 'offset', 'rotation', 'scale', 'snap', 'rest', 'export', 'count',

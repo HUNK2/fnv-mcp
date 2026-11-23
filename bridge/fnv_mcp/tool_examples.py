@@ -516,7 +516,8 @@ ACTIONS = {
         'validate': 'Check the project spec or an inline spec; writes nothing.',
         'build': 'Write the plugin and a receipt into the build folder.',
         'inspect': 'Masters, record counts and cells of the build or the installed copy.',
-        'lookup': 'Find records by EditorID in the spec and the indexed masters.'},
+        'lookup': 'Find records by EditorID in the spec and the indexed masters.',
+        'fields': 'The named fields and lists a record type takes in "set".'},
     'fnv_symbols': {
         'status': 'Is the symbol database there, complete and current.',
         'lines': "A function's line table.",

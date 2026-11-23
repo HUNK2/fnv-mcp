@@ -582,10 +582,15 @@ class DataTools:
         for older, newer in zip(versions, versions[1:]):
             changes.append({'plugin': newer['plugin'], 'over': older['plugin'],
                             'changed': _changed_tags(older['record'], newer['record'])})
+        from .esp import layouts
+        lists = layouts.read_lists(winner['record'].type, winner['record'].subrecords,
+                                   lambda raw: self._form_label(entries, by_file[rows[-1][0]], raw))
         result = {'formId': self._global(entries, owner, local), 'type': winner['record'].type,
                   'editorId': winner['record'].editor_id, 'winner': winner['plugin'],
                   'definedIn': versions[0]['plugin'], 'versions': [v['plugin'] for v in versions],
                   'fields': winner['subrecords'], 'overrideChanges': changes, 'indexBuilt': built}
+        if lists:
+            result['lists'] = lists
         if all_versions and len(versions) > 1:
             result['earlierVersions'] = [{'plugin': v['plugin'], 'fields': v['subrecords']} for v in versions[:-1]]
         return result
@@ -605,12 +610,19 @@ class DataTools:
             return None
         return {'formId': self._global(entries, owner, raw & 0xFFFFFF), 'type': row[0], 'editorId': row[1]}
 
+    def _form_label(self, entries, plugin_entry, raw):
+        form = self._form(entries, plugin_entry, raw)
+        if not form:
+            return None
+        return '%s (%s)' % (form['formId'], form['editorId']) if form.get('editorId') else form['formId']
+
     def _decode(self, record, plugin_entry, entries, max_bytes):
         out = []
         for sub in record.subrecords:
             item = {'tag': sub.tag, 'size': len(sub.data)}
             decoded = decode_subrecord(record.type, sub.tag, sub.data,
-                                       is_form=lambda raw: self._form(entries, plugin_entry, raw) is not None)
+                                       is_form=lambda raw: self._form(entries, plugin_entry, raw) is not None,
+                                       form_name=lambda raw: self._form_label(entries, plugin_entry, raw))
             if decoded is not None:
                 item['value'] = decoded
             elif len(sub.data) == 4 and sub.tag not in NOT_FORMS:
@@ -940,9 +952,14 @@ STRING_TAGS = {'EDID', 'FULL', 'DESC', 'MODL', 'ICON', 'MICO', 'SCTX', 'NNAM', '
                'NAM1', 'RNAM', 'ONAM', 'BMCT', 'MOD2', 'MOD3', 'MOD4', 'SCVR'}
 
 
-def decode_subrecord(rtype, tag, data, is_form=None):
+def decode_subrecord(rtype, tag, data, is_form=None, form_name=None):
     """A readable value for common subrecords, or None (shown as hex or as a form reference). is_form(raw id): a 4-byte
-    field that names a record is a form id even when its bytes read as text (R9)."""
+    field that names a record is a form id even when its bytes read as text (R9). Subrecords with a layout in
+    esp/layouts.py come back by the field names fnv_spec "set" takes; form_name(raw id) names their FormIDs."""
+    from .esp import layouts
+    named = layouts.decode(rtype, tag, data, form_name)
+    if named is not None:
+        return named
     if tag in STRING_TAGS or (tag == 'NAM1' and rtype == 'INFO'):
         if len(data) == 4 and tag != 'SCTX' and is_form is not None and is_form(struct.unpack('<I', data)[0]):
             return None

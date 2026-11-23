@@ -12,6 +12,7 @@ import struct
 from .fnv_deep import HF_EXIT, HF_RECORD, HookError, decode_prologue
 from .fnv_link import hexs, word
 from .fnv_live import LiveError
+from .esp.layouts import ENTRY_POINTS  # noqa: F401 - the table moved there (tool gaps 1b)
 
 SEL_ARG = {i: 2 + i for i in range(8)}
 SEL_STACK8 = 14  # companion selector: address of stack argument 8 (snapshot = arguments 8..31)
@@ -68,30 +69,6 @@ ACTIONS = ['attack ranged explosive', 'attack ranged explosive from cover', 'att
 APPLY_PERK_MODIFIERS = 0x005E58F0   # ApplyPerkModifiers (proven), cdecl varargs (ep, actor, filters..., args...)
 APPLY_FUNCTION = 0x005E5B40         # BGSEntryPointFunction::ApplyFunction (decomp), cdecl 6 args
 PERK_PREFIX = 'fnvmcp_perk_'
-ENTRY_POINTS = [
-    ('Calculate Weapon Damage', 3), ('Calculate My Critical Hit Chance', 3), ('Calculate My Critical Hit Damage', 3),
-    ('Calculate Weapon Attack AP Cost', 2), ('Calculate Mine Explode Chance', 2), ('Adjust Range Penalty', 2),
-    ('Adjust Limb Damage', 3), ('Calculate Weapon Range', 2), ('Calculate To Hit Chance', 3),
-    ('Adjust Experience Points', 1), ('Adjust Gained Skill Points', 1), ('Adjust Book Skill Points', 1),
-    ('Modify Recovered Health', 1), ('Calculate Inventory AP Cost', 1), ('Get Disposition', 2),
-    ('Get Should Attack', 2), ('Get Should Assist', 3), ('Calculate Buy Price', 2), ('Get Bad Karma', 1),
-    ('Get Good Karma', 1), ('Ignore Locked Terminal', 1), ('Add Leveled List On Death', 2), ('Get Max Carry Weight', 1),
-    ('Modify Addiction Chance', 1), ('Modify Addiction Duration', 1), ('Modify Positive Chem Duration', 1),
-    ('Adjust Drinking Radiation', 1), ('Activate', 2), ('Mysterious Stranger', 1), ('Has Paralyzing Palm', 1),
-    ('Hacking Science Bonus', 1), ('Ignore Running During Detection', 1), ('Ignore Broken Lock', 1),
-    ('Has Concentrated Fire', 1), ('Calculate Gun Spread', 2), ('Player Kill AP Reward', 3),
-    ('Modify Enemy Critical Hit Chance', 3), ('Reload Speed', 2), ('Equip Speed', 2), ('Action Point Regen', 2),
-    ('Action Point Cost', 2), ('Miss Fortune', 1), ('Modify Run Speed', 1), ('Modify Attack Speed', 2),
-    ('Modify Radiation Consumed', 1), ('Has Pip Hacker', 1), ('Has Meltdown', 1), ('See Enemy Health', 1),
-    ('Has Jury Rigging', 1), ('Modify Threat Range', 2), ('Modify Threat', 2), ('Has Fast Travel Always', 1),
-    ('Knockdown Chance', 2), ('Modify Weapon Strength Req', 2), ('Modify Aiming Move Speed', 2),
-    ('Modify Light Items', 1), ('Modify Damage Threshold (defender)', 3), ('Modify Chance for Ammo Item', 2),
-    ('Modify Damage Threshold (attacker)', 3), ('Modify Throwing Velocity', 2), ('Chance for Item On Fire', 2),
-    ('Has Unarmed Forward Power Attack', 1), ('Has Unarmed Back Power Attack', 1),
-    ('Has Unarmed Crouched Power Attack', 1), ('Has Unarmed Counter Attack', 1), ('Has Unarmed Left Power Attack', 1),
-    ('Has Unarmed Right Power Attack', 1), ('VATS HelperChance', 1), ('Modify Item Damage', 1),
-    ('Has Improved Detection', 1), ('Has Improved Spotting', 1), ('Has Improved Item Detection', 1),
-    ('Adjust Explosion Radius', 2), ('Adjust Heavy Weapon Weight', 1)]
 NON_VALUE_EPS = {21: 'leveled list', 27: 'activate'}
 PERK_FUNCTIONS = {1: 'set', 2: 'add', 3: 'multiply', 4: 'add range', 5: 'add actor value mult', 6: 'absolute',
                   7: 'negative absolute', 8: 'add leveled list', 9: 'add activate choice'}

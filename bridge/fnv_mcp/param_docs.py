@@ -715,14 +715,16 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                   'after': 'For diff: the name of the second snapshot. Omitted captures the same items again now and '
                            'compares.'},
  'fnv_spec': {'action': 'What to do: validate (dry run, writes nothing), build (write the plugin and receipt), inspect '
-                        '(summarise a plugin on disk), lookup (find records by EditorID for the spec).',
+                        '(summarise a plugin on disk), lookup (find records by EditorID for the spec), fields (the '
+                        'named fields a record type takes in "set").',
               'spec': 'For action=validate: an inline spec object to check instead of the project spec file. Omitted '
                       'checks the project spec.',
               'which': 'For action=inspect: build (default) is the last build; installed is the copy fnv_install put '
                        'in the MO2 dev profile, else the one in Data.',
               'query': 'For action=lookup: part of an EditorID (2 to 100 characters) to find in the spec and the '
                        'indexed masters.',
-              'record_type': 'For action=lookup: keep only records of this four-letter type, such as STAT or MISC.',
+              'record_type': 'For action=lookup: keep only records of this four-letter type, such as STAT or MISC. '
+                             'For action=fields: the type whose named fields to list (ARMO, LVLI, TERM...).',
               'limit': 'For action=lookup: maximum master records returned. Default 25.'},
  'fnv_symbolize': {'addresses': 'Addresses to name, as hex strings such as 0x0086A4B2 (1 to 200).',
                    'modules': 'Loaded modules for addresses outside FalloutNV.exe: {name, base, size} as a crash log '

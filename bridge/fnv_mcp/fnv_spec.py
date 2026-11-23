@@ -75,6 +75,17 @@ class SpecTools:
             raise ValueError('lookup needs a query of at least 2 characters')
         return self.call(lambda: self.authoring().lookup(query, record_type, limit))
 
+    def fields(self, record_type=None):
+        from .esp import generic, layouts
+        if not record_type:
+            return {'types': layouts.TYPES, 'rawOnly': sorted(generic.GENERIC_TYPES - set(layouts.TYPES)),
+                    'how': 'fnv_spec action=fields record_type=<type> lists one type\'s fields'}
+        info = layouts.describe(record_type)
+        if info is None:
+            raise ValueError('%s has no named fields; the types with them: %s. Other types take "fields" (tags and '
+                             'offsets).' % (record_type, ', '.join(layouts.TYPES)))
+        return info
+
     def run(self, action, spec=None, which='build', query=None, record_type=None, limit=25):
         started = time.monotonic()
         operation_id = str(uuid.uuid4())
@@ -85,6 +96,8 @@ class SpecTools:
                 data = self.build()
             elif action == 'inspect':
                 data = self.inspect(which)
+            elif action == 'fields':
+                data = self.fields(record_type)
             else:
                 data = self.lookup(query, record_type, limit)
             outcome = data.pop('_outcome', 'unchanged')
@@ -116,7 +129,7 @@ def register(server, project, annotations, result_type):
     tools = SpecTools(project)
 
     @server.tool(annotations=annotations)
-    async def fnv_spec(action: Literal['validate', 'build', 'inspect', 'lookup'],
+    async def fnv_spec(action: Literal['validate', 'build', 'inspect', 'lookup', 'fields'],
                        spec: dict[str, Any] | None = None,
                        which: Literal['build', 'installed'] = 'build',
                        query: Annotated[str, Field(min_length=2, max_length=100)] | None = None,
@@ -129,7 +142,9 @@ def register(server, project, annotations, result_type):
         emitted compiled once fnv_scripts_compile has cached it from the game. inspect [which=build|installed]:
         masters, record counts and cells of the build or of the installed copy (the MO2 dev profile mod, else
         Data). lookup query [record_type] [limit]: records by EditorID in the spec and the indexed masters, with
-        the "@EditorID" reference to use in the spec. Install a build with fnv_install."""
+        the "@EditorID" reference to use in the spec. fields [record_type]: the named fields a type takes in a
+        record's "set" (ARMO value, weight...; lists such as LVLI entries); "template": "@EditorID" starts a record
+        from a master's, "override": true changes a master record in place. Install a build with fnv_install."""
         result = await anyio.to_thread.run_sync(partial(tools.run, action, spec=spec, which=which, query=query,
                                                         record_type=record_type, limit=limit))
         return CallToolResult(content=[TextContent(type='text', text=json.dumps(result))],
