@@ -40,13 +40,17 @@ from pathlib import Path
 import struct
 
 from .codec import Subrecord, zstring
-from .formids import FormIdError
+from .formids import HEX8, FormIdError
+from .masters import MasterError
 from .records import SpecError, check_edid, record
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_DIR = ROOT / 'state' / 'templates'
 GENERIC_TYPES = {'NPC_', 'CREA', 'WEAP', 'ACTI', 'SOUN', 'QUST', 'PACK', 'MESG', 'FLST', 'MISC', 'GLOB', 'ALCH',
-                 'FACT', 'CONT', 'SPEL', 'MGEF', 'ENCH', 'EXPL', 'PROJ', 'SCPT', 'VTYP', 'DIAL'}
+                 'FACT', 'CONT', 'SPEL', 'MGEF', 'ENCH', 'EXPL', 'PROJ', 'SCPT', 'VTYP', 'DIAL',
+                 # tool gaps 1 (2026-11-23): items and loot, world and menus, what the robot project asked for
+                 'ARMO', 'AMMO', 'KEYM', 'NOTE', 'BOOK', 'IMOD', 'LVLI', 'LVLN', 'LVLC', 'RCPE', 'DOOR', 'TERM',
+                 'PERK', 'RACE', 'IDLE', 'BPTD'}
 SCRIPT_TYPES = {'object': 0, 'quest': 1, 'effect': 0x100}
 VALUE_KEYS = ('text', 'texts', 'form', 'forms', 'hex', 'u8', 'u16', 'u32', 's32', 'float', 'pack', 'empty')
 COMPILED_TAGS = ('SCHR', 'SCDA', 'SCTX', 'SLSD', 'SCVR', 'SCRO', 'SCRV')
@@ -161,7 +165,47 @@ def apply_fields(subs, fields, resolver, where):
     return subs
 
 
-def build_generic(form_id, edid, spec, resolver, where=None, masters=None, templates=None):
+def dump_exists(name, master='FalloutNV.esm', dirs=None):
+    if ':' in name:
+        master, name = name.split(':', 1)
+    return any((Path(folder) / master / (name + '.json')).exists() for folder in dirs or [TEMPLATE_DIR])
+
+
+def master_record(ref, rtype, resolver, masters, master_records, where):
+    """(file name, record) of the master record `ref` ("@EditorID" or a FormID), as the plugin numbers it."""
+    if master_records is None:
+        raise SpecError(where, 'master records are not available here (no game Data folder): %s needs a template dump'
+                        ' (tools/esm_research.py dump) or the game files' % ref)
+    try:
+        form = resolver.resolve(ref)
+    except FormIdError as e:
+        raise SpecError(where, str(e))
+    top = form >> 24
+    if top >= len(masters):
+        raise SpecError(where, '%s is a record of this plugin, not of a master' % ref)
+    try:
+        return master_records.winning(masters, masters[top], form & 0xFFFFFF, rtype)
+    except MasterError as e:
+        raise SpecError(where, '%s: %s' % (ref, e))
+
+
+def template_subrecords(name, rtype, resolver, masters, templates, master_records, where):
+    """The subrecords a record starts from: a dump file when one is named so, else the master record."""
+    if not isinstance(name, str) or not name:
+        raise SpecError(where, 'template must be "@EditorID", a FormID or a template dump name')
+    is_ref = name.startswith('@') or bool(HEX8.match(name))
+    if not is_ref and (dump_exists(name, dirs=templates) or master_records is None):
+        master, tpl = load_template(name, dirs=templates)
+        if tpl['type'] != rtype:
+            raise SpecError(where, '%s is a %s, not a %s' % (name, tpl['type'], rtype))
+        if masters is not None and (not masters or masters[0].lower() != master.lower()):
+            raise SpecError(where, 'template master %s must be the first master' % master)
+        return [Subrecord(s['tag'], bytes.fromhex(s['hex'])) for s in tpl['subrecords']]
+    _file, rec = master_record(name if is_ref else '@' + name, rtype, resolver, masters, master_records, where)
+    return list(rec.subrecords)
+
+
+def build_generic(form_id, edid, spec, resolver, where=None, masters=None, templates=None, master_records=None):
     where = where or 'records.%s' % edid
     check_edid(edid, where)
     rtype = spec['type']
@@ -171,18 +215,27 @@ def build_generic(form_id, edid, spec, resolver, where=None, masters=None, templ
         raise SpecError(where, 'unknown field(s): %s' % ', '.join(sorted(unknown)))
     subs = []
     if spec.get('template'):
-        master, tpl = load_template(spec['template'], dirs=templates)
-        if tpl['type'] != rtype:
-            raise SpecError(where + '.template', '%s is a %s, not a %s' % (spec['template'], tpl['type'], rtype))
-        if masters is not None and (not masters or masters[0].lower() != master.lower()):
-            raise SpecError(where + '.template', 'template master %s must be the first master' % master)
-        subs = [Subrecord(s['tag'], bytes.fromhex(s['hex'])) for s in tpl['subrecords']]
+        subs = template_subrecords(spec['template'], rtype, resolver, masters, templates, master_records,
+                                   where + '.template')
     subs = [s for s in subs if s.tag != 'EDID']
     subs.insert(0, Subrecord('EDID', zstring(edid)))
     apply_fields(subs, spec.get('fields', []), resolver, where)
     rec = record(rtype, form_id, subs)
     rec.flags = int(spec.get('flags', 0))
     return rec
+
+
+def build_override(key, spec, resolver, masters, master_records, where=None):
+    """A copy of the winning master version of a record, under the master's FormID, with the spec's changes.
+    Returns (record, source file name). `override` is true (the key is the master's EditorID) or the record's
+    "@EditorID" / FormID (the key is a label)."""
+    where = where or 'records.%s' % key
+    target = spec['override'] if isinstance(spec['override'], str) else '@' + key
+    source, rec = master_record(target, spec['type'], resolver, masters, master_records, where + '.override')
+    subs = list(rec.subrecords)
+    apply_fields(subs, spec.get('fields', []), resolver, where)
+    rec.subrecords = subs
+    return rec, source
 
 
 def script_text(base_dir, spec, edid, where):

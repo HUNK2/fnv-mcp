@@ -17,6 +17,8 @@ import tempfile
 from .esp import build as builder, codec, diff, generic, scripts
 from .esp.assets import AssetIndex, AssetError, nif_textures, bsa_extract
 from .esp.formids import FormIdMap, MasterIndex
+from .esp import index as esp_index
+from .esp.masters import MasterRecords
 from .esp.records import SpecError
 from .esp.validate import validate
 from .esp import codec as _codec  # noqa: F401 - registers the cp1252-bytes error handler (R16)
@@ -70,11 +72,31 @@ class Authoring:
         return spec
 
     def index(self, masters):
+        """The EditorID index of the masters. A master with no index file whose file is found gets one, written to
+        <state_dir>/index (about 6 s for FalloutNV.esm, once)."""
+        have = {Path(p).name[:-len('.json.gz')].lower() for p in index_files(self.project.state_dir, masters)}
+        sources = self.master_records(masters)
+        for m in masters:
+            if m.lower() not in have and sources is not None and sources.has(m):
+                esp_index.write_index(sources.paths[m.lower()], Path(self.project.state_dir) / 'index')
         return MasterIndex(index_files(self.project.state_dir, masters))
 
     @property
     def templates(self):
         return generic.template_dirs(self.project.state_dir)
+
+    def master_records(self, masters):
+        """The master files templates and overrides are read from: each master in a dev profile mod folder (highest
+        priority first) or the game Data folder. None without a Data folder (then only template dumps work)."""
+        if not self.data_dir.is_dir():
+            return None
+        paths = []
+        roots = self.mod_roots() + [self.data_dir]
+        for m in masters:
+            hit = next((root / m for root in roots if (root / m).is_file()), None)
+            if hit:
+                paths.append(hit)
+        return MasterRecords(paths) if paths else None
 
     def formids(self, spec):
         return FormIdMap(self.project.state_dir / 'formids' / (spec['project_id'] + '.json'), spec['plugin'])
@@ -158,9 +180,13 @@ class Authoring:
         for edid, rec in spec.get('records', {}).items():
             if rec.get('type') == 'SCPT':
                 inputs['sources'][edid] = sha(generic.script_text(self.spec_path.parent, rec, edid, edid))
-            if rec.get('template'):
+            if rec.get('template') and generic.dump_exists(rec['template'], spec['masters'][0], self.templates):
                 template = generic.load_template(rec['template'], spec['masters'][0], self.templates)
                 inputs['files']['template:' + edid] = sha(json.dumps(template, sort_keys=True).encode())
+        sources = self.master_records(spec['masters'])
+        for name, path in sorted((sources.paths if sources else {}).items()):
+            st = path.stat()        # a template or override read from a master changes when the master does
+            inputs['files']['master:' + name] = [st.st_size, st.st_mtime_ns]
         for path in index_files(self.project.state_dir, spec['masters']):
             inputs['files'][str(path.resolve())] = sha(path.read_bytes())
         return sha(json.dumps(inputs, sort_keys=True).encode())
@@ -179,7 +205,7 @@ class Authoring:
                  if entry.get('provenance', {}).get('context') == context}
         data, receipt = builder.build(spec, formids, index, base_dir=self.spec_path.parent,
                                       script_cache=cache,
-                                      templates=self.templates)
+                                      templates=self.templates, master_records=self.master_records(spec['masters']))
         assets = AssetIndex(self.data_dir, self.mod_roots()) if check_assets and self.data_dir.is_dir() else None
         receipt['validation'] = validate(data, index, assets, spec['masters'])
         receipt['assets'] = self.asset_manifest(data, assets)

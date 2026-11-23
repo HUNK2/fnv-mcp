@@ -85,8 +85,13 @@ def check_spec(spec):
         # bug hunt 2026-11-18: a list or object as "type" is unhashable and raised TypeError on the set test
         if not isinstance(rec, dict) or not isinstance(rec.get('type'), str) or rec.get('type') not in kinds:
             raise SpecError('records.%s.type' % edid, 'must be one of %s' % ', '.join(sorted(kinds)))
-        if rec.get('override') and rec.get('type') != 'DIAL':
-            raise SpecError('records.%s.override' % edid, 'only master topics (DIAL) can be overridden so far')
+        override = rec.get('override')
+        if override not in (None, True, False) and not (
+                isinstance(override, str) and (override.startswith('@') or re.match(r'^[0-9A-Fa-f]{8}\Z', override))):
+            raise SpecError('records.%s.override' % edid, 'true (the key is the master record\'s EditorID), '
+                            '"@EditorID" or an 8-digit FormID')
+        if override and 'template' in rec:
+            raise SpecError('records.%s.template' % edid, 'an override starts from the master record: no template')
         if 'infos' in rec:
             if rec.get('type') != 'DIAL':
                 raise SpecError('records.%s.infos' % edid, 'lines (infos) belong to a topic (DIAL)')
@@ -133,12 +138,13 @@ def interior_block(local_id):
     return local_id % 10, (local_id // 10) % 10
 
 
-def build(spec, formids, index=None, base_dir=None, script_cache=None, templates=None):
+def build(spec, formids, index=None, base_dir=None, script_cache=None, templates=None, master_records=None):
     """Return (plugin_bytes, receipt). `formids` is a FormIdMap (updated in place, not saved).
 
     base_dir: folder that script "source" paths are relative to (the spec's folder).
     script_cache: {EditorID: compiled entry} from scripts.load_cache(); uncompiled otherwise.
     templates: template folders in lookup order (generic.template_dirs); default: the code root's.
+    master_records: masters.MasterRecords, the master files that templates and overrides are read from.
     """
     spec = check_spec(spec)
     index = index or MasterIndex()
@@ -164,10 +170,16 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
     by_type = {}
     uncompiled = []
     lines_of = {}
+    overrides = {}
     for edid, rec_spec in spec.get('records', {}).items():
         rtype = rec_spec['type']
-        if rec_spec.get('override'):
+        if rtype == 'DIAL' and rec_spec.get('override') is True and generic.dump_exists(edid, dirs=templates):
             rec = override_topic(edid, rec_spec, resolver, masters, templates)
+            overrides[edid] = {'formId': '%08X' % rec.form_id, 'from': 'template ' + edid}
+        elif rec_spec.get('override'):
+            rec, source = generic.build_override(
+                edid, {k: v for k, v in rec_spec.items() if k != 'infos'}, resolver, masters, master_records)
+            overrides[edid] = {'formId': '%08X' % rec.form_id, 'from': source}
         elif rtype == 'SCPT':
             rec = generic.build_script(full[edid], edid, rec_spec, base_dir=base_dir, cache=script_cache)
             if not rec.compiled:
@@ -176,7 +188,8 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
             rec = records.BUILDERS[rtype](full[edid], edid, rec_spec)
         else:
             generic_spec = {k: v for k, v in rec_spec.items() if k != 'infos'}
-            rec = generic.build_generic(full[edid], edid, generic_spec, resolver, masters=masters, templates=templates)
+            rec = generic.build_generic(full[edid], edid, generic_spec, resolver, masters=masters, templates=templates,
+                                        master_records=master_records)
         if rtype == 'DIAL':
             lines = build_lines(edid, rec_spec, rec, full, resolver, script_cache)
             uncompiled += ['%s line %s' % (edid, line_key) for line_key, line in lines if not line.compiled]
@@ -264,7 +277,7 @@ def build(spec, formids, index=None, base_dir=None, script_cache=None, templates
         'masters': masters, 'indexedMasters': index.masters,
         'recordCounts': type_counts, 'hedrCount': count,
         'nextObjectId': '%06X' % formids.next_object_id,
-        'formIds': {k: '%08X' % v for k, v in full.items()},
+        'formIds': {k: '%08X' % v for k, v in full.items()}, 'overrides': overrides,
         'references': references, 'warnings': warnings, 'uncompiledScripts': uncompiled,
     }
     return data, receipt

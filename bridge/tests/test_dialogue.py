@@ -132,7 +132,7 @@ class DialogueBuild(unittest.TestCase):
         with self.assertRaises(SpecError):
             builder.check_spec(spec)
         spec = json.loads(json.dumps(SPEC))
-        spec['records']['TestQuest']['override'] = True
+        spec['records']['TestQuest']['override'] = 'not a FormID'   # any type may be overridden (tool gaps 1a)
         with self.assertRaises(SpecError):
             builder.check_spec(spec)
         spec = json.loads(json.dumps(SPEC))
