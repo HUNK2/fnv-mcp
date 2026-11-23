@@ -141,6 +141,39 @@ class GameHelperTests(unittest.TestCase):
         self.assertTrue(fnv_link.disable_mod(self.mo2, 'Dev', 'Built'))
         self.assertIn('-Built', (self.mo2 / 'profiles/Dev/modlist.txt').read_text(encoding='utf-8'))
 
+    def test_install_of_an_unchanged_file_turns_the_mod_back_on(self):
+        # Live run 2026-11-23: the mod was off and MO2 had dropped its plugin from plugins.txt; installing the same
+        # bytes again returned "unchanged" before enabling anything, so the plugin did not load.
+        game = fnv_game.Game(self.project)
+        plugin = Path(self.tmp.name) / 'Built.esp'
+        plugin.write_bytes(b'TES4 fixture')
+        profile = self.mo2 / 'profiles/Dev'
+        with mock.patch.object(fnv_game.Game, 'process', return_value=None):
+            game.install_plugin(plugin)
+            fnv_link.disable_mod(self.mo2, 'Dev', 'Built')
+            for name in ('plugins.txt', 'loadorder.txt'):
+                path = profile / name
+                if path.exists():
+                    path.write_text(''.join(l for l in path.read_text(encoding='utf-8').splitlines(True)
+                                            if 'Built.esp' not in l), encoding='utf-8')
+            again = game.install_plugin(plugin)
+        self.assertTrue(again['unchanged'])
+        self.assertIn('+Built', (profile / 'modlist.txt').read_text(encoding='utf-8').splitlines())
+        self.assertIn('Built.esp', (profile / 'plugins.txt').read_text(encoding='utf-8'))
+        self.assertIn('Built.esp', (profile / 'loadorder.txt').read_text(encoding='utf-8'))
+        self.assertEqual(sorted(again['addedTo']), ['loadorder.txt', 'plugins.txt'])
+
+    def test_install_of_a_changed_file_forgets_its_record_index(self):
+        game = fnv_game.Game(self.project)
+        plugin = Path(self.tmp.name) / 'Built.esp'
+        plugin.write_bytes(b'TES4 fixture')
+        with mock.patch.object(fnv_game.Game, 'process', return_value=None),                 mock.patch('fnv_mcp.fnv_data.forget_plugin', return_value=1) as forget:
+            game.install_plugin(plugin)
+            game.install_plugin(plugin)                      # unchanged: nothing to forget
+            plugin.write_bytes(b'TES4 changed')
+            game.install_plugin(plugin)
+        self.assertEqual([Path(c.args[1]).name for c in forget.call_args_list], ['Built.esp', 'Built.esp'])
+
 
 # The shared fake companion (PLAN-3 S4.4); its replies are checked against the real DLL by test_wire_contract.
 from fakes import FakeLink  # noqa: E402,F401

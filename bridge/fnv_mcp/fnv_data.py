@@ -152,6 +152,11 @@ def _load_order(root, profile, data_dir, live_plugins, stamps):
     dlc = {m[1:].split(':', 1)[1].strip().lower() for m in mods if m[:1] == '*' and ':' in m}
     active = {p.lstrip('*').lower() for p in lines('plugins.txt')}
     order = lines('loadorder.txt') or [p.lstrip('*') for p in lines('plugins.txt')]
+    # An active plugin that loadorder.txt does not list still loads: MO2 rewrites loadorder.txt at launch and can
+    # leave out a plugin fnv_install just added, while plugins.txt keeps it (live run 2026-11-23). It goes after
+    # the listed ones, as plugins.txt orders it.
+    listed = {name.lower() for name in order}
+    order = order + [p.lstrip('*') for p in lines('plugins.txt') if p.lstrip('*').lower() not in listed]
     for folder in [root / 'mods' / mod for mod in enabled] + [data_dir]:
         stamps.append((_plugin_names, folder, _plugin_names(folder)))
 
@@ -381,6 +386,25 @@ class RecordIndex:
         return {'path': row[0], 'name': row[1], 'masters': json.loads(row[2])}
 
 
+def forget_plugin(state_dir, path):
+    """Drop the record index's rows of one plugin file, so the next lookup reads it again. For a writer that knows
+    it changed the file: MO2 gives plugins a fixed file time by load-order slot, so a rebuilt plugin of the same
+    size can keep both size and time. Returns how many file rows were dropped."""
+    index = RecordIndex(state_dir)
+    db = index.db
+    try:
+        with write_txn(db):
+            ids = [r[0] for r in db.execute('select id from files where lower(path) = ?', (str(path).lower(),))]
+            for old in ids:
+                db.execute('delete from records where file = ?', (old,))
+                db.execute('delete from files where id = ?', (old,))
+                RecordIndex._drop_refs(db, old)
+        return len(ids)
+    finally:
+        db.close()
+        index._local.db = None
+
+
 def scan_plugin(path):
     """(masters, [(raw form id, type, EditorID, FULL, offset, flags)]) from a flat walk over record headers."""
     data = Path(path).read_bytes()
@@ -555,6 +579,8 @@ class DataTools:
             return owner, value & 0xFFFFFF
         if local:
             return local.group(1).lower(), int(local.group(2), 16)
+        if ref.startswith('@') and re.match(r'^@[A-Za-z0-9_]+$', ref):   # fnv_spec's "@EditorID", as fnv_form takes it
+            ref = ref[1:]
         files = [e['fileId'] for e in entries]
         row = self.index.db.execute('select owner, local from records where edid = ? collate nocase and file in (%s) '
                                     'limit 1' % ','.join(map(str, files)), (ref,)).fetchone()

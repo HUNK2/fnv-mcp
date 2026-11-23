@@ -192,6 +192,20 @@ class RecordIndexFreshness(unittest.TestCase):
         self.assertEqual(self.plugin.stat().st_size, st.st_size)
         self.assertEqual(self.edids(self.index.ensure(self.plugin)), ['RockB'])
 
+    def test_a_forgotten_plugin_is_read_again_at_the_same_size_and_time(self):
+        # MO2 gives each plugin a fixed file time by its load-order slot (2000-01-19 11:00 in the live run of
+        # 2026-11-23), so a plugin fnv_install rebuilt at the same size keeps size and time: install forgets it.
+        from fnv_mcp.fnv_data import forget_plugin
+        write_plugin(self.plugin, [record('STAT', 0x800, edid('RockA'))])
+        os.utime(self.plugin, (948240000, 948240000))
+        self.assertEqual(self.edids(self.index.ensure(self.plugin)), ['RockA'])
+        time.sleep(0.05)
+        write_plugin(self.plugin, [record('STAT', 0x800, edid('RockB'))])
+        os.utime(self.plugin, (948240000, 948240000))
+        self.assertEqual(forget_plugin(self.root / 'state', self.plugin), 1)
+        self.assertEqual(self.edids(self.index.ensure(self.plugin)), ['RockB'])
+        self.assertEqual(forget_plugin(self.root / 'state', self.root / 'None.esp'), 0)
+
     def test_an_unchanged_new_plugin_keeps_its_file_id(self):
         write_plugin(self.plugin, [record('STAT', 0x800, edid('RockA'))])
         first = self.index.ensure(self.plugin)
@@ -631,6 +645,20 @@ class LoadOrderSpeed(unittest.TestCase):
         live = self.entry(load_order(self.project, {'FalloutNV.esm': 0, 'Other.esp': 1}), 'Other.esp')
         self.assertEqual(live['index'], 1)
         self.assertEqual(self.entry(load_order(self.project), 'Other.esp')['index'], 2)
+
+    def test_an_active_plugin_missing_from_loadorder_txt_is_still_in_the_load_order(self):
+        # Live run 2026-11-23: fnv_install listed a new plugin in both files, MO2 rewrote loadorder.txt at launch
+        # without it, the game loaded it (plugins.txt), and fnv_record could not see it.
+        from fnv_mcp.fnv_data import load_order
+        write_plugin(self.mo2 / 'mods' / 'Top' / 'New.esp', [], masters=['FalloutNV.esm'])
+        self.set_plugins(['FalloutNV.esm', 'Mod.esp', 'Other.esp', 'New.esp'])     # loadorder.txt lacks New.esp
+        new = self.entry(load_order(self.project), 'New.esp')
+        self.assertTrue(new['active'])
+        self.assertEqual((new['index'], new['mod']), (3, 'Top'))
+        live = self.entry(load_order(self.project, {'FalloutNV.esm': 0, 'New.esp': 1}), 'New.esp')
+        self.assertEqual(live['index'], 1)
+        live_only = load_order(self.project, {'FalloutNV.esm': 0, 'Mod.esp': 1, 'Gone.esp': 2})
+        self.assertNotIn('Gone.esp', [e['name'] for e in live_only if e.get('path')])
 
     def test_a_caller_that_changes_the_entries_changes_no_later_answer(self):
         from fnv_mcp.fnv_data import load_order

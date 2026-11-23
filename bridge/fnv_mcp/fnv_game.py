@@ -1230,14 +1230,18 @@ class Game:
             return self._install_plugin_direct(source, layout)
         target = layout.mods_dir / mod / source.name
         backup = None
-        if target.exists():
-            if target.read_bytes() == source.read_bytes():
-                return {'installed': True, 'unchanged': True, 'target': str(target)}
+        # The same bytes are not copied again, but the mod is still turned on and the plugin listed: a mod turned off
+        # since (MO2 then drops its plugin from plugins.txt) would otherwise stay off (live run 2026-11-23).
+        unchanged = target.exists() and target.read_bytes() == source.read_bytes()
+        if target.exists() and not unchanged:
             backup = self.state / 'install-backups' / ('%d-%s' % (time.time(), source.name))
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(target, backup)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        if not unchanged:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            from .fnv_data import forget_plugin      # MO2's fixed file times hide a same-size rebuild from the index
+            forget_plugin(self.project.state_dir, target)
         fnv_link.enable_mod(layout.mo2_root, layout.profile, mod)
         added = []
         with fnv_link.profile_locked(self.mo2_root, self.profile):
@@ -1248,7 +1252,7 @@ class Game:
                     lines.append(source.name)
                     atomic_write(path, '\n'.join(lines) + '\n')
                     added.append(name)
-        return {'installed': True, 'unchanged': False, 'target': str(target), 'mod': mod, 'backup': str(backup) if backup else None,
+        return {'installed': True, 'unchanged': unchanged, 'target': str(target), 'mod': mod, 'backup': str(backup) if backup else None,
                 'addedTo': added}
 
     def _install_plugin_direct(self, source, layout):

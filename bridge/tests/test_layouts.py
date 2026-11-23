@@ -262,6 +262,22 @@ class RecordReadsNames(unittest.TestCase):
         self.assertEqual(decode_subrecord('WEAP', 'DATA', struct.pack('<iifhB', 1, 2, 3.0, 4, 5))['clipSize'], 5)
 
 
+    def test_record_takes_the_spec_form_of_an_editor_id(self):
+        # The make-records guide and fnv_form both write "@EditorID"; fnv_record looked the "@" up as part of the name
+        # (live run 2026-11-23: RECORD_NOT_FOUND for @LiveArmor).
+        import sqlite3
+        from types import SimpleNamespace
+        from fnv_mcp.fnv_data import DataTools
+        tools = DataTools.__new__(DataTools)
+        db = sqlite3.connect(':memory:')
+        db.execute('create table records (file int, owner text, local int, edid text)')
+        db.execute("insert into records values (1, 'mine.esp', 2050, 'LiveArmor')")
+        tools._index = SimpleNamespace(db=db)
+        entries = [{'fileId': 1, 'index': 1, 'name': 'Mine.esp'}]
+        self.assertEqual(tuple(tools._resolve(entries, '@LiveArmor')), ('mine.esp', 2050))
+        self.assertEqual(tuple(tools._resolve(entries, 'livearmor')), ('mine.esp', 2050))
+
+
 class SpecFieldsAction(unittest.TestCase):
     def test_fields_action(self):
         from fnv_mcp.config import Project
