@@ -4,7 +4,8 @@
 
 1. Preflight: the game runs in the project's dev profile, the companion it loaded is the one built from the current
    sources (state/engine/install.json), and fnv_selftest reports nothing broken.
-2. The unittest live tests under tests/live (smoke: test_smoke.py; full: every file), with FNV_LIVE=1.
+2. The unittest live tests under tests/live (smoke: test_smoke.py; spec: test_spec_types.py, records the builder
+   makes, read back in the game; full: every file), with FNV_LIVE=1.
 3. full only: the example scenarios through fnv_test, each with its expected outcome.
 4. summary.json and summary.md in --out. Exit 0 only when everything passed and every expected failure failed.
 
@@ -95,7 +96,7 @@ def run_tests(suite):
         tests = unittest.TestSuite(loader.discover(folder, pattern=p, top_level_dir=str(BRIDGE / 'tests'))
                                    for p in ('test_smoke.py', 'test_loop.py', 'test_quality.py'))
     else:
-        pattern = 'test_smoke.py' if suite == 'smoke' else 'test_*.py'
+        pattern = {'smoke': 'test_smoke.py', 'spec': 'test_spec_types.py'}.get(suite, 'test_*.py')
         tests = loader.discover(folder, pattern=pattern, top_level_dir=str(BRIDGE / 'tests'))
     stream = io.StringIO()
     result = unittest.TextTestRunner(stream=stream, verbosity=2).run(tests)
@@ -173,7 +174,7 @@ def write_summary(out, summary):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--project', default=str(BRIDGE / 'projects' / 'hellowasteland.windows.json'))
-    parser.add_argument('--suite', choices=('smoke', 'loop', 'full'), default='smoke')
+    parser.add_argument('--suite', choices=('smoke', 'loop', 'spec', 'full'), default='smoke')
     parser.add_argument('--attach', action='store_true', help='never launch the game')
     parser.add_argument('--start', default='coc:GoodspringsSource', help='where to launch when not attached')
     parser.add_argument('--out', default=None, help='default: <state_dir>/fnv/regress/<stamp>')
