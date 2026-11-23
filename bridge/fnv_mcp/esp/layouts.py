@@ -194,10 +194,11 @@ def canonical_order(rtype, subs):
     if not order:
         return subs
     parts = LIST_TAGS.get(rtype, set())
-    keyed, last = [], -1
+    keyed, last, in_list = [], -1, False
     for i, s in enumerate(subs):
-        if s.tag == 'CTDA' and 'CTDA' in order and not any(p.tag in ('PRKE', 'ITXT') for p in subs[:i]):
-            last = order.index('CTDA')
+        in_list = (s.tag in parts and s.tag not in order) or (in_list and (s.tag in parts or s.tag == 'DATA'))
+        if in_list and '*' in order:
+            last = order.index('*')          # a list's parts (and the DATA or CTDA inside them) stay together
         elif s.tag in order:
             last = order.index(s.tag)
         elif s.tag in parts and '*' in order:
@@ -348,11 +349,11 @@ def set_fields(rtype, subs, values, resolve, where):
                 [k for k in known if '.' not in k] + list(LISTS.get(rtype, ()))))))
         tag, index, code, table = known[name]
         if index is None:
-            _set_whole(subs, tag, code, value, resolve, w)
+            _set_whole(subs, tag, code, value, resolve, w, rtype)
             continue
         layout = STRUCTS[rtype][tag]
         packed = _value(code, table, value, resolve, w)
-        hits = [i for i, s in enumerate(subs) if s.tag == tag]
+        hits = _own(rtype, subs, tag)
         data = bytearray(subs[hits[0]].data) if hits else bytearray(_struct(layout).size)
         end = _struct(layout, index + 1).size
         if len(data) < end:              # an older, shorter subrecord: grow it with zeros up to this field
@@ -365,7 +366,14 @@ def set_fields(rtype, subs, values, resolve, where):
     return subs
 
 
-def _set_whole(subs, tag, code, value, resolve, where):
+def _own(rtype, subs, tag):
+    """Indices of the record's own `tag` subrecords: those before its list parts (a PERK's effects have DATA too)."""
+    stop = LIST_TAGS.get(rtype, set()) - {tag}
+    first = next((i for i, s in enumerate(subs) if s.tag in stop), len(subs))
+    return [i for i, s in enumerate(subs[:first]) if s.tag == tag]
+
+
+def _set_whole(subs, tag, code, value, resolve, where, rtype=None):
     if code == 'forms':
         if not isinstance(value, (list, tuple)):
             raise SpecError(where, 'a list of "@EditorID" references')
@@ -390,11 +398,11 @@ def _set_whole(subs, tag, code, value, resolve, where):
     else:
         table = EQUIP_TYPE if tag == 'ETYP' else None
         data = struct.pack('<' + code, _value(code, table, value, resolve, where))
-    hits = [i for i, s in enumerate(subs) if s.tag == tag]
+    hits = _own(rtype, subs, tag)
     if hits:
         subs[hits[0]] = Subrecord(tag, data)
     else:
-        subs.append(Subrecord(tag, data))
+        subs.insert(_place(rtype, subs, tag), Subrecord(tag, data))
 
 
 def _place(rtype, subs, tag):

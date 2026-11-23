@@ -278,3 +278,18 @@ class SpecFieldsAction(unittest.TestCase):
             bad = tools.run('fields', record_type='WRLD')
             self.assertFalse(bad['ok'])
             self.assertIn('no named fields', bad['error']['message'])
+
+
+class NewRecordOrder(unittest.TestCase):
+    def test_a_perk_made_from_scratch_keeps_its_effects_together(self):
+        spec = {'schema': 1, 'project_id': 'perktest', 'plugin': 'PerkTest.esp', 'masters': ['FalloutNV.esm'],
+                'records': {'MyPerk': {'type': 'PERK', 'set': {
+                    'effects': [{'entry_point': 'Calculate Weapon Damage', 'function': 'multiply', 'value': 1.1}],
+                    'name': 'Mine', 'ranks': 1, 'playable': 1, 'description': 'More damage.'}}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            data, _ = builder.build(spec, FormIdMap(Path(tmp) / 'f.json', 'PerkTest.esp'), MasterIndex())
+        rec = next(r for r, _ in codec.parse(data).records() if r.type == 'PERK')
+        self.assertEqual([s.tag for s in rec.subrecords],
+                         ['EDID', 'FULL', 'DESC', 'DATA', 'PRKE', 'DATA', 'EPFT', 'EPFD', 'PRKF'])
+        self.assertEqual(len(rec.subrecords[3].data), 5)
+        self.assertEqual(layouts.read_lists('PERK', rec.subrecords)['effects'][0]['value'], 1.1)

@@ -334,6 +334,31 @@ class ScaffoldTests(unittest.TestCase):
             spec = json.loads((Path(out['folder']) / 'MyThing.spec.json').read_text())
             self.assertEqual(spec['records']['MyThingItem']['type'], 'MISC')
 
+    def test_every_scaffold_kind_builds(self):
+        # tool gaps 1c: terminal and perk scaffolds were refused (TERM, PERK not builder types) and item and quest
+        # named templates with no dump file; each kind now builds against the real masters (skipped without them)
+        import os
+        from fnv_mcp.authoring import index_files
+        from fnv_mcp.esp import build as builder
+        from fnv_mcp.esp.formids import FormIdMap, MasterIndex
+        from fnv_mcp.esp.masters import MasterRecords
+        from fnv_mcp.fnv_create import SCAFFOLDS
+        data = Path(os.environ.get('FNV_DATA', r'C:\Program Files (x86)\Steam\steamapps\common\Fallout New Vegas\Data'))
+        index = index_files(Path(__file__).resolve().parents[1] / 'state', ['FalloutNV.esm'])
+        if not (data / 'FalloutNV.esm').exists() or not index:
+            self.skipTest('FalloutNV.esm or its index not found')
+        with tempfile.TemporaryDirectory() as d:
+            for kind in SCAFFOLDS:
+                with self.subTest(kind=kind):
+                    out = AuthorTools(FakeLive(d)).scaffold(kind, 'My' + kind.title())
+                    spec = json.loads((Path(out['folder']) / ('My%s.spec.json' % kind.title())).read_text())
+                    plugin, receipt = builder.build(spec, FormIdMap(Path(d) / (kind + '.json'), spec['plugin']),
+                                                    MasterIndex(index), master_records=MasterRecords(
+                                                        [data / 'FalloutNV.esm']))
+                    self.assertTrue(receipt['recordCounts'], receipt)
+                    test = json.loads((Path(out['folder']) / ('My%s.test.json' % kind.title())).read_text())
+                    self.assertTrue(test['steps'], kind + ' scaffold has a smoke test')
+
     def test_bad_names_refused(self):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(ValueError):

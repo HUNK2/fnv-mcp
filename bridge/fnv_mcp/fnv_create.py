@@ -2220,32 +2220,48 @@ class AuthorTools:
         spec = {'schema': 1, 'project_id': name.lower(), 'plugin': name + '.esp', 'author': 'fnv-mcp scaffold',
                 'masters': ['FalloutNV.esm'], 'records': {}, 'cells': {}}
         test = {'name': name + ' smoke test', 'steps': []}
+        # Templates are "@EditorID" records of FalloutNV.esm, read from the master itself (tool gaps 1c: before,
+        # item and quest named template dumps that did not exist, and TERM and PERK were not builder types).
+        valid = {'expect': {'expr': 'IsFormValid @%s' % (name + kind.title()), 'equals': 1}}
         if kind == 'item':
-            spec['records'][name + 'Item'] = {'type': 'MISC', 'template': 'Clipboard',
+            spec['records'][name + 'Item'] = {'type': 'MISC', 'template': '@Clipboard02',
                                               'fields': [{'tag': 'FULL', 'text': name}]}
             test['steps'] = [{'console': 'player.AddItem @%sItem 1' % name},
-                             {'expect': {'expr': 'player.GetItemCount @%sItem', 'equals': 1}}]
+                             {'expect': {'expr': 'player.GetItemCount @%sItem' % name, 'equals': 1}}]
         elif kind == 'interior':
             spec['cells'][name + 'Cell'] = {'name': name, 'objects': [
                 {'ref_id': 'floor', 'base': '@FacRmFloor01', 'position': [0, 0, 0]}]}
             test['steps'] = [{'console': 'coc %sCell' % name}, {'wait': {'loaded': True}}]
         elif kind == 'quest':
-            spec['records'][name + 'Quest'] = {'type': 'QUST', 'template': 'VMS01',
+            spec['records'][name + 'Quest'] = {'type': 'QUST', 'template': '@VMS01',
                                                'fields': [{'tag': 'FULL', 'text': name}]}
             test['steps'] = [{'console': 'StartQuest %sQuest' % name},
                              {'expect': {'expr': 'GetQuestRunning %sQuest' % name, 'equals': 1}}]
+        elif kind == 'terminal':
+            spec['records'][name + 'Terminal'] = {'type': 'TERM', 'template': '@CommuneTerm', 'set': {
+                'name': name, 'welcome_text': 'Welcome to %s.' % name, 'difficulty': 'very_easy',
+                'flags': ['unlocked'],
+                'menu': [{'text': 'Read the log', 'result': 'Nothing to report.'}]}}
+            test['steps'] = [{'console': 'player.PlaceAtMe @%sTerminal 1' % name}, valid]
+        elif kind == 'perk':
+            spec['records'][name + 'Perk'] = {'type': 'PERK', 'set': {
+                'name': name, 'description': 'Your weapons do 10% more damage.', 'ranks': 1, 'playable': 1,
+                'min_level': 2, 'effects': [{'entry_point': 'Calculate Weapon Damage', 'function': 'multiply',
+                                             'value': 1.1}]}}
+            test['steps'] = [{'console': 'player.AddPerk @%sPerk' % name},
+                             {'expect': {'expr': 'player.HasPerk @%sPerk' % name, 'equals': 1}}]
         else:
-            spec['records'][name + kind.title()] = {'type': {'terminal': 'TERM', 'perk': 'PERK',
-                                                             'companion': 'NPC_'}[kind], 'fields': []}
-            test['steps'] = []
+            spec['records'][name + 'Companion'] = {'type': 'NPC_', 'template': '@GSSunnySmiles', 'fields': [
+                {'tag': 'FULL', 'text': name}, {'tag': 'SCRI', 'remove': True}]}
+            test['steps'] = [{'console': 'player.PlaceAtMe @%sCompanion 1' % name}, valid]
         (folder / (name + '.spec.json')).write_text(json.dumps(spec, indent=1), encoding='utf-8')
         (folder / (name + '.test.json')).write_text(json.dumps(test, indent=1), encoding='utf-8')
         (folder / 'README.md').write_text('# %s\n\nScaffold (%s) made by fnv_author. Build with fnv_spec build, '
                                           'install with fnv_install, test with fnv_test.\n' % (name, kind),
                                           encoding='utf-8')
         return {'folder': str(folder), 'files': sorted(p.name for p in folder.iterdir()),
-                'note': 'Templates named here (Clipboard, VMS01, FacRmFloor01) must exist as dumps in state/templates '
-                        'or as EditorIDs in the masters; change them to suit.'}
+                'note': 'Templates are FalloutNV.esm records ("@EditorID"), read from the master file; change them '
+                        'to suit. fnv_spec action=fields lists the named fields a record type takes in "set".'}
 
     def package(self, plugin, name=None):
         if name is not None:
