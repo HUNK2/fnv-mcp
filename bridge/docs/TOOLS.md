@@ -2135,7 +2135,7 @@ Example:
 
 **Kind:** act · **Toolset:** game
 
-Assets in the running game. reload path: a model (.nif) or texture (.dds) is read from disk again by the loaded references that use it (no restart); a menu .xml with menu=<name> (HUDMainMenu...) is evicted and the menu rebuilt; a .kf is dropped from the cache (ref=<actor> rebuilds an actor holding it); .ini runs RefreshINI, a shader package RefreshShaders. nif path / dds path: offline checks before a file goes in the game (NIF header, child links, collision, skin, texture paths; DDS size, format, mip chain). users path: the records of the load order that name the file (model, icon, texture set). watch path=<mod folder>: reload what changed since the last watch call. file_log mode=start|read|stop: every file the engine opened or failed to find (missing=true for the failures; ext, folder filter), with thread and caller; start it before entering a cell. where path: which source wins (loose in a mod, Data, an archive). queue: the IO queue (wait_idle). models: the model cache (DumpModelMap). archives: the archives and loose roots in order.
+Assets in the running game. reload path: a model (.nif) or texture (.dds) is read from disk again by the loaded references that use it (no restart); a menu .xml with menu=<name> (HUDMainMenu...) is evicted and the menu rebuilt; a .kf is dropped from the cache (ref=<actor> rebuilds an actor holding it); .ini runs RefreshINI, a shader package RefreshShaders. nif path / dds path: offline checks before a file goes in the game (NIF header, child links, collision, skin, texture paths; DDS size, format, mip chain). users path: the records of the load order that name the file (model, icon, texture set). watch path=<mod folder>: reload what changed since the last watch call. file_log mode=start|read|stop: every file the engine opened or failed to find (missing=true for the failures; ext, folder filter), with thread and caller; start it before entering a cell. where path: which source wins (loose in a mod, Data, an archive). queue: the IO queue (wait_idle). models: the model cache (DumpModelMap). archives: the archives and loose roots in order. Making files (guide "assets"): make_nif path=<.glb>, make_kf path=<.glb or keys .json>, make_dds path=<image>, each to out=<Data path> in the mod folder; extract path: into the state folder; preview path=<nif>: an offline PNG.
 
 **Actions:**
 
@@ -2149,11 +2149,16 @@ Assets in the running game. reload path: a model (.nif) or texture (.dds) is rea
 - `nif`: Offline check of a .nif: header, child links, collision, skin, texture paths.
 - `dds`: Offline check of a .dds: size, format, mip chain.
 - `users`: The records of the load order that name the file.
+- `make_nif`: A static mesh from a .glb, its textures written beside it, in the mod folder.
+- `make_kf`: An animation from a .glb or a keys .json, for the node names of a skeleton.
+- `make_dds`: A DXT1 or DXT5 texture with mips from an image; normal maps carry specular in alpha.
+- `extract`: A file of the load order (loose or archived) copied into the state folder.
+- `preview`: An offline PNG of a NIF: front and side, flat shaded, with its size.
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `action` | string | `reload`, `watch`, `file_log`, `queue`, `where`, `models`, `archives`, `nif`, `dds`, `users` | required | What to do: reload (re-read a file in the running game), watch (reload changed files in a mod folder), file_log (log file opens/failures), queue, where, models, archives, nif/dds (offline file checks), users (records naming a file). |
-| `path` | string | up to 500 characters |  | File or folder path. For reload, where, nif, dds, users: the asset file. For watch: the mod folder to scan for changes. |
+| `action` | string | `reload`, `watch`, `file_log`, `queue`, `where`, `models`, `archives`, `nif`, `dds`, `users`, `make_nif`, `make_kf`, `make_dds`, `extract`, `preview` | required | What to do: reload (re-read a file in the running game), watch (reload changed files in a mod folder), file_log (log file opens/failures), queue, where, models, archives, nif/dds (offline checks), users (records naming a file), make_nif/make_kf/make_dds, extract, preview. |
+| `path` | string | up to 500 characters |  | File or folder path. For reload, where, nif, dds, users, extract, preview: the asset file. For watch: the mod folder. For make_*: the source (.glb, keys .json, image). |
 | `mode` | string | `start`, `read`, `stop` |  | For action=file_log: start the file-open log, read what it collected, or stop it. Omitted means read. |
 | `missing` | boolean |  | `false` | For action=file_log: if true, list only files the engine failed to find. |
 | `ext` | string | up to 10 characters |  | For action=file_log: only show files with this extension. |
@@ -2162,6 +2167,8 @@ Assets in the running game. reload path: a model (.nif) or texture (.dds) is rea
 | `wait_idle` | boolean |  | `false` | For action=queue: wait until the asset IO queue is idle before returning. |
 | `menu` | string | up to 60 characters |  | For action=reload of a menu .xml path: the menu name (for example HUDMainMenu) to evict and rebuild. |
 | `ref` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
+| `out` | string | up to 300 characters |  | For make_*: the Data path to write (meshes/mymod/x.nif, textures/mymod/x.dds), under the mod folder (options.mod, default the project plugin name). |
+| `options` | object |  |  | For make_*: mod, scale, up (y or z), texture, normal, specular, format (DXT1 or DXT5), skeleton, name, loop, priority, text_keys [[time, text]]. |
 
 Example:
 

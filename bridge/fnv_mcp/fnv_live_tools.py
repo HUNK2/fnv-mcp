@@ -88,6 +88,7 @@ FULL_ONLY_ACTIONS = {
     'fnv_plugin_build': {'build', 'install'},   # agent C becomes a DLL in the game
     'fnv_install': '*',                         # a plugin file of the caller's choice into the dev profile
     'fnv_profile_set': {'apply'},               # which mods and plugins load (dry_run stays a read)
+    'fnv_asset': {'make_nif', 'make_kf', 'make_dds'},   # files of the caller's making into a mod folder (gaps 3)
 }
 
 # Every control tool that neither table covers in full, and why it may run under "read".
@@ -2331,7 +2332,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
 
     @server.tool(annotations=act)
     async def fnv_asset(action: Literal['reload', 'watch', 'file_log', 'queue', 'where', 'models', 'archives', 'nif',
-                                        'dds', 'users'],
+                                        'dds', 'users', 'make_nif', 'make_kf', 'make_dds', 'extract', 'preview'],
                         path: Annotated[str, Field(max_length=500)] | None = None,
                         mode: Literal['start', 'read', 'stop'] | None = None,
                         missing: bool = False,
@@ -2340,7 +2341,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                         limit: Annotated[int, Field(ge=1, le=5000)] = 200,
                         wait_idle: bool = False,
                         menu: Annotated[str, Field(max_length=60)] | None = None,
-                        ref: Ref | None = None) -> result_type:
+                        ref: Ref | None = None,
+                        out: Annotated[str, Field(max_length=300)] | None = None,
+                        options: dict[str, Any] | None = None) -> result_type:
         """Assets in the running game. reload path: a model (.nif) or texture (.dds) is read from disk again by the
         loaded references that use it (no restart); a menu .xml with menu=<name> (HUDMainMenu...) is evicted and the
         menu rebuilt; a .kf is dropped from the cache (ref=<actor> rebuilds an actor holding it); .ini runs
@@ -2350,12 +2353,16 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         folder>: reload what changed since the last watch call. file_log mode=start|read|stop: every file the engine
         opened or failed to find (missing=true for the failures; ext, folder filter), with thread and caller; start
         it before entering a cell. where path: which source wins (loose in a mod, Data, an archive). queue: the IO
-        queue (wait_idle). models: the model cache (DumpModelMap). archives: the archives and loose roots in order."""
-        is_read = action in ('where', 'queue', 'models', 'archives', 'nif', 'dds', 'users') or (
-            action == 'file_log' and mode in (None, 'read'))
+        queue (wait_idle). models: the model cache (DumpModelMap). archives: the archives and loose roots in order.
+        Making files (guide "assets"): make_nif path=<.glb>, make_kf path=<.glb or keys .json>, make_dds
+        path=<image>, each to out=<Data path> in the mod folder; extract path: into the state folder; preview
+        path=<nif>: an offline PNG."""
+        is_read = action in ('where', 'queue', 'models', 'archives', 'nif', 'dds', 'users', 'extract',
+                             'preview') or (action == 'file_log' and mode in (None, 'read'))
         args = {'path': path, 'mode': mode, 'missing': missing, 'ext': ext, 'folder': folder, 'limit': limit,
-                'wait_idle': wait_idle, 'menu': menu, 'ref': ref}
-        return await invoke('fnv_asset', lambda: asset_tools.run(action, **args), 'read' if is_read else 'act')
+                'wait_idle': wait_idle, 'menu': menu, 'ref': ref, 'out': out, 'options': options}
+        kind = 'control' if action.startswith('make_') else 'read' if is_read else 'act'
+        return await invoke('fnv_asset', lambda: asset_tools.run(action, **args), kind, action=action)
 
     @server.tool(annotations=act)
     async def fnv_form(action: Literal['create', 'reload', 'changes', 'bytes', 'delete'],

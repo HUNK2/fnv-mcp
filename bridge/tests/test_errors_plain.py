@@ -249,6 +249,10 @@ class AddressAliasTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.fixture = project_fixture.ProjectFixture()
         self.fixture.setUp()
+        # a pipe name of its own: with a real game running, its companion answered the default pipe (PIPE_NOT_GAME,
+        # full suite 2026-11-24)
+        from fnv_mcp.config import FnvSettings
+        self.fixture.p = self.fixture.p.model_copy(update={'fnv': FnvSettings(engine_pipe='fnvmcp_test_no_game')})
         patch = mock.patch.object(fnv_game, 'game_processes', lambda: [])
         patch.start()
         self.addCleanup(patch.stop)

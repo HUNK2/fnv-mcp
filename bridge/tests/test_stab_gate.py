@@ -120,6 +120,9 @@ FULL_ONLY_CASES = {
     ('fnv_plugin_build', 'install'): {'action': 'install', 'name': 'x'},
     ('fnv_install', '*'): {'plugin_path': 'C:/nope/Nope.esp'},
     ('fnv_profile_set', 'apply'): {'plugins': {'Nope.esp': True}},
+    ('fnv_asset', 'make_nif'): {'action': 'make_nif', 'path': 'C:/nope/x.glb', 'out': 'meshes/x.nif'},
+    ('fnv_asset', 'make_kf'): {'action': 'make_kf', 'path': 'C:/nope/x.json', 'out': 'meshes/x.kf'},
+    ('fnv_asset', 'make_dds'): {'action': 'make_dds', 'path': 'C:/nope/x.png', 'out': 'textures/x.dds'},
 }
 # control calls that stay allowed under read
 READ_LEVEL_CASES = {

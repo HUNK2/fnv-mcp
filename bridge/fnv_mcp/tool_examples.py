@@ -229,7 +229,12 @@ ACTIONS = {
         'archives': 'The archives and loose folders in the order the engine searches them.',
         'nif': 'Offline check of a .nif: header, child links, collision, skin, texture paths.',
         'dds': 'Offline check of a .dds: size, format, mip chain.',
-        'users': 'The records of the load order that name the file.'},
+        'users': 'The records of the load order that name the file.',
+        'make_nif': 'A static mesh from a .glb, its textures written beside it, in the mod folder.',
+        'make_kf': 'An animation from a .glb or a keys .json, for the node names of a skeleton.',
+        'make_dds': 'A DXT1 or DXT5 texture with mips from an image; normal maps carry specular in alpha.',
+        'extract': 'A file of the load order (loose or archived) copied into the state folder.',
+        'preview': 'An offline PNG of a NIF: front and side, flat shaded, with its size.'},
     'fnv_atlas': {
         'actions': 'The scripted game actions the atlas can measure.',
         'run': 'Measure actions against the probe counters and fit calls per action for every function.',

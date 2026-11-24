@@ -27,9 +27,13 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                          'Default 3.'},
  'fnv_asset': {'action': 'What to do: reload (re-read a file in the running game), watch (reload changed files in a '
                          'mod folder), file_log (log file opens/failures), queue, where, models, archives, nif/dds '
-                         '(offline file checks), users (records naming a file).',
-               'path': 'File or folder path. For reload, where, nif, dds, users: the asset file. For watch: the mod '
-                       'folder to scan for changes.',
+                         '(offline checks), users (records naming a file), make_nif/make_kf/make_dds, extract, preview.',
+               'path': 'File or folder path. For reload, where, nif, dds, users, extract, preview: the asset file. For '
+                       'watch: the mod folder. For make_*: the source (.glb, keys .json, image).',
+               'out': 'For make_*: the Data path to write (meshes/mymod/x.nif, textures/mymod/x.dds), under the '
+                      'mod folder (options.mod, default the project plugin name).',
+               'options': 'For make_*: mod, scale, up (y or z), texture, normal, specular, format (DXT1 or DXT5), '
+                          'skeleton, name, loop, priority, text_keys [[time, text]].',
                'mode': 'For action=file_log: start the file-open log, read what it collected, or stop it. Omitted '
                        'means read.',
                'missing': 'For action=file_log: if true, list only files the engine failed to find.',

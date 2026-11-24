@@ -710,6 +710,107 @@ class AssetTools:
         return {'archives': index.archives, 'looseRoots': [str(r) for r in index.roots],
                 'note': 'From the MO2 profile on disk, in load order; the running game loaded the same set at start.'}
 
+    # ---------------------------------------------------------------- make (tool gaps 3)
+    def _make_root(self, options):
+        """(Data folder the made file goes in, mod name or None, notes). MO2: mods\\<options.mod, else the project
+        plugin's name>, turned on when no game runs. Direct install: the game's Data, only with
+        fnv.allow_direct_install_changes."""
+        from . import fnv_layout
+        from .fnv_link import SAFE_NAME, enable_mod
+        project = self.live.project
+        layout = fnv_layout.current(project)
+        if layout.kind == fnv_layout.DIRECT:
+            fnv_layout.guard(layout, "write meshes, animations and textures into the game's Data folder")
+            return layout.data_dir, None, []
+        plugin = getattr(project, 'plugin', None)
+        mod = options.get('mod') or (Path(plugin).stem if plugin else 'fnvmcp assets')
+        if not isinstance(mod, str) or not SAFE_NAME.match(mod) or '..' in mod or not mod.strip(' .'):
+            raise ValueError("options.mod is a mod folder name: letters, digits, space and _ . ' - only")
+        notes = []
+        if mod not in layout.enabled_mods():
+            if fnv_layout.running_game(project):
+                notes.append('The mod "%s" is off: the running game does not see its files. Quit, then make again '
+                             '(it is turned on when no game runs), or fnv_install the plugin into it.' % mod)
+            else:
+                enable_mod(layout.mo2_root, layout.profile, mod)
+                notes.append('The mod "%s" was turned on in the profile.' % mod)
+        elif fnv_layout.running_game(project):
+            notes.append('A file new to the mod folder is seen by a game started after it was made (MO2 lays the mod '
+                         'folders over Data at launch); a file the game already sees is re-read by fnv_asset reload.')
+        return layout.mods_dir / mod, mod, notes
+
+    def _source(self, path, what='path'):
+        if not path:
+            raise ValueError('%s is the source file (a .glb, .json or image) inside the project, state or examples '
+                             'folders' % what)
+        return inside(path, read_roots(self.live.project), what)
+
+    def make(self, kind, path, out, options=None):
+        """make_nif / make_kf / make_dds: a file made from a source, written under the mod folder's Data tree."""
+        from .assets import convert
+        options = dict(options or {})
+        src = self._source(path)
+        if not out:
+            raise ValueError('out is the Data-relative path to write (meshes\\mymod\\thing.nif, '
+                             'textures\\mymod\\thing.dds)')
+        if kind == 'dds' and options.get('specular'):
+            options['specular'] = str(self._source(options['specular'], 'options.specular'))
+        skeleton = None
+        if kind == 'kf' and options.get('skeleton'):
+            skel = str(options.pop('skeleton'))
+            if Path(skel).suffix.lower() != '.nif':
+                raise ValueError('options.skeleton is a .nif: a Data path (meshes/characters/_male/skeleton.nif) or '
+                                 'a file in the project, state or examples folders')
+            skeleton = (self._source(skel, 'options.skeleton').read_bytes() if Path(skel).is_absolute()
+                        else self._file_bytes(skel)[0])
+        convert.target(Path('.'), out, {'nif': '.nif', 'kf': '.kf', 'dds': '.dds'}[kind])   # refuse before any write
+        root, mod, notes = self._make_root(options)
+        options.pop('mod', None)
+        report = convert.make(kind, src, root, out, options, skeleton)
+        if mod:
+            report['mod'] = mod
+        steps = {'nif': 'fnv_asset nif path=%s checks it; a STAT or other record names it as its model (fnv_spec); '
+                        'a file the running game already reads is re-read by fnv_asset reload.',
+                 'kf': 'fnv_anim play takes it on an actor whose skeleton has its nodes; fnv_asset reload drops '
+                       'the cached copy.',
+                 'dds': 'fnv_asset dds path=%s checks it; fnv_asset reload path=%s shows the change in the running '
+                        'game.'}[kind]
+        report['next'] = steps.replace('%s', report['out'])
+        report['notes'] = notes
+        self.live.journal.add({'kind': 'asset_make', 'path': report['path'], 'undo': None})
+        return report
+
+    def extract(self, path):
+        """A file of the load order (loose or from an archive) copied into the state folder, to look at or edit."""
+        from .assets import convert
+        if not path:
+            raise ValueError('extract needs path (a Data path such as meshes\\clutter\\toolbox.nif)')
+        data, where = self._file_bytes(path)
+        rel = _norm(path)
+        target = convert.data_path(Path(self.live.project.state_dir) / 'assets' / 'extract', rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return {'path': rel, 'from': where, 'file': str(target), 'bytes': len(data),
+                'next': 'Edit it, or use it as a start; to put a changed copy in the game write it under a mod '
+                        'folder (make_* actions write there).'}
+
+    def preview(self, path):
+        """An offline PNG of a NIF (a Data path, or a file in the project, state or examples folders)."""
+        from .assets import render
+        if not path:
+            raise ValueError('preview needs path (a .nif)')
+        if Path(path).is_absolute():
+            src = self._source(path)
+            data, where = src.read_bytes(), str(src)
+        else:
+            data, where = self._file_bytes(path)
+        name = Path(_norm(path).replace('\\', '/')).stem
+        out = Path(self.live.project.state_dir) / 'assets' / 'preview' / ('%s.png' % name)
+        report = render.preview(path, out, data)
+        report['from'] = where
+        report['note'] = 'Flat shaded, no textures, skin or animation; fnv_photo shows the game\'s own render.'
+        return report
+
     def run(self, action, **kw):
         if action == 'reload':
             return self.reload(kw['path'], kw.get('menu'), kw.get('ref'))
@@ -730,7 +831,14 @@ class AssetTools:
             if not kw.get('path'):
                 raise ValueError('%s needs path' % action)
             return getattr(self, action)(kw['path'])
-        raise ValueError('action is reload, watch, file_log, queue, where, models, archives, nif, dds or users')
+        if action in ('make_nif', 'make_kf', 'make_dds'):
+            return self.make(action[5:], kw.get('path'), kw.get('out'), kw.get('options'))
+        if action == 'extract':
+            return self.extract(kw.get('path'))
+        if action == 'preview':
+            return self.preview(kw.get('path'))
+        raise ValueError('action is reload, watch, file_log, queue, where, models, archives, nif, dds, users, '
+                         'make_nif, make_kf, make_dds, extract or preview')
 
 
 class FormTools:
