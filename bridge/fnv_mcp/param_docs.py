@@ -25,22 +25,18 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
               'rebuild': "For action=biped: re-run the engine's equipment build (changes the game).",
               'seconds': 'For action=events: how many seconds to record animation actions (equip, attack, reload...). '
                          'Default 3.'},
- 'fnv_asset': {'action': 'What to do: reload (re-read a file in the running game), watch (reload changed files in a '
-                         'mod folder), file_log (log file opens/failures), queue, where, models, archives, nif/dds '
-                         '(offline checks), users (records naming a file), make_nif/make_kf/make_dds, extract, preview.',
-               'path': 'File or folder path. For reload, where, nif, dds, users, extract, preview: the asset file. For '
-                       'watch: the mod folder. For make_*: the source (.glb, keys .json, image).',
+ 'fnv_asset': {'action': 'What to do: reload (re-read a file in the game), watch, file_log, queue, where, models, '
+                         'archives, nif/dds (offline checks), users, make_* (make a file), extract, preview.',
+               'path': 'The asset file; for watch the mod folder; for make_* the source (.glb, keys .json, image).',
                'out': 'For make_*: the Data path to write (meshes/mymod/x.nif) in the mod folder.',
                'options': 'For make_*: mod, scale, up, texture, normal, specular, format, skeleton... (guide "assets").',
-               'mode': 'For action=file_log: start the file-open log, read what it collected, or stop it. Omitted '
-                       'means read.',
+               'mode': 'For action=file_log: start, read (default) or stop the file-open log.',
                'missing': 'For action=file_log: if true, list only files the engine failed to find.',
                'ext': 'For action=file_log: only show files with this extension.',
                'folder': 'For action=file_log: only show files under this folder.',
                'limit': 'Maximum number of rows returned. Default 200.',
                'wait_idle': 'For action=queue: wait until the asset IO queue is idle before returning.',
-               'menu': 'For action=reload of a menu .xml path: the menu name (for example HUDMainMenu) to evict and '
-                       'rebuild.'},
+               'menu': 'For reload of a menu .xml: the menu name (HUDMainMenu...) to rebuild.'},
  'fnv_asset_check': {'include_nif_textures': 'If true (default), also open the loose meshes the plugin names and '
                                              'report textures named inside them that are missing.',
                      'limit': 'Maximum number of missing files listed, 1 to 1000. Default 200.'},
@@ -83,8 +79,10 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                           'conflicts, warnings of a plugin), scaffold (a starting project) or package (release folder '
                           'and zip).',
                 'plugin': 'For check and package: the plugin name in the load order, or its file path.',
-                'kind': 'For scaffold: the kind of starting project: item, interior, quest, terminal, perk or '
-                        'companion.',
+                'module': 'For package: the fnv_plugin_build module to ship in Data/NVSE/Plugins.',
+                'build': 'For package: build the spec (if it makes the plugin) and the module first.',
+                'version': 'For package: the version (default 1.0).',
+                'kind': 'For scaffold: the kind of starting project.',
                 'name': 'For scaffold: the project name, letters, digits and _ starting with a letter; it becomes the '
                         'plugin name and the EditorID prefix.',
                 'cell': 'For export: the cell EditorID the placed objects are filed under in the spec part (your '

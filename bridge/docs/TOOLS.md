@@ -271,7 +271,7 @@ Example:
 
 **Kind:** control · **Toolset:** game
 
-Authoring. export: the session's created forms and placed references as a plugin spec part (records by EditorID, objects of a cell) in the bridge state folder, to merge into the project spec. check plugin: missing files, conflicts with other plugins and the engine warning summary in one report. scaffold kind name: a starting project (spec, a smoke test, readme). package plugin: a release folder and zip with the plugin, its loose files and a readme, plus the missing-file check.
+Authoring. export: the session's created forms and placed references as a plugin spec part (records by EditorID, objects of a cell) in the bridge state folder, to merge into the project spec. check plugin: missing files, conflicts and engine warnings. scaffold kind name: a starting project (spec, a smoke test, readme). package plugin [module] [build] [version]: a release zip with the plugin, its loose files, the fnv_plugin_build module and a manifest; refused if a file holds decompiled code or a path of this machine.
 
 **Actions:**
 
@@ -284,9 +284,12 @@ Authoring. export: the session's created forms and placed references as a plugin
 | --- | --- | --- | --- | --- |
 | `action` | string | `export`, `check`, `scaffold`, `package` | required | export (this session's forms and placements as a spec part), check (missing files, conflicts, warnings of a plugin), scaffold (a starting project) or package (release folder and zip). |
 | `plugin` | string | up to 200 characters |  | For check and package: the plugin name in the load order, or its file path. |
-| `kind` | string | `item`, `interior`, `quest`, `terminal`, `perk`, `companion` |  | For scaffold: the kind of starting project: item, interior, quest, terminal, perk or companion. |
+| `kind` | string | `item`, `interior`, `quest`, `terminal`, `perk`, `companion` |  | For scaffold: the kind of starting project. |
 | `name` | string | up to 60 characters |  | For scaffold: the project name, letters, digits and _ starting with a letter; it becomes the plugin name and the EditorID prefix. |
 | `cell` | string | up to 128 characters |  | For export: the cell EditorID the placed objects are filed under in the spec part (your plugin's own interior cell). Default LiveSessionCell. |
+| `module` | string | up to 60 characters |  | For package: the fnv_plugin_build module to ship in Data/NVSE/Plugins. |
+| `build` | boolean |  | `false` | For package: build the spec (if it makes the plugin) and the module first. |
+| `version` | string | up to 20 characters |  | For package: the version (default 1.0). |
 
 Example:
 
@@ -2139,7 +2142,7 @@ Example:
 
 **Kind:** act · **Toolset:** game
 
-Assets in the running game. reload path: a model (.nif) or texture (.dds) is read from disk again by the loaded references that use it (no restart); a menu .xml with menu=<name> (HUDMainMenu...) is evicted and the menu rebuilt; a .kf is dropped from the cache (ref=<actor> rebuilds an actor holding it); .ini runs RefreshINI, a shader package RefreshShaders. nif path / dds path: offline checks before a file goes in the game (NIF header, child links, collision, skin, texture paths; DDS size, format, mip chain). users path: the records of the load order that name the file (model, icon, texture set). watch path=<mod folder>: reload what changed since the last watch call. file_log mode=start|read|stop: every file the engine opened or failed to find (missing=true for the failures; ext, folder filter), with thread and caller; start it before entering a cell. where path: which source wins (loose in a mod, Data, an archive). queue: the IO queue (wait_idle). models: the model cache (DumpModelMap). archives: the archives and loose roots in order. Making files (guide "assets"): make_nif path=<.glb>, make_kf path=<.glb or keys .json>, make_dds path=<image>, each to out=<Data path> in the mod folder; extract path: into the state folder; preview path=<nif>: an offline PNG.
+Assets in the running game. reload path: a model (.nif) or texture (.dds) is read from disk again by the loaded references that use it (no restart); a menu .xml with menu=<name> (HUDMainMenu...) is evicted and the menu rebuilt; a .kf is dropped from the cache (ref=<actor> rebuilds an actor holding it); .ini runs RefreshINI, a shader package RefreshShaders. nif path / dds path: offline checks (header, links, collision, skin, textures; size, format, mips). users path: the records that name the file. watch path=<mod folder>: reload what changed since the last watch. file_log mode=start|read|stop: every file the engine opened or failed to find (missing=true for the failures; ext, folder filter); start it before entering a cell. where path: which source wins (loose in a mod, Data, an archive). queue: the IO queue (wait_idle). models: the model cache. archives: the archives and loose roots in order. Making files (guide "assets"): make_nif path=<.glb>, make_kf path=<.glb or keys .json>, make_dds path=<image>, each to out=<Data path> in the mod folder; extract path: into the state folder; preview path=<nif>: an offline PNG.
 
 **Actions:**
 
@@ -2161,15 +2164,15 @@ Assets in the running game. reload path: a model (.nif) or texture (.dds) is rea
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `action` | string | `reload`, `watch`, `file_log`, `queue`, `where`, `models`, `archives`, `nif`, `dds`, `users`, `make_nif`, `make_kf`, `make_dds`, `extract`, `preview` | required | What to do: reload (re-read a file in the running game), watch (reload changed files in a mod folder), file_log (log file opens/failures), queue, where, models, archives, nif/dds (offline checks), users (records naming a file), make_nif/make_kf/make_dds, extract, preview. |
-| `path` | string | up to 500 characters |  | File or folder path. For reload, where, nif, dds, users, extract, preview: the asset file. For watch: the mod folder. For make_*: the source (.glb, keys .json, image). |
-| `mode` | string | `start`, `read`, `stop` |  | For action=file_log: start the file-open log, read what it collected, or stop it. Omitted means read. |
+| `action` | string | `reload`, `watch`, `file_log`, `queue`, `where`, `models`, `archives`, `nif`, `dds`, `users`, `make_nif`, `make_kf`, `make_dds`, `extract`, `preview` | required | What to do: reload (re-read a file in the game), watch, file_log, queue, where, models, archives, nif/dds (offline checks), users, make_* (make a file), extract, preview. |
+| `path` | string | up to 500 characters |  | The asset file; for watch the mod folder; for make_* the source (.glb, keys .json, image). |
+| `mode` | string | `start`, `read`, `stop` |  | For action=file_log: start, read (default) or stop the file-open log. |
 | `missing` | boolean |  | `false` | For action=file_log: if true, list only files the engine failed to find. |
 | `ext` | string | up to 10 characters |  | For action=file_log: only show files with this extension. |
 | `folder` | string | up to 300 characters |  | For action=file_log: only show files under this folder. |
 | `limit` | integer | 1 to 5000 | `200` | Maximum number of rows returned. Default 200. |
 | `wait_idle` | boolean |  | `false` | For action=queue: wait until the asset IO queue is idle before returning. |
-| `menu` | string | up to 60 characters |  | For action=reload of a menu .xml path: the menu name (for example HUDMainMenu) to evict and rebuild. |
+| `menu` | string | up to 60 characters |  | For reload of a menu .xml: the menu name (HUDMainMenu...) to rebuild. |
 | `ref` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `out` | string | up to 300 characters |  | For make_*: the Data path to write (meshes/mymod/x.nif) in the mod folder. |
 | `options` | object |  |  | For make_*: mod, scale, up, texture, normal, specular, format, skeleton... (guide "assets"). |

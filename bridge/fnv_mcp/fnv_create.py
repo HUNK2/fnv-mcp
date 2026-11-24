@@ -11,6 +11,7 @@ Facts (research/assets.md, research/forms-plugins.md; checked live where marked)
   CloneForm is not.
 - TESDataHandler *(0x011C3F2C): CreateFormForType(type) 0x00465110, AddFormToDataHandler(form) 0x004603B0.
 """
+import hashlib
 import json
 import math
 import os
@@ -2181,6 +2182,51 @@ class PlaceTools:
         raise ValueError('action is at, array, nudge, rotate, scale, snap, check, list or remove')
 
 
+# tool gaps 6: what a release must not hold, as the robot project's package.py checks it: decompiler output, and the
+# places and name of this machine (found at run time, never written here)
+DECOMPILER_TEXT = [rb'FUN_[0-9a-fA-F]{6,8}', rb'DAT_[0-9a-fA-F]{6,8}', rb'undefined[1248]\b', rb'(?i)ghidra',
+                   rb'(?i)fnvdecomp']
+
+
+def _path_pattern(path):
+    parts = [re.escape(part.strip('\\/')).encode('utf-8') for part in Path(path).parts if part.strip('\\/')]
+    return b'(?i)' + rb'[\\/]+'.join(parts) if parts else None
+
+
+def private_markers(project):
+    """[(what, bytes regex)] for the private places of this machine: the user's profile, the folder the checkout sits
+    in, the MO2 root, and the Windows user name."""
+    places = [('your user profile', Path.home())]
+    checkout = Path(__file__).resolve().parents[2]
+    places.append(('the fnv-mcp checkout', checkout))
+    if checkout.parent != Path(checkout.anchor):
+        places.append(('the folder of your checkouts', checkout.parent))
+    mo2 = getattr(getattr(project, 'fnv', None), 'mo2_root', None)
+    if mo2:
+        places.append(('the MO2 folder', Path(mo2)))
+    out = [(what, _path_pattern(path)) for what, path in places if _path_pattern(path)]
+    user = os.environ.get('USERNAME') or os.environ.get('USER') or ''
+    if len(user) >= 4:
+        out.append(('your user name', b'(?i)\\b' + re.escape(user).encode('utf-8') + b'\\b'))
+    return out
+
+
+def package_leaks(files, project):
+    """Lines naming each file (path in the package, source path) that holds decompiler text or a private place."""
+    private = private_markers(project)
+    found = []
+    for arc, src in files:
+        data = Path(src).read_bytes()
+        for pattern in DECOMPILER_TEXT:
+            m = re.search(pattern, data)
+            if m:
+                found.append('%s holds decompiler text %r' % (arc, m.group().decode('latin-1')))
+        for what, pattern in private:
+            if re.search(pattern, data):
+                found.append('%s holds a path or name of this machine (%s)' % (arc, what))
+    return found
+
+
 def _new_package_folder(packages, name):
     """A folder for a new package under packages that does not exist yet: name, else name-<stamp>, name-<stamp>-2..."""
     packages.mkdir(parents=True, exist_ok=True)
@@ -2387,7 +2433,13 @@ class AuthorTools:
                 'note': 'Templates are FalloutNV.esm records ("@EditorID"), read from the master file; change them '
                         'to suit. fnv_spec action=fields lists the named fields a record type takes in "set".'}
 
-    def package(self, plugin, name=None):
+    def package(self, plugin, name=None, module=None, build=False, version=None):
+        """A release folder and zip: the plugin, its loose files, the xNVSE module of fnv_plugin_build (module=), a
+        manifest; build=true builds the spec (when it makes this plugin) and the module first. Refused when a file
+        holds decompiler text or a private path of this machine."""
+        version = version or '1.0'
+        if not re.match(r'^[0-9A-Za-z][0-9A-Za-z._-]{0,19}$', str(version)):
+            raise ValueError('version: up to 20 letters, digits, . _ - (such as 1.0)')
         if name is not None:
             name = plain_name(name)
         else:
@@ -2398,15 +2450,56 @@ class AuthorTools:
                                  '_ - .) for the package folder' % Path(plugin).stem) from None
         if self.records is None:
             raise LiveError('NO_INDEX', 'Packaging needs the data tools')
+        built = {}
+        plugin_file = None
+        if build:
+            plugin_file, built['spec'] = self._build_spec(plugin)
+        dll = source = None
+        if module:
+            from .fnv_plugin_build import PluginTools
+            from .fnv_native import c_name
+            tools = PluginTools(self.live)
+            if build:
+                saved = tools.saved_hooks(module)
+                result = tools.build(module, hooks=saved)
+                built['module'] = {'dll': Path(result['dll']).name, 'hooks': saved}
+            folder = tools._folder(module)
+            dll, source = folder / ('%s.dll' % c_name(module)), folder / ('%s.c' % c_name(module))
+            if not dll.is_file():
+                raise LiveError('MODULE_NOT_BUILT', 'No built module %s. Next: fnv_plugin_build action=build name=%s '
+                                '(or package with build=true).' % (dll.name, module))
         report = self.records.asset_check(plugin)
-        from .fnv_data import load_order
+        from .fnv_data import load_order, plugin_masters
         entries = load_order(self.live.project, self.records.data._live_plugins())
-        target = next((e for e in entries if e['name'].lower() == plugin.lower()), None)
+        target = next((e for e in entries if e['name'].lower() == Path(plugin).name.lower()), None)
         if not target or not target.get('path'):
             raise LiveError('PLUGIN_NOT_FOUND', '%s is not in the load order' % plugin)
         out = _new_package_folder(Path(self.live.project.state_dir) / 'fnv' / 'packages', name)
+        try:
+            return self._fill_package(out, target, plugin_file, dll, source, version, report, built, entries,
+                                      plugin_masters)
+        except BaseException:
+            shutil.rmtree(out, ignore_errors=True)
+            raise
+
+    def _build_spec(self, plugin):
+        """(built plugin file, receipt summary) when the project's spec makes this plugin, else (None, note)."""
+        project = self.live.project
+        if not getattr(project, 'spec', None) or Path(project.plugin or '').name.lower() != Path(plugin).name.lower():
+            return None, {'built': False, 'note': 'the project spec does not make %s: the installed plugin is '
+                                                  'packaged' % Path(plugin).name}
+        from .authoring import Authoring
+        authoring = Authoring(project)
+        receipt, _ = authoring.build(write=True)
+        if not receipt.get('written'):
+            raise LiveError('BUILD_FAILED', 'The spec did not build: %s' % json.dumps(receipt.get('validation'))[:1500],
+                            {'validation': receipt.get('validation')})
+        return authoring.built_path, {'built': True, 'records': receipt.get('records') or receipt.get('count')}
+
+    def _fill_package(self, out, target, plugin_file, dll, source, version, report, built, entries, plugin_masters):
         (out / 'Data').mkdir(parents=True)
-        shutil.copy2(target['path'], out / 'Data' / target['name'])
+        plugin_src = Path(plugin_file) if plugin_file else Path(target['path'])
+        shutil.copy2(plugin_src, out / 'Data' / target['name'])
         mod_root = Path(target['path']).parent
         game_data = Path(self.live.project.game_root) / 'Data'
         copied, skipped = [], []
@@ -2424,18 +2517,40 @@ class AuthorTools:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
                 copied.append(rel)
-        (out / 'README.txt').write_text('%s\n\nInstall: copy Data into the game folder or install the archive with a '
-                                        'mod manager.\n' % target['name'], encoding='utf-8')
+        if dll:
+            plugins = out / 'Data' / 'NVSE' / 'Plugins'
+            plugins.mkdir(parents=True)
+            shutil.copy2(dll, plugins / dll.name)
+        (out / 'README.txt').write_text('%s %s\n\nInstall: copy Data into the game folder or install the archive '
+                                        'with a mod manager.%s\n' % (target['name'], version, (
+                                            ' Needs xNVSE (the module in Data\\NVSE\\Plugins).' if dll else '')),
+                                        encoding='utf-8')
+        files = sorted((p.relative_to(out).as_posix(), p) for p in out.rglob('*') if p.is_file())
+        checked = files + ([('(module source %s)' % source.name, source)] if source and source.is_file() else [])
+        leaks = package_leaks(checked, self.live.project)
+        if leaks:
+            raise LiveError('PACKAGE_REFUSED', 'Not packaged: %s. A release must hold no decompiled code and no path '
+                            'of this machine; fnv_code output and modules built from decompiled functions are for '
+                            'local use only.' % '; '.join(leaks[:20]), {'leaks': leaks})
+        manifest = {'name': out.name, 'version': version, 'plugin': target['name'],
+                    'masters': plugin_masters(out / 'Data' / target['name']),
+                    'module': ('Data/NVSE/Plugins/' + dll.name) if dll else None,
+                    'made': time.strftime('%Y-%m-%dT%H:%M:%S'), 'by': 'fnv-mcp fnv_author package',
+                    'files': [{'path': arc, 'bytes': p.stat().st_size,
+                               'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for arc, p in files]}
+        (out / 'manifest.json').write_text(json.dumps(manifest, indent=1), encoding='utf-8')
         archive = out.parent / (out.name + '.zip')   # with_suffix would cut a name such as my.mod
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
-            for p in out.rglob('*'):
+            for p in sorted(out.rglob('*')):
                 if p.is_file():
                     z.write(p, p.relative_to(out))
-        return {'folder': str(out), 'archive': str(archive), 'plugin': target['name'], 'looseFiles': copied,
-                'skipped': skipped, 'missing': report.get('missing'), 'ok': not report.get('missingCount'),
+        return {'folder': str(out), 'archive': str(archive), 'plugin': target['name'], 'version': version,
+                'module': manifest['module'], 'built': built or None, 'looseFiles': copied, 'skipped': skipped,
+                'files': len(files) + 1, 'missing': report.get('missing'), 'ok': not report.get('missingCount'),
                 'note': 'Only files the plugin names, found loose in its own mod folder, are packaged (never files of '
-                        'the game or other mods). The package stays in the bridge state folder; an existing package is '
-                        'never replaced: a new one with the same name gets a dated folder.'}
+                        'the game or other mods), with manifest.json (sizes, SHA-256, masters). The check found no '
+                        'decompiler text and no path of this machine. The package stays in the bridge state folder; '
+                        'an existing package is never replaced.'}
 
     def run(self, action, **kw):
         if action == 'export':
@@ -2445,5 +2560,6 @@ class AuthorTools:
         if action == 'scaffold':
             return self.scaffold(kw['kind'], kw['name'])
         if action == 'package':
-            return self.package(kw['plugin'], kw.get('name'))
+            return self.package(kw['plugin'], kw.get('name'), kw.get('module'), bool(kw.get('build')),
+                                kw.get('version'))
         raise ValueError('action is export, check, scaffold or package')

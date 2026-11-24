@@ -2347,13 +2347,12 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         """Assets in the running game. reload path: a model (.nif) or texture (.dds) is read from disk again by the
         loaded references that use it (no restart); a menu .xml with menu=<name> (HUDMainMenu...) is evicted and the
         menu rebuilt; a .kf is dropped from the cache (ref=<actor> rebuilds an actor holding it); .ini runs
-        RefreshINI, a shader package RefreshShaders. nif path / dds path: offline checks before a file goes in the
-        game (NIF header, child links, collision, skin, texture paths; DDS size, format, mip chain). users path: the
-        records of the load order that name the file (model, icon, texture set). watch path=<mod
-        folder>: reload what changed since the last watch call. file_log mode=start|read|stop: every file the engine
-        opened or failed to find (missing=true for the failures; ext, folder filter), with thread and caller; start
-        it before entering a cell. where path: which source wins (loose in a mod, Data, an archive). queue: the IO
-        queue (wait_idle). models: the model cache (DumpModelMap). archives: the archives and loose roots in order.
+        RefreshINI, a shader package RefreshShaders. nif path / dds path: offline checks (header, links, collision,
+        skin, textures; size, format, mips). users path: the records that name the file. watch path=<mod folder>:
+        reload what changed since the last watch. file_log mode=start|read|stop: every file the engine opened or
+        failed to find (missing=true for the failures; ext, folder filter); start it before entering a cell. where
+        path: which source wins (loose in a mod, Data, an archive). queue: the IO queue (wait_idle). models: the
+        model cache. archives: the archives and loose roots in order.
         Making files (guide "assets"): make_nif path=<.glb>, make_kf path=<.glb or keys .json>, make_dds
         path=<image>, each to out=<Data path> in the mod folder; extract path: into the state folder; preview
         path=<nif>: an offline PNG."""
@@ -2752,13 +2751,17 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                          plugin: Annotated[str, Field(max_length=200)] | None = None,
                          kind: Literal['item', 'interior', 'quest', 'terminal', 'perk', 'companion'] | None = None,
                          name: Annotated[str, Field(max_length=60)] | None = None,
-                         cell: Annotated[str, Field(max_length=128)] | None = None) -> result_type:
+                         cell: Annotated[str, Field(max_length=128)] | None = None,
+                         module: Annotated[str, Field(max_length=60)] | None = None, build: bool = False,
+                         version: Annotated[str, Field(max_length=20)] | None = None) -> result_type:
         """Authoring. export: the session's created forms and placed references as a plugin spec part (records by
         EditorID, objects of a cell) in the bridge state folder, to merge into the project spec. check plugin: missing
-        files, conflicts with other plugins and the engine warning summary in one report. scaffold kind name: a
-        starting project (spec, a smoke test, readme). package plugin: a release folder and zip with the plugin, its
-        loose files and a readme, plus the missing-file check."""
-        args = {'plugin': plugin, 'kind': kind, 'name': name, 'cell': cell}
+        files, conflicts and engine warnings. scaffold kind name: a
+        starting project (spec, a smoke test, readme). package plugin [module] [build] [version]: a release zip with
+        the plugin, its loose files, the fnv_plugin_build module and a manifest; refused if a file holds decompiled
+        code or a path of this machine."""
+        args = {'plugin': plugin, 'kind': kind, 'name': name, 'cell': cell, 'module': module, 'build': build,
+                'version': version}
         return await invoke('fnv_author', lambda: author_tools.run(action, **args), 'control')
 
     return live

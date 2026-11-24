@@ -12,6 +12,7 @@ unpacked game image, which never leaves the machine) into fnvmcp_plan.h.
                            fnv_game restart loads it
     log name               the plugin's log file (written next to its DLL; MO2 puts new files in overwrite)
 """
+import json
 import os
 import re
 import struct
@@ -185,9 +186,18 @@ class PluginTools:
         if result.returncode:
             raise ConvError('BUILD_FAILED', 'zig cc failed:\n%s' % result.stderr[-6000:],
                             {'stderr': result.stderr[-6000:]})
+        # the hooks of this build, so fnv_author package build=true can build the module the same way (tool gaps 6)
+        (folder / 'build.json').write_text(json.dumps({'hooks': list(hooks or [])}), encoding='utf-8')
         return verdict('Built the xNVSE plugin %s' % out.name, 'Next: install (with the game closed), then fnv_game restart.',
                        dll=str(out), hooks=plans, warnings=result.stderr.strip()[-2000:] or None, note=SHARING_NOTE,
                        warning=hooks_warning)
+
+    def saved_hooks(self, name):
+        """The hooks the last build of this module listed (build.json beside its DLL), or []."""
+        try:
+            return list(json.loads((self._folder(name) / 'build.json').read_text(encoding='utf-8')).get('hooks') or [])
+        except (OSError, ValueError, AttributeError):
+            return []
 
     @staticmethod
     def _hooks_warning(text, hooks):
