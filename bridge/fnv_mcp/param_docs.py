@@ -30,10 +30,8 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                          '(offline checks), users (records naming a file), make_nif/make_kf/make_dds, extract, preview.',
                'path': 'File or folder path. For reload, where, nif, dds, users, extract, preview: the asset file. For '
                        'watch: the mod folder. For make_*: the source (.glb, keys .json, image).',
-               'out': 'For make_*: the Data path to write (meshes/mymod/x.nif, textures/mymod/x.dds), under the '
-                      'mod folder (options.mod, default the project plugin name).',
-               'options': 'For make_*: mod, scale, up (y or z), texture, normal, specular, format (DXT1 or DXT5), '
-                          'skeleton, name, loop, priority, text_keys [[time, text]].',
+               'out': 'For make_*: the Data path to write (meshes/mymod/x.nif) in the mod folder.',
+               'options': 'For make_*: mod, scale, up, texture, normal, specular, format, skeleton... (guide "assets").',
                'mode': 'For action=file_log: start the file-open log, read what it collected, or stop it. Omitted '
                        'means read.',
                'missing': 'For action=file_log: if true, list only files the engine failed to find.',
@@ -493,10 +491,12 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                'distance': 'For ref views: camera distance from the reference in game units. Default is chosen from '
                            'its size.',
                'name': 'Optional file name prefix for the saved PNG files.'},
- 'fnv_physics': {'action': 'controller (actor state and fall), body (collision chain and velocity), set (give a body a '
-                           'velocity), triggers (record trigger events), projectiles (in flight), query (is a spot '
+ 'fnv_physics': {'action': 'controller (actor state and fall), body (collision chain and velocity), set (velocity or '
+                           'impulse), triggers (record trigger events), projectiles (in flight), query (is a spot '
                            'free), layers (collision layer names).',
-                 'velocity': 'For action=set: linear velocity [x, y, z] in game units per second.',
+                 'velocity': 'For action=set: [x, y, z] in game units per second (an actor: a push).',
+                 'angular_velocity': 'For action=set: [x, y, z] in radians per second.',
+                 'impulse': 'For action=set: [x, y, z], mass x units per second.',
                  'seconds': 'For action=triggers: how long to record trigger events, in seconds.',
                  'position': 'For action=query: [x, y, z] in game units of the spot to test.',
                  'radius': 'For action=query: radius in game units around the position to test for free space.'},

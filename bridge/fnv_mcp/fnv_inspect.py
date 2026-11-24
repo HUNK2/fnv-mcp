@@ -9,6 +9,7 @@ fnv_physics  controller: an actor's character controller (fall time, fall distan
 fnv_systems  formula: call a game formula (a catalog of known ones, or any function) with arguments; sweep one argument
              over a range; progression: level, XP, the XP the next level needs; needs: hardcore values and radiation.
 """
+import math
 import struct
 import time
 
@@ -63,6 +64,13 @@ def _flag_names(value, table):
 
 
 HAVOK_TO_GAME, SET_LINEAR_VELOCITY = 6.9991255, 0x005615D0
+# tool gaps 5 (research notes tool-gaps-research-gaps-4-5.md): bhkRigidBody::SetAngularVelocity (NiPoint3*, rad/s,
+# no unit change; the save loader calls it after SetLinearVelocity), hkpEntity::activate (wakes a sleeping body)
+SET_ANGULAR_VELOCITY, HKP_ACTIVATE = 0x00561630, 0x00C9C1D0
+# a push on an actor's character controller: the engine's own knockback (Actor hit code, actor.cpp) calls
+# bhkCharacterController::UpdateMaxVelocity 0x00C6D4D0 (NiPoint3* game units, float seconds): velocity = vector /
+# seconds in Havok units at +0x500 and the seconds at +0x524, kept only if faster than the push already running
+PUSH_IMPULSE, PUSH_VELOCITY, PUSH_TIME = 0x00C6D4D0, 0x500, 0x524
 RAISE_SCRIPT_EVENT, TRIGGER_EVENTS, PROCESS_LISTS = 0x005AC750, 0x70000000, 0x011E0E80
 CONTROLLER_STATES = ('on ground', 'jumping', 'in air', 'climbing', 'flying', 'swimming', 'projectile')
 COLLISION_LAYERS = ('unidentified', 'static', 'anim static', 'transparent', 'clutter', 'weapon', 'projectile',
@@ -804,21 +812,93 @@ class PhysicsTools:
         col = self.live.u32s([root + 0x1C])[0] if root else 0
         return self.live.u32s([col + 0x10])[0] if col else 0
 
-    def set_velocity(self, ref, velocity):
-        """Set a body's linear velocity (game units per second) with bhkRigidBody::SetLinearVelocity 0x005615D0 (game units in, converted by the engine)."""
+    def _vector(self, value, what):
+        if value is None:
+            return None
+        if len(value) != 3 or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in value):
+            raise ConvError('BAD_ARGUMENTS', '%s is [x, y, z] (numbers).' % what)
+        return [float(v) for v in value]
+
+    def set_velocity(self, ref, velocity=None, angular_velocity=None, impulse=None):
+        """A body's linear velocity (game units per second), angular velocity (radians per second) and an impulse
+        (mass x game units per second, at the centre of mass); the body is woken. An actor's velocity is a push on
+        its character controller."""
         self.live.in_game()
         r = self.live.resolve(ref)
-        if not velocity or len(velocity) != 3:
-            raise ConvError('BAD_ARGUMENTS', 'set needs velocity [x, y, z] in game units per second.')
+        velocity = self._vector(velocity, 'velocity')
+        angular = self._vector(angular_velocity, 'angular_velocity')
+        impulse = self._vector(impulse, 'impulse')
+        if velocity is None and angular is None and impulse is None:
+            raise ConvError('BAD_ARGUMENTS', 'set needs velocity [x, y, z] (game units per second), angular_velocity '
+                                             '(radians per second) or impulse.')
+        kind = self.live.reads([(r['ptr'] + 4, 1)])[0]
+        if kind and kind[0] in self.live.ACTOR_TYPES:
+            # an actor moves by its character controller (process +0x138), not by the bodies of its ragdoll
+            if angular is not None or impulse is not None or velocity is None:
+                raise ConvError('BAD_ARGUMENTS', '%s is an actor: it takes velocity only (a push on its character '
+                                                 'controller).' % r['formId'])
+            process = self.live.u32s([r['ptr'] + 0x68])[0]
+            ctrl = self.live.u32s([process + 0x138])[0] if process else 0
+            if not ctrl:
+                raise ConvError('NO_BODY', '%s has no character controller (low process, or no 3D).' % r['formId'])
+            return self._push(r, ctrl, velocity)
         body = self._rigid_body(r)
         if not body:
             raise ConvError('NO_BODY', '%s has no Havok body (no 3D, or no collision).' % r['formId'])
-        self.live.changing('physics set velocity')
-        # 0x005615D0 takes an NiPoint3 in game units and converts it (FUN_004A3E00) for hkpRigidBody 0x00561690.
-        vec = self.live.scratch(struct.pack('<4f', *[float(v) for v in velocity], 0.0))
-        self.live.engine_call('0x%08X' % SET_LINEAR_VELOCITY, '0x%08X' % body, [{'type': 'int', 'value': vec}],
-                              'int', 'thiscall', True)
-        return self.body(ref)
+        hkp = self.live.u32s([body + 0x08])[0]
+        if not hkp:
+            raise ConvError('NO_BODY', '%s has a bhkRigidBody with no Havok body.' % r['formId'])
+        raw = self.live.reads([(hkp + 0x1AC, 20)])[0]
+        inv_mass = struct.unpack_from('<f', raw, 0)[0] if raw else 0.0
+        motion = self.live.reads([(hkp + 0xE8, 1)])[0]
+        if motion and motion[0] == 5:
+            raise ConvError('FIXED_BODY', '%s has a fixed body (motion type 5): it does not move.' % r['formId'])
+        if impulse is not None:
+            if not inv_mass:
+                raise ConvError('FIXED_BODY', '%s has no inverse mass: an impulse cannot move it.' % r['formId'])
+            now = velocity or [v * HAVOK_TO_GAME for v in struct.unpack_from('<3f', raw, 4)]
+            velocity = [v + i * inv_mass for v, i in zip(now, impulse)]
+        self.live.changing('physics set')
+        # wake first: a sleeping body's velocities are dropped (live run 2026-11-24: spin and impulse read back 0)
+        self.live.engine_call('0x%08X' % HKP_ACTIVATE, '0x%08X' % hkp, [], 'int', 'thiscall', True)
+        calls = ['hkpEntity::activate 0x%08X' % HKP_ACTIVATE]
+        if velocity is not None:
+            # 0x005615D0 takes an NiPoint3 in game units and converts it (FUN_004A3E00) for hkpRigidBody 0x00561690.
+            vec = self.live.scratch(struct.pack('<4f', *velocity, 0.0))
+            self.live.engine_call('0x%08X' % SET_LINEAR_VELOCITY, '0x%08X' % body, [{'type': 'int', 'value': vec}],
+                                  'int', 'thiscall', True)
+            calls.append('bhkRigidBody::SetLinearVelocity 0x%08X' % SET_LINEAR_VELOCITY)
+        if angular is not None:
+            vec = self.live.scratch(struct.pack('<4f', *angular, 0.0))
+            self.live.engine_call('0x%08X' % SET_ANGULAR_VELOCITY, '0x%08X' % body, [{'type': 'int', 'value': vec}],
+                                  'int', 'thiscall', True)
+            calls.append('bhkRigidBody::SetAngularVelocity 0x%08X' % SET_ANGULAR_VELOCITY)
+        out = self.body(ref)
+        out.update(calls=calls, inverseMass=round(inv_mass, 6))
+        if impulse is not None:
+            out['impulse'] = impulse
+        return out
+
+    def _push(self, r, ctrl, velocity):
+        """Push an actor the way the engine's knockback does: UpdateMaxVelocity on its character controller with
+        velocity x seconds over seconds; the seconds grow with the speed (JIP's push mapping: |v| = 0.714 F^2 / 96
+        for F / 96 seconds)."""
+        speed = math.sqrt(sum(v * v for v in velocity))
+        seconds = max(0.1, math.sqrt(speed / (0.714 * 96.0))) if speed else 0.1
+        self.live.changing('physics push')
+        vec = self.live.scratch(struct.pack('<4f', *[v * seconds for v in velocity], 0.0))
+        self.live.engine_call('0x%08X' % PUSH_IMPULSE, '0x%08X' % ctrl,
+                              [{'type': 'int', 'value': vec}, {'type': 'float', 'value': seconds}], 'void',
+                              'thiscall', True)
+        back = self.live.reads([(ctrl + PUSH_VELOCITY, 16), (ctrl + PUSH_TIME, 4)])
+        now = [v * HAVOK_TO_GAME for v in struct.unpack_from('<3f', back[0], 0)] if back[0] else None
+        return verdict('%s pushed at %.0f units per second for %.2f s' % (r['formId'], speed, seconds),
+                       'bhkCharacterController::UpdateMaxVelocity 0x%08X, as the engine knocks an actor back when '
+                       'hit: velocity at controller +0x500 (Havok units, shown in game units), time +0x524; a push '
+                       'already running that is faster is kept.' % PUSH_IMPULSE,
+                       actor=r['formId'], controller='0x%08X' % ctrl, seconds=round(seconds, 3),
+                       pushVelocity=[round(v, 2) for v in now] if now else None,
+                       pushTime=struct.unpack('<f', back[1])[0] if back[1] else None)
 
     def triggers(self, seconds=5.0, ref=None, limit=200):
         """Trigger events (OnTrigger, OnTriggerEnter, OnTriggerLeave) as the engine raises them to scripts."""
@@ -944,7 +1024,7 @@ class PhysicsTools:
         if action == 'body':
             return self.body(a['ref'])
         if action == 'set':
-            return self.set_velocity(a['ref'], a.get('velocity'))
+            return self.set_velocity(a['ref'], a.get('velocity'), a.get('angular_velocity'), a.get('impulse'))
         raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: controller, body, set, triggers, projectiles, '
                         'query, layers.' % action)
 

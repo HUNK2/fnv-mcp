@@ -2609,17 +2609,20 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_physics(action: Literal['controller', 'body', 'set', 'triggers', 'projectiles', 'query', 'layers'],
                           ref: Ref | None = None,
                           velocity: list[float] | None = None,
+                          angular_velocity: list[float] | None = None,
+                          impulse: list[float] | None = None,
                           seconds: Annotated[float, Field(gt=0, le=60)] = 5.0,
                           position: list[float] | None = None,
                           radius: Annotated[float, Field(gt=0, le=4096)] = 64.0) -> result_type:
         """Physics. controller ref: the actor's character controller, state (on ground, in air, swimming...), fall
-        time and fall distance (the engine's GetFallDistance). body ref: 3D root to collision object to Havok body,
-        each object's class, and the body's velocity. set ref velocity=[x,y,z]: give a body a linear velocity (game
-        units per second). triggers seconds [ref]: trigger enter, inside and leave events as scripts get them, with
-        frames. projectiles: what is in flight (weapon, shooter, position, distance travelled). query position
-        radius: is the spot free (rays in six directions). layers: the collision layer names."""
+        time and fall distance. body ref: 3D root to collision object to Havok body,
+        each object's class, and the body's velocity. set ref: velocity, angular_velocity or impulse on a body
+        (woken); on an actor, velocity pushes it. triggers seconds [ref]: trigger enter, inside and leave events
+        as scripts get them, with frames. projectiles: what is in flight (weapon, shooter, position, distance travelled). query position
+        radius: is the spot free (six rays). layers: the collision layer names."""
         return await invoke('fnv_physics', lambda: physics_tools.run(action, ref=ref, velocity=velocity,
-                                                                     seconds=seconds, position=position,
+                                                                     angular_velocity=angular_velocity,
+                                                                     impulse=impulse, seconds=seconds, position=position,
                                                                      radius=radius),
                             # bug hunt 2026-11-18: triggers installs a code hook (record_hooks)
                             'act' if action in ('set', 'triggers') else 'read')

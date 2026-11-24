@@ -533,7 +533,7 @@ Example:
 
 **Kind:** act · **Toolset:** game
 
-Physics. controller ref: the actor's character controller, state (on ground, in air, swimming...), fall time and fall distance (the engine's GetFallDistance). body ref: 3D root to collision object to Havok body, each object's class, and the body's velocity. set ref velocity=[x,y,z]: give a body a linear velocity (game units per second). triggers seconds [ref]: trigger enter, inside and leave events as scripts get them, with frames. projectiles: what is in flight (weapon, shooter, position, distance travelled). query position radius: is the spot free (rays in six directions). layers: the collision layer names.
+Physics. controller ref: the actor's character controller, state (on ground, in air, swimming...), fall time and fall distance. body ref: 3D root to collision object to Havok body, each object's class, and the body's velocity. set ref: velocity, angular_velocity or impulse on a body (woken); on an actor, velocity pushes it. triggers seconds [ref]: trigger enter, inside and leave events as scripts get them, with frames. projectiles: what is in flight (weapon, shooter, position, distance travelled). query position radius: is the spot free (six rays). layers: the collision layer names.
 
 **Actions:**
 
@@ -547,9 +547,11 @@ Physics. controller ref: the actor's character controller, state (on ground, in 
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `action` | string | `controller`, `body`, `set`, `triggers`, `projectiles`, `query`, `layers` | required | controller (actor state and fall), body (collision chain and velocity), set (give a body a velocity), triggers (record trigger events), projectiles (in flight), query (is a spot free), layers (collision layer names). |
+| `action` | string | `controller`, `body`, `set`, `triggers`, `projectiles`, `query`, `layers` | required | controller (actor state and fall), body (collision chain and velocity), set (velocity or impulse), triggers (record trigger events), projectiles (in flight), query (is a spot free), layers (collision layer names). |
 | `ref` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
-| `velocity` | number[] |  |  | For action=set: linear velocity [x, y, z] in game units per second. |
+| `velocity` | number[] |  |  | For action=set: [x, y, z] in game units per second (an actor: a push). |
+| `angular_velocity` | number[] |  |  | For action=set: [x, y, z] in radians per second. |
+| `impulse` | number[] |  |  | For action=set: [x, y, z], mass x units per second. |
 | `seconds` | number | above 0, up to 60 | `5.0` | For action=triggers: how long to record trigger events, in seconds. |
 | `position` | number[] |  |  | For action=query: [x, y, z] in game units of the spot to test. |
 | `radius` | number | above 0, up to 4096 | `64.0` | For action=query: radius in game units around the position to test for free space. |
@@ -2167,8 +2169,8 @@ Assets in the running game. reload path: a model (.nif) or texture (.dds) is rea
 | `wait_idle` | boolean |  | `false` | For action=queue: wait until the asset IO queue is idle before returning. |
 | `menu` | string | up to 60 characters |  | For action=reload of a menu .xml path: the menu name (for example HUDMainMenu) to evict and rebuild. |
 | `ref` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
-| `out` | string | up to 300 characters |  | For make_*: the Data path to write (meshes/mymod/x.nif, textures/mymod/x.dds), under the mod folder (options.mod, default the project plugin name). |
-| `options` | object |  |  | For make_*: mod, scale, up (y or z), texture, normal, specular, format (DXT1 or DXT5), skeleton, name, loop, priority, text_keys [[time, text]]. |
+| `out` | string | up to 300 characters |  | For make_*: the Data path to write (meshes/mymod/x.nif) in the mod folder. |
+| `options` | object |  |  | For make_*: mod, scale, up, texture, normal, specular, format, skeleton... (guide "assets"). |
 
 Example:
 
