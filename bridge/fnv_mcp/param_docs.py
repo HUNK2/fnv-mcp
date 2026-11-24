@@ -18,11 +18,11 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                                '77. An unknown name is refused.'},
  'fnv_anim': {'action': 'What to do: state (current/queued groups), play (start an animation), groups (list groups '
                         'with KF files), idle_tree (why an idle would or would not be picked), biped (equipment '
-                        'slots), face (expression values), events (record animation actions).',
-              'group': 'For action=play: name of the animation group to play on the reference. Use this or idle.',
-              'idle': 'For action=play: the IDLE form to play on the reference. Use this or group.',
-              'rebuild': "For action=biped: re-runs the engine's equipment build for the reference. This changes the "
-                         'game; false only reads the 20 equipment slots.',
+                        'slots), face (expression values), events (record animation actions), reload (rebuild 3D).',
+              'group': 'For action=play: name of the animation group to play on the reference.',
+              'idle': 'For action=play: the IDLE form to play on the reference.',
+              'kf': 'For action=play: a .kf file under meshes (any file).',
+              'rebuild': "For action=biped: re-run the engine's equipment build (changes the game).",
               'seconds': 'For action=events: how many seconds to record animation actions (equip, attack, reload...). '
                          'Default 3.'},
  'fnv_asset': {'action': 'What to do: reload (re-read a file in the running game), watch (reload changed files in a '

@@ -213,7 +213,8 @@ ACTIONS = {
         'calls': "The bridge's own call log: calls and failures per tool and per error code, the slowest and largest answers."},
     'fnv_anim': {
         'state': 'Current and queued animation group per body section, and the sequence playing.',
-        'play': 'Play an animation group or an IDLE form on the reference.',
+        'play': 'Play an animation group, an IDLE form or any KF file on the reference.',
+        'reload': "Rebuild an actor's 3D (the player too).",
         'groups': 'Every animation group the actor has, with its KF file.',
         'idle_tree': 'The idle the engine would pick now, and which node of the idle tree fails.',
         'biped': 'The 20 equipment slots (item, model, node); rebuild re-runs the equipment build.',

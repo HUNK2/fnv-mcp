@@ -18,6 +18,17 @@ from .fnv_link import hexs, word
 
 ANIM_GROUPS, ANIM_GROUP_SIZE, ANIM_GROUP_COUNT = 0x011977D8, 0x24, 245
 GET_ANIMATION = 0x008B70D0
+# tool gaps 4 (research notes tool-gaps-research-gaps-4-5.md, the route kNVSE PlayAnimationPath takes): ModelLoader
+# (pointer at 0x011C3B3C) LoadKFModel -> KFModel {path, sequence +4, TESAnimGroup +8 (group id +0x10)};
+# AnimData::AddAnimation 0x00490500 into a one-bucket group map (NiTPointerMap init 0x0049C050, lookup 0x0049C390)
+# swapped in at AnimData +0xDC, so the actor's own sequence for that group stays; NiControllerManager (AnimData +0xD8)
+# LookupSequence 0x0047A520 by path, ActivateSequence 0x0047AAB0, DeactivateSequence 0x0047B220
+MODEL_LOADER, LOAD_KF_MODEL, ADD_ANIMATION = 0x011C3B3C, 0x004471C0, 0x00490500
+GROUP_MAP_INIT, GROUP_MAP_LOOKUP = 0x0049C050, 0x0049C390
+LOOKUP_SEQUENCE, ACTIVATE_SEQUENCE, DEACTIVATE_SEQUENCE = 0x0047A520, 0x0047AAB0, 0x0047B220
+# an actor's 3D rebuilt as JIP's TESObjectREFR::Update3D does it: TESObjectREFR::Set3D(NULL, true) 0x005702E0 (not on
+# the player), flag byte +0x5F bit 1, ModelLoader::QueueReference 0x00444850 (ref, 1, 0)
+SET_3D, QUEUE_REFERENCE = 0x005702E0, 0x00444850
 SOUND_CREATORS = ((0x00AE5870, 'sound_form'), (0x00AE5A50, 'sound_path'))
 GET_FALL_DISTANCE = 0x00C70550
 IDLE_MANAGER, FIND_IDLE, IDLE_ARRAY, IDLE_VALID = 0x011CB6A0, 0x00600950, 0x00600690, 0x005FF430
@@ -144,6 +155,17 @@ def _decode_group(gid):
             'powerArmour': bool(gid >> 15)}
 
 
+def kf_path(kf):
+    """A KF path as the model loader takes it: lower case, backslashes, below meshes (a leading meshes is dropped)."""
+    path = str(kf or '').strip().replace('/', chr(92)).lower().lstrip(chr(92))
+    if path.startswith('meshes' + chr(92)):
+        path = path[len('meshes') + 1:]
+    if not path.endswith('.kf') or '..' in path.split(chr(92)) or ':' in path or len(path) > 250:
+        raise ConvError('BAD_ARGUMENTS', 'kf is a .kf path under meshes, such as characters/_male/idleanims/x.kf '
+                                         '(got %r).' % kf)
+    return path
+
+
 class AnimTools:
     def __init__(self, live):
         self.live = live
@@ -197,11 +219,16 @@ class AnimTools:
                        '+0xE0 sequences); group names from the table 0x011977D8.', actor=r['formId'],
                        animation='0x%08X' % anim, sections=sections)
 
-    def play(self, actor, group=None, idle=None):
+    def play(self, actor, group=None, idle=None, kf=None):
         self.live.in_game()
+        if kf:
+            if group or idle:
+                raise ConvError('BAD_ARGUMENTS', 'play takes one of group, idle or kf.')
+            return self.play_kf(actor, kf)
         r = self.live.resolve(actor)
         if not group and not idle:
-            raise ConvError('BAD_ARGUMENTS', 'play needs group (a name such as Idle, JumpStart) or idle (an IDLE form).')
+            raise ConvError('BAD_ARGUMENTS', 'play needs group (a name such as Idle, JumpStart), idle (an IDLE form) '
+                                             'or kf (a .kf path under meshes).')
         line = 'PlayGroup %s 1' % group if group else 'PlayIdle %s' % idle
         self.live.changing('anim play')
         out = self.live.console(line, r['ptr'])
@@ -211,6 +238,115 @@ class AnimTools:
     def _animation(self, r):
         out = self.live.engine_call('0x%08X' % GET_ANIMATION, '0x%08X' % r['ptr'], [], 'ptr', 'thiscall', True)
         return _as_int(out.get('result'))
+
+    def _call(self, address, this, args=(), returns='int'):
+        words = [{'type': 'float', 'value': a} if isinstance(a, float) else {'type': 'int', 'value': a} for a in args]
+        out = self.live.engine_call('0x%08X' % address, '0x%08X' % this, words, returns, 'thiscall', True)
+        return _as_int(out.get('result')) if returns == 'ptr' else out.get('result')
+
+    def play_kf(self, actor, kf):
+        """Play any KF file on an actor (third person), the way kNVSE PlayAnimationPath does it: find the sequence by
+        path in the actor's controller manager, or load the KF and add it through a one-bucket group map so the
+        actor's own sequence for that group is kept; then (re)activate it. The frame gate is held meanwhile."""
+        path = kf_path(kf)
+        r = self.live.resolve_actor(actor)
+        anim = self._animation(r)
+        if not anim:
+            raise ConvError('NO_ANIMATION', '%s has no animation object (not loaded, or no 3D).' % r['formId'])
+        mgr = self.live.u32s([anim + 0xD8])[0]
+        if not mgr:
+            raise ConvError('NO_ANIMATION', '%s has no controller manager.' % r['formId'])
+        from .fnv_inject import shared_time
+        control, _ = shared_time(self.live)
+        held = control.hold(30).get('changed')
+        self.live.changing('anim play kf')
+        try:
+            name = self.live._game_string(path)
+            seq = self._call(LOOKUP_SEQUENCE, mgr, [self.live.scratch(struct.pack('<I', name))], 'ptr')
+            loaded, group_id = False, None
+            if not seq:
+                seq, group_id = self._add_kf(r, anim, name, path)
+                loaded = True
+            state = self.live.u32s([seq + 0x44])[0]
+            if state:
+                self._call(DEACTIVATE_SEQUENCE, mgr, [seq, 0.0])
+            raw = self.live.reads([(seq + 0x1C, 4)])[0]
+            weight = struct.unpack('<f', raw)[0] if raw else 1.0
+            ok = self._call(ACTIVATE_SEQUENCE, mgr, [seq, 0, 1, weight, 0.0, 0], 'bool')
+            after = self.live.u32s([seq + 0x44])[0]
+        finally:
+            if held:
+                control.release()
+        if not ok:
+            raise ConvError('KF_NOT_PLAYED', 'NiControllerManager::ActivateSequence refused %s on %s (sequence state %s).'
+                            % (path, r['formId'], after), {'sequence': '0x%08X' % seq})
+        return verdict('%s plays on %s' % (path, r['formId']),
+                       'Sequence %s; %s. Check with fnv_anim state; a remade KF is read again only after a restart (the '
+                       'model loader keeps it).' % ('0x%08X' % seq, 'loaded and added to the actor (kNVSE route)'
+                                                    if loaded else 'already on the actor, started again'),
+                       actor=r['formId'], kf=path, sequence='0x%08X' % seq, loaded=loaded, state=after,
+                       group=_decode_group(group_id) if group_id is not None else None)
+
+    def _add_kf(self, r, anim, name, path):
+        loader = self.live.u32s([MODEL_LOADER])[0]
+        model = self._call(LOAD_KF_MODEL, loader, [name], 'ptr')
+        if not model:
+            raise ConvError('KF_NOT_LOADED', 'The engine could not load meshes\\%s (no such file, or not a KF). Next: '
+                            'fnv_asset where path=meshes\\%s.' % (path, path))
+        group = self.live.u32s([model + 8])[0]
+        raw = self.live.reads([(group + 0x10, 2)])[0] if group else None
+        group_id = struct.unpack('<H', raw)[0] if raw else None
+        if group_id is None or group_id & 0xFF == 0xFF:
+            raise ConvError('KF_NO_GROUP', 'meshes\\%s has no animation group the engine knows (its sequence name or '
+                            'file name names none): AddAnimation would refuse it.' % path)
+        table = self.live.scratch(b'\0' * 16)
+        self._call(GROUP_MAP_INIT, table, [1], 'ptr')
+        own_map, queued = self.live.u32s([anim + 0xDC])[0], self.live.reads([(anim + 0x9E, 2)])[0]
+        self.live.link.write(anim + 0xDC, struct.pack('<I', table))
+        try:
+            added = self._call(ADD_ANIMATION, anim, [model, 0], 'bool')
+        finally:
+            self.live.link.write(anim + 0xDC, struct.pack('<I', own_map))
+            if queued and self.live.reads([(anim + 0x9E, 2)])[0] != queued:     # kNVSE: AddAnimation's movement fix
+                self.live.link.write(anim + 0x9E, queued)
+        slot = self.live.scratch(b'\0' * 4)
+        self._call(GROUP_MAP_LOOKUP, table, [group_id, slot], 'bool')
+        base = self.live.u32s([slot])[0]
+        seq = 0
+        if base:
+            get_sequence = self.live.u32s([self.live.u32s([base])[0] + 0x10])[0]    # AnimSequenceBase vtable slot 4
+            seq = self._call(get_sequence, base, [0xFFFFFFFF], 'ptr')
+        if not added or not seq:
+            raise ConvError('KF_NOT_ADDED', 'AnimData::AddAnimation did not add meshes\\%s to %s (its bones may not be '
+                            'in the skeleton; fnv_warnings may say which).' % (path, r['formId']))
+        return seq, group_id
+
+    def reload(self, actor):
+        """Rebuild an actor's 3D the way JIP's Update3D does: drop it (Set3D NULL, not for the player), mark the
+        reference and queue it on the model loader. Models and KFs already loaded stay cached."""
+        self.live.in_game()
+        r = self.live.resolve_actor(actor)
+        loaded = self.live.u32s([r['ptr'] + 0x64])[0]
+        root = self.live.u32s([loaded + 0x14])[0] if loaded else 0
+        if not root:
+            raise ConvError('NO_3D', '%s has no 3D to rebuild (not loaded).' % r['formId'])
+        player = r['formId'].upper().endswith('00000014')
+        flag = self.live.reads([(r['ptr'] + 0x5F, 1)])[0]
+        if player and flag and flag[0] & 1:
+            return verdict('%s is already queued for a 3D rebuild' % r['formId'], None, actor=r['formId'],
+                           queued=True)
+        self.live.changing('anim reload')
+        if not player:
+            self._call(SET_3D, r['ptr'], [0, 1])
+        flag = self.live.reads([(r['ptr'] + 0x5F, 1)])[0]
+        self.live.link.write(r['ptr'] + 0x5F, bytes([(flag[0] if flag else 0) | 1]))
+        loader = self.live.u32s([MODEL_LOADER])[0]
+        self._call(QUEUE_REFERENCE, loader, [r['ptr'], 1, 0])
+        return verdict('%s 3D queued for a rebuild' % r['formId'],
+                       'TESObjectREFR::Set3D 0x%08X (NULL, not on the player), flag +0x5F bit 1, ModelLoader::'
+                       'QueueReference 0x%08X, as JIP Update3D. The new 3D comes a few frames later; check with '
+                       'fnv_anim state or fnv_photo.' % (SET_3D, QUEUE_REFERENCE), actor=r['formId'], queued=True,
+                       oldRoot='0x%08X' % root)
 
     def groups(self, actor, limit=300):
         """Every group the actor has a sequence for (the map at animation +0xDC: group id -> BSAnimGroupSequence)."""
@@ -461,7 +597,9 @@ class AnimTools:
         if action == 'state':
             return self.state(a['ref'])
         if action == 'play':
-            return self.play(a['ref'], a.get('group'), a.get('idle'))
+            return self.play(a['ref'], a.get('group'), a.get('idle'), a.get('kf'))
+        if action == 'reload':
+            return self.reload(a['ref'])
         if action == 'groups':
             return self.groups(a['ref'])
         if action == 'idle_tree':
@@ -473,7 +611,7 @@ class AnimTools:
         if action == 'events':
             return self.events(a['ref'], a.get('seconds') or 3.0)
         raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: state, play, groups, idle_tree, biped, face, '
-                        'events.' % action)
+                        'events, reload.' % action)
 
 
 class AudioTools:

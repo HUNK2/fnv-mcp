@@ -2560,21 +2560,23 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                                                                        name=name, a=a, b=b), 'act')
 
     @server.tool(annotations=act)
-    async def fnv_anim(action: Literal['state', 'play', 'groups', 'idle_tree', 'biped', 'face', 'events'], ref: Ref,
+    async def fnv_anim(action: Literal['state', 'play', 'groups', 'idle_tree', 'biped', 'face', 'events', 'reload'],
+                       ref: Ref,
                        group: Annotated[str, Field(max_length=80)] | None = None,
                        idle: Annotated[str, Field(max_length=80)] | None = None,
+                       kf: Annotated[str, Field(max_length=260)] | None = None,
                        target: Ref | None = None, rebuild: bool = False,
                        seconds: Annotated[float, Field(gt=0, le=60)] = 3.0) -> result_type:
-        """Animation. state ref: per body section the current and queued group (type name, weapon, move, power
-        armour) and the sequence playing. play ref group=<name> or idle=<IDLE form>. groups ref: every group the
-        actor has a sequence for, with its KF file. idle_tree ref [target]: the idle the engine would pick now and
-        the walk to it, each node passing or failing, with the failing conditions. biped ref [rebuild]: the 20
-        equipment slots (item, model, node); rebuild re-runs the engine's equipment build. face ref: expression,
-        modifier and phoneme values. events ref seconds: animation actions started (equip, attack, reload...)."""
-        return await invoke('fnv_anim', lambda: anim_tools.run(action, ref=ref, group=group, idle=idle, target=target,
-                                                               rebuild=rebuild, seconds=seconds),
+        """Animation. state ref: per body section the current and queued group and the sequence playing. play ref
+        group=<name>, idle=<IDLE form> or kf=<path under meshes> (any KF file). reload ref: rebuild the actor's 3D
+        (the player too). groups ref: every group the actor has a sequence for, with its KF file. idle_tree ref
+        [target]: the idle the engine would pick now and why, node by node. biped ref
+        [rebuild]: the 20 equipment slots; rebuild re-runs the equipment build. face ref: expression, modifier and
+        phoneme values. events ref seconds: animation actions started (equip, attack...)."""
+        return await invoke('fnv_anim', lambda: anim_tools.run(action, ref=ref, group=group, idle=idle, kf=kf,
+                                                               target=target, rebuild=rebuild, seconds=seconds),
                             # bug hunt 2026-11-18: events installs a code hook (record_hooks), so it needs full
-                            'act' if action in ('play', 'events') or rebuild else 'read')
+                            'act' if action in ('play', 'events', 'reload') or rebuild else 'read')
 
     @server.tool(annotations=act)
     async def fnv_audio(action: Literal['log', 'play', 'playing', 'stop', 'music', 'radio', 'subtitles', 'hear',

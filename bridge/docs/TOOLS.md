@@ -949,12 +949,13 @@ Example:
 
 **Kind:** act · **Toolset:** game
 
-Animation. state ref: per body section the current and queued group (type name, weapon, move, power armour) and the sequence playing. play ref group=<name> or idle=<IDLE form>. groups ref: every group the actor has a sequence for, with its KF file. idle_tree ref [target]: the idle the engine would pick now and the walk to it, each node passing or failing, with the failing conditions. biped ref [rebuild]: the 20 equipment slots (item, model, node); rebuild re-runs the engine's equipment build. face ref: expression, modifier and phoneme values. events ref seconds: animation actions started (equip, attack, reload...).
+Animation. state ref: per body section the current and queued group and the sequence playing. play ref group=<name>, idle=<IDLE form> or kf=<path under meshes> (any KF file). reload ref: rebuild the actor's 3D (the player too). groups ref: every group the actor has a sequence for, with its KF file. idle_tree ref [target]: the idle the engine would pick now and why, node by node. biped ref [rebuild]: the 20 equipment slots; rebuild re-runs the equipment build. face ref: expression, modifier and phoneme values. events ref seconds: animation actions started (equip, attack...).
 
 **Actions:**
 
 - `state`: Current and queued animation group per body section, and the sequence playing.
-- `play`: Play an animation group or an IDLE form on the reference.
+- `play`: Play an animation group, an IDLE form or any KF file on the reference.
+- `reload`: Rebuild an actor's 3D (the player too).
 - `groups`: Every animation group the actor has, with its KF file.
 - `idle_tree`: The idle the engine would pick now, and which node of the idle tree fails.
 - `biped`: The 20 equipment slots (item, model, node); rebuild re-runs the equipment build.
@@ -963,12 +964,13 @@ Animation. state ref: per body section the current and queued group (type name, 
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `action` | string | `state`, `play`, `groups`, `idle_tree`, `biped`, `face`, `events` | required | What to do: state (current/queued groups), play (start an animation), groups (list groups with KF files), idle_tree (why an idle would or would not be picked), biped (equipment slots), face (expression values), events (record animation actions). |
+| `action` | string | `state`, `play`, `groups`, `idle_tree`, `biped`, `face`, `events`, `reload` | required | What to do: state (current/queued groups), play (start an animation), groups (list groups with KF files), idle_tree (why an idle would or would not be picked), biped (equipment slots), face (expression values), events (record animation actions), reload (rebuild 3D). |
 | `ref` | string | up to 200 characters | required | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
-| `group` | string | up to 80 characters |  | For action=play: name of the animation group to play on the reference. Use this or idle. |
-| `idle` | string | up to 80 characters |  | For action=play: the IDLE form to play on the reference. Use this or group. |
+| `group` | string | up to 80 characters |  | For action=play: name of the animation group to play on the reference. |
+| `idle` | string | up to 80 characters |  | For action=play: the IDLE form to play on the reference. |
+| `kf` | string | up to 260 characters |  | For action=play: a .kf file under meshes (any file). |
 | `target` | string | up to 200 characters |  | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
-| `rebuild` | boolean |  | `false` | For action=biped: re-runs the engine's equipment build for the reference. This changes the game; false only reads the 20 equipment slots. |
+| `rebuild` | boolean |  | `false` | For action=biped: re-run the engine's equipment build (changes the game). |
 | `seconds` | number | above 0, up to 60 | `3.0` | For action=events: how many seconds to record animation actions (equip, attack, reload...). Default 3. |
 
 Example:
