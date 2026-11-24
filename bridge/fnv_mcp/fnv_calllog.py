@@ -9,6 +9,7 @@ start (fnv_state.prune), read by fnv_journal action=calls."""
 import collections
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -76,7 +77,7 @@ class CallLog:
 
     def record(self, tool, action, ok, code, elapsed_ms, size, cut, args=None):
         """Append one line. Never raises: the log must not fail the call it describes."""
-        line = {'t': round(time.time(), 3), 'tool': str(tool)[:80],
+        line = {'t': math.floor(time.time() * 1000) / 1000, 'tool': str(tool)[:80],
                 'action': action if isinstance(action, str) and ACTION.match(action) else None,
                 'ok': bool(ok), 'code': None if ok else (str(code)[:60] if code else 'UNKNOWN'),
                 'ms': int(elapsed_ms), 'size': int(size), 'cut': bool(cut)}

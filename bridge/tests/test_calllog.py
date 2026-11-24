@@ -64,6 +64,13 @@ class CallLogUnitTests(unittest.TestCase):
         self.assertEqual([r['t'] for r in self.lines()], [new['t']])
         self.assertEqual(prune(self.state, now)['calls'], 0)       # part of the state maintenance
 
+    def test_the_stamp_is_never_in_the_future(self):
+        # CI 2026-11-24: round() put t up to 0.5 ms after now, so summary(since_seconds=0) counted the line
+        from unittest import mock
+        with mock.patch('fnv_mcp.fnv_calllog.time.time', return_value=1000.0009999):
+            self.log.record('a', None, True, None, 1, 1, False)
+            self.assertEqual(self.log.summary(since_seconds=0)['total'], 0)
+
     def test_summary_lists_tools_never_called(self):
         self.log.record('a', None, True, None, 1, 1, False)
         out = self.log.summary(known=['a', 'b', 'c'])
