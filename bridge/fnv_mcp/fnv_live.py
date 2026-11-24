@@ -1736,7 +1736,11 @@ class LiveService:
             except (TypeError, ValueError):
                 raise ValueError('Unknown control %r; use a control name or a code from 0 to 12' % control)
             if 0 <= code <= CONTROL_MAX:
-                out = injector.control(code, frames)
+                try:
+                    scan = self._scan_of(code)
+                except LiveError:      # bound to nothing: the engine's force call alone
+                    scan = None
+                out = injector.control(code, frames, scan=scan)
             else:
                 out = scan_to_job(injector, self._scan_of(control), frames)
         elif key is not None:

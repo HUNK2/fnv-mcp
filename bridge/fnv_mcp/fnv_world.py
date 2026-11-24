@@ -1045,11 +1045,21 @@ class WorldTools:
         return {'hresult': '0x%08X' % hr, 'cooperativeLevel': 'non-exclusive, background' if background else
                 'exclusive, foreground', 'device': '0x%08X' % device}
 
+    NOPAUSE = 'fnvmcp_nopause'      # native/modules/fnvmcp_nopause.c (tool gaps 7)
+
+    def _native(self):
+        native = getattr(self, 'native', None)
+        if native is None:
+            from .fnv_native import NativeTools
+            native = self.native = NativeTools(self.live)
+        return native
+
     def window(self, action='status', persist=None):
-        """status | release_mouse | capture_mouse | unpause; persist true/false writes bBackground Mouse to the
-        dev profile's Fallout.ini so every launch starts that way."""
-        if action not in ('status', 'release_mouse', 'capture_mouse', 'unpause'):
-            raise ValueError('action is status, release_mouse, capture_mouse or unpause')    # before persist writes
+        """status | release_mouse | capture_mouse | unpause | background | foreground; persist true/false writes
+        bBackground Mouse to the dev profile's Fallout.ini so every launch starts that way. background loads the
+        bundled nopause module (focus loss no longer opens the pause menu) until foreground or the game ends."""
+        if action not in ('status', 'release_mouse', 'capture_mouse', 'unpause', 'background', 'foreground'):
+            raise ValueError('action is status, release_mouse, capture_mouse, unpause, background or foreground')
         out = {'action': action}
         if persist is not None:
             out['ini'] = self._persist_background_mouse(bool(persist))
@@ -1069,12 +1079,22 @@ class WorldTools:
             if action == 'release_mouse':
                 user32.ClipCursor(None)
             self.live.journal.add({'kind': 'window', 'action': action, 'undo': None})
-        elif action == 'unpause':
+        elif action == 'foreground':
+            if self._native().is_loaded(self.NOPAUSE):
+                self._native().unload(self.NOPAUSE)
+                out['noPause'] = 'unloaded: focus loss opens the pause menu again'
+            else:
+                out['note'] = 'background was not on'
+        if action in ('unpause', 'background'):
+            if action == 'background':
+                loaded = self._native().bundled(self.NOPAUSE)
+                out['noPause'] = ('loaded: the main window procedure 0x0086A0A0 skips WM_ACTIVATE inactive, so focus '
+                                  'loss opens no pause menu' if loaded else 'already on')
             visible = {m['id'] for m in self.agent.menus()['visible']}
             if 1013 in visible:  # StartMenu: the pause menu (opens when the window loses focus)
                 self.agent.menu_control('close', menu=1013)
                 out['closed'] = 'StartMenu (pause)'
-            else:
+            elif action == 'unpause':
                 out['note'] = 'The pause menu was not open'
         ig = self.live.u32s([self.INPUT_GLOBALS])[0]
         flags = self.live.u32s([ig + 4])[0] if ig else None
@@ -1082,12 +1102,19 @@ class WorldTools:
         out['state'] = {'running': True, 'backgroundMouse': bool(flags & 8) if flags is not None else None,
                         'gameWindowFocused': bool(hwnd) and user32.GetForegroundWindow() == hwnd,
                         'pauseMenuOpen': 'StartMenu' in visible, 'menus': visible,
+                        'background': self._background_on(),
                         'iniBackgroundMouse': self._read_background_mouse()}
         out['uses'] = ['OSInputGlobals 0x011F35CC (mouse device +0x30, flags +4 bit 8 = background mouse, as '
                        'MouseInput RecreateDevice 0x00A23C00 sets it)', 'IDirectInputDevice8 Unacquire / '
                        'SetCooperativeLevel(game window, NONEXCLUSIVE|BACKGROUND) / Acquire',
                        'INI bBackground Mouse ([Controls], read at input start-up 0x00A22660)']
         return out
+
+    def _background_on(self):
+        try:
+            return self._native().is_loaded(self.NOPAUSE)
+        except Exception:  # noqa: BLE001 - status never fails on this
+            return None
 
     def _layout(self):
         from . import fnv_layout

@@ -179,7 +179,7 @@ Example:
 
 **Kind:** control · **Toolset:** game
 
-The game window and the user's mouse: release_mouse switches the game's DirectInput mouse to non-exclusive background mode on its own window, so the cursor is free while the game keeps running; capture_mouse puts exclusive mode back; unpause closes the pause menu (it opens when the window loses focus). persist=true writes bBackground Mouse=1 to the dev profile's Fallout.ini so every launch leaves the mouse free (false undoes it). Works without the game for persist.
+The game window and the mouse: release_mouse frees the cursor while the game runs (DirectInput background mode); capture_mouse undoes it; unpause closes the pause menu (it opens on focus loss); background: focus loss no longer opens it (until foreground or the game ends). persist=true writes bBackground Mouse=1 to the dev profile's Fallout.ini (false undoes it); it works without the game.
 
 **Actions:**
 
@@ -187,10 +187,12 @@ The game window and the user's mouse: release_mouse switches the game's DirectIn
 - `release_mouse`: Free the mouse while the game keeps running.
 - `capture_mouse`: Give the mouse back to the game.
 - `unpause`: Close the pause menu.
+- `background`: Keep the game running when its window loses focus.
+- `foreground`: Pause on focus loss again.
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `action` | string | `status`, `release_mouse`, `capture_mouse`, `unpause` | `"status"` | status (default), release_mouse (free the cursor while the game runs), capture_mouse or unpause (close the pause menu). |
+| `action` | string | `status`, `release_mouse`, `capture_mouse`, `unpause`, `background`, `foreground` | `"status"` | status (default), release_mouse (free the cursor while the game runs), capture_mouse, unpause (close the pause menu), background (no pause on focus loss) or foreground. |
 | `persist` | boolean |  |  | If true, write bBackground Mouse=1 to the dev profile's Fallout.ini so every launch leaves the mouse free; false removes it. Omitted changes nothing. |
 
 Example:

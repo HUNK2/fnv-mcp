@@ -98,7 +98,7 @@ def run_tests(suite):
     else:
         pattern = {'smoke': 'test_smoke.py', 'spec': 'test_spec_types.py',
                    'assets': 'test_assets_live.py', 'physics': 'test_physics_live.py',
-                   'anim': 'test_anim_live.py'}.get(suite, 'test_*.py')
+                   'anim': 'test_anim_live.py', 'input': 'test_input_live.py'}.get(suite, 'test_*.py')
         tests = loader.discover(folder, pattern=pattern, top_level_dir=str(BRIDGE / 'tests'))
     stream = io.StringIO()
     result = unittest.TextTestRunner(stream=stream, verbosity=2).run(tests)
@@ -176,7 +176,7 @@ def write_summary(out, summary):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--project', default=str(BRIDGE / 'projects' / 'hellowasteland.windows.json'))
-    parser.add_argument('--suite', choices=('smoke', 'loop', 'spec', 'assets', 'physics', 'anim', 'full'), default='smoke')
+    parser.add_argument('--suite', choices=('smoke', 'loop', 'spec', 'assets', 'physics', 'anim', 'input', 'full'), default='smoke')
     parser.add_argument('--attach', action='store_true', help='never launch the game')
     parser.add_argument('--start', default='coc:GoodspringsSource', help='where to launch when not attached')
     parser.add_argument('--out', default=None, help='default: <state_dir>/fnv/regress/<stamp>')

@@ -53,7 +53,8 @@ MUTATING_ACTIONS = {
     'fnv_watch': '*',
     'fnv_snapshot': '*',                          # diff captures again when after is left out
     'fnv_warnings': {'capture'},                  # start/stop hooks the engine's Warning function (W3)
-    'fnv_window': {'release_mouse', 'capture_mouse', 'unpause'},     # game memory and the pause menu (W3)
+    # game memory and the pause menu (W3); background loads the bundled nopause module, foreground unloads it
+    'fnv_window': {'release_mouse', 'capture_mouse', 'unpause', 'background', 'foreground'},
     'fnv_systems': {'formula', 'sweep', 'barter'},
     'fnv_leveled_roll': {'seed'},
     'fnv_test': '*',
@@ -586,6 +587,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     author_tools = AuthorTools(live, data=data, records=records, place=place_tools, forms=form_tools)
     native_tools = NativeTools(live)
     flow_tools.native = native_tools
+    world.native = native_tools
     code_tools = CodeTools(live)
     plugin_tools = PluginTools(live)
     profile_tools = ProfileTools(live)
@@ -1746,13 +1748,13 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         return await invoke('fnv_vats_odds', lambda: world.vats_odds(target, limb, include_terms))
 
     @server.tool(annotations=control)
-    async def fnv_window(action: Literal['status', 'release_mouse', 'capture_mouse', 'unpause'] = 'status',
+    async def fnv_window(action: Literal['status', 'release_mouse', 'capture_mouse', 'unpause', 'background',
+                                         'foreground'] = 'status',
                          persist: bool | None = None) -> result_type:
-        """The game window and the user's mouse: release_mouse switches the game's DirectInput mouse to non-exclusive
-        background mode on its own window, so the cursor is free while the game keeps running; capture_mouse puts
-        exclusive mode back; unpause closes the pause menu (it opens when the window loses focus). persist=true writes
-        bBackground Mouse=1 to the dev profile's Fallout.ini so every launch leaves the mouse free (false undoes it).
-        Works without the game for persist."""
+        """The game window and the mouse: release_mouse frees the cursor while the game runs (DirectInput background
+        mode); capture_mouse undoes it; unpause closes the pause menu (it opens on focus loss); background: focus loss
+        no longer opens it (until foreground or the game ends). persist=true writes bBackground Mouse=1 to the dev
+        profile's Fallout.ini (false undoes it); it works without the game."""
         return await invoke('fnv_window', lambda: world.window(action, persist), 'control', action=action)
 
     # ------------------------------------------------------------------ naming from the running game
@@ -2360,7 +2362,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                              'preview') or (action == 'file_log' and mode in (None, 'read'))
         args = {'path': path, 'mode': mode, 'missing': missing, 'ext': ext, 'folder': folder, 'limit': limit,
                 'wait_idle': wait_idle, 'menu': menu, 'ref': ref, 'out': out, 'options': options}
-        kind = 'control' if action.startswith('make_') else 'read' if is_read else 'act'
+        kind = 'control' if action in ('make_nif', 'make_kf', 'make_dds') else 'read' if is_read else 'act'
         return await invoke('fnv_asset', lambda: asset_tools.run(action, **args), kind, action=action)
 
     @server.tool(annotations=act)

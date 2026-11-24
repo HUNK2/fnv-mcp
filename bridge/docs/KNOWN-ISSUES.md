@@ -83,6 +83,11 @@ damaged file. Most are tracked as GitHub issues.
 - `fnv_crawl cells` moves the player with a `coc` that is not journaled.
 - `fnv_snapshot` has no cap on the number of items or on console items.
 - `fnv_window persist` and `fnv_warnings enable` write files although `fnv.engine_control` is `"read"`.
+- A frame hold of a control (`fnv_input frames=`) holds its bound key too, so `GetControlState` and
+  `IsControlPressed` see it; a control bound to nothing gets the engine's force call alone, which they do not see.
+- `fnv_window background` was proven with the focus-loss message posted to the game window, not with another
+  window brought to the front. With it on, the keyboard and mouse may still lose their DirectInput devices when
+  the window is not in front: injected input (`frames=`) works, xNVSE `TapKey` and `HoldKey` may not.
 
 ## Plugins and data files
 

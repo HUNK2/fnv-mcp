@@ -467,6 +467,25 @@ class NativeTools:
                             '(fnv_native unload name=fnvmcp_flowcall) and try again.')
         return int(exports['fnvmcp_flow_slot'], 16)
 
+    def bundled(self, key):
+        """Load a module shipped in native/modules/<key>.c (built again when its source is newer than its newest
+        build). False when it is loaded already, by this server or an earlier one (tool gaps 7)."""
+        if self.is_loaded(key):
+            return False
+        source = Path(__file__).resolve().parent.parent / 'native' / 'modules' / ('%s.c' % key)
+        try:
+            stale = self._newest(key).stat().st_mtime < source.stat().st_mtime
+        except ConvError:
+            stale = True
+        if stale:  # never load a build older than the module's source
+            self.build(str(source), key)
+        self.load(key)
+        return True
+
+    def is_loaded(self, key):
+        """True when the running game holds the module (the companion is the truth)."""
+        return key in self._sync()
+
     # ------------------------------------------------------------------ call / log / list
     def call(self, name, export, args=None):
         self.live.ready()

@@ -857,8 +857,8 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                'keep_unpaused': 'If true (default), the game is kept running while sampling.',
                'frames': 'If set, sample frame by frame inside the game for this many frames instead of by time.',
                'every': 'With frames: take a sample every this many frames. Default 1.'},
- 'fnv_window': {'action': 'status (default), release_mouse (free the cursor while the game runs), capture_mouse or '
-                          'unpause (close the pause menu).',
+ 'fnv_window': {'action': 'status (default), release_mouse (free the cursor while the game runs), capture_mouse, '
+                          'unpause (close the pause menu), background (no pause on focus loss) or foreground.',
                 'persist': "If true, write bBackground Mouse=1 to the dev profile's Fallout.ini so every launch leaves "
                            'the mouse free; false removes it. Omitted changes nothing.'},
  'fnv_world_edit': {'action': 'Edit to make: move, rotate, scale, transform (any of these), enable, disable, delete, '

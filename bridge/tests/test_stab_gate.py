@@ -54,6 +54,8 @@ MUTATING_CASES = {
     ('fnv_window', 'release_mouse'): {'action': 'release_mouse'},           # writes game memory (W3)
     ('fnv_window', 'capture_mouse'): {'action': 'capture_mouse'},
     ('fnv_window', 'unpause'): {'action': 'unpause'},
+    ('fnv_window', 'background'): {'action': 'background'},       # loads the bundled nopause module (gaps 7)
+    ('fnv_window', 'foreground'): {'action': 'foreground'},
     ('fnv_snapshot', '*'): {'name': 'x', 'items': [{'console': 'player.kill'}]},
     ('fnv_systems', 'formula'): {'action': 'formula', 'name': 'x'},
     ('fnv_systems', 'sweep'): {'action': 'sweep', 'name': 'x'},

@@ -590,7 +590,9 @@ ACTIONS = {
         'status': 'The game window and mouse mode.',
         'release_mouse': 'Free the mouse while the game keeps running.',
         'capture_mouse': 'Give the mouse back to the game.',
-        'unpause': 'Close the pause menu.'},
+        'unpause': 'Close the pause menu.',
+        'background': 'Keep the game running when its window loses focus.',
+        'foreground': 'Pause on focus loss again.'},
     'fnv_world_edit': {
         'move': 'Move a reference to a position.',
         'rotate': 'Set the angles of a reference, in degrees.',

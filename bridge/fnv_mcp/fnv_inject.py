@@ -142,11 +142,17 @@ class Injector:
         # (ValueError after the job was queued)
         return waiter.run(frames=min(frames + 1, STEP_MAX), timeout_seconds=30 + frames / 20.0)
 
-    def job(self, kind, detail, frames, op, wait):
+    def job(self, kind, detail, frames, op, wait, also=None):
+        """also: a second op queued in the same batch, so both start at the same poll (a control's bound key)."""
         if not 1 <= int(frames) <= FRAMES_MAX:
             raise ValueError('frames must be from 1 to %d' % FRAMES_MAX)
         self.ensure()
-        result = self.batch([op])[0]
+        results = self.batch([op] + ([also] if also else []))
+        result = results[0]
+        if also and not results[1].get('ok'):
+            self.batch([('inp', 'clear')])     # never half a job: the control without its key
+            raise ConvError('INPUT_REFUSED', 'The engine companion refused the bound key of the %s job (%s). Next: '
+                            'call fnv_status.' % (kind, results[1].get('error')), results[1])
         if not result.get('ok'):
             raise ConvError('INPUT_REFUSED', 'The engine companion refused the %s job (%s). Next: call fnv_status; if the '
                             'companion is old, call fnv_companion_install.' % (kind, result.get('error')), result)
@@ -162,11 +168,22 @@ class Injector:
                        frameAfter=waited.get('frame') if waited else None)
 
     # ------------------------------------------------------------ jobs
-    def control(self, code, frames, wait=True):
+    def control(self, code, frames, wait=True, scan=None):
+        """The engine's force call holds the control, and (tool gaps 7) scan, the key or mouse button bound to it (256 +
+        button), is held with it: GetControlState (0x00A24660) and scripts' IsControlPressed read the key bytes, not
+        the forced state, and toggles such as run wait for the key's press and release."""
         code = int(code)
         if not 0 <= code <= CONTROL_MAX:
             raise ValueError('control code must be from 0 to %d' % CONTROL_MAX)
-        return self.job('control', 'Control %d held' % code, frames, ('inp', 'ctl', word(code), word(frames)), wait)
+        also = None
+        if scan is not None and 0 <= int(scan) < 256 + BUTTON_MAX + 1:
+            scan = int(scan)
+            also = (('inp', 'btn', word(scan - 256), word(frames)) if scan >= 256 else
+                    ('inp', 'key', word(scan), word(frames)))
+        out = self.job('control', 'Control %d held' % code, frames, ('inp', 'ctl', word(code), word(frames)), wait,
+                       also)
+        out['boundKey'] = None if also is None else ('mouse button %d' % (scan - 256) if scan >= 256 else scan)
+        return out
 
     def key(self, dik, frames, wait=True):
         dik = int(dik)
