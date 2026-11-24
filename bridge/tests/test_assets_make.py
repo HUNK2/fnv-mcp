@@ -119,8 +119,21 @@ def cube():
                 pos.append(p)
                 nrm.append(n)
                 uv.append((u, v))
-            tri += [(base, base + 1, base + 2), (base, base + 2, base + 3)]
+            quad = [(base, base + 1, base + 2), (base, base + 2, base + 3)]
+            e1, e2 = np.subtract(pos[base + 1], pos[base]), np.subtract(pos[base + 2], pos[base])
+            if np.dot(np.cross(e1, e2), n) < 0:      # counter-clockwise seen from outside, as glTF front faces are
+                quad = [t[::-1] for t in quad]
+            tri += quad
     return np.array(pos), np.array(nrm, float), np.array(uv, float), np.array(tri)
+
+
+def faces_point_out(vertices, triangles):
+    """True when every triangle's winding normal points away from the mesh's centre (front faces outside)."""
+    v = np.asarray(vertices, np.float64)
+    t = np.asarray(triangles, np.int64)
+    centre = v.mean(axis=0)
+    normal = np.cross(v[t[:, 1]] - v[t[:, 0]], v[t[:, 2]] - v[t[:, 0]])
+    return bool(np.all(np.einsum('ij,ij->i', normal, v[t].mean(axis=1) - centre) > 0))
 
 
 @unittest.skipUnless(FILES, 'needs the New Vegas archives (FNV_DATA)')
@@ -197,6 +210,9 @@ class Meshes(unittest.TestCase):
         # glTF y (up) is the game's z; glTF z (toward the viewer) is the game's -y; metres become game units
         expect = np.stack([pos[:, 0], -pos[:, 2], pos[:, 1]], axis=1) * UNITS
         np.testing.assert_allclose(v, expect, atol=1e-3)
+        self.assertTrue(faces_point_out(pos, tri), 'the test cube itself')
+        # the engine culls back faces: front faces must stay outside (live run 2026-11-24 showed an inside-out cube)
+        self.assertTrue(faces_point_out(v, data['Triangles']))
         self.assertEqual(report['triangles'], 12)
         self.assertEqual(report['bounds']['min'], [0.0, round(-UNITS, 2), 0.0])
         flags = [b for b in f.blocks if b.type == 'BSXFlags']

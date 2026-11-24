@@ -46,6 +46,7 @@ FOOT_MAX = 64
 FOOT_INSET = 4.0
 FOOT_REST = ('low', 'centre', 'high')
 CLEAR_UNUSED_MODELS = 0x00448620
+TEXTURE_REMOVE_BY_PATH = 0x00A61FB0      # cdecl (const char *path) -> bool: BSTexturePalette remove by path
 FILE_GET = 0x00AFDF20
 DATA_HANDLER = 0x011C3F2C
 CREATE_FORM_FOR_TYPE = 0x00465110
@@ -227,13 +228,26 @@ class AssetTools:
         if not result.get('ok'):
             raise LiveError('CALL_REJECTED', 'ClearUnusedModels failed: %s' % result.get('error'), result)
 
-    def _refresh(self, ptrs):
-        """Disable the references, drop unused models, enable them again; wait for their 3D."""
+    def _evict_texture(self, rel):
+        """Drop a texture from the engine's path-keyed texture cache (BSTexturePalette), so the next load reads the
+        file. The model purge never touches it (live run 2026-11-24: a remade .dds was not read again until this).
+        0x00A61FB0 is the engine's own remove-by-path (tesrace.cpp calls it before it rebuilds a body texture)."""
+        path = self.live._game_string(rel)
+        result = self.link.one('call', word(TEXTURE_REMOVE_BY_PATH), 'i', '0', '0', word(path))
+        if result.get('fault'):
+            raise LiveError('CALL_FAULTED', 'The texture cache removal faulted: %s' % result['fault'], result)
+        return bool(int(result.get('eax', '0'), 16) & 0xFF) if result.get('ok') else False
+
+    def _refresh(self, ptrs, textures=()):
+        """Disable the references, drop the textures named from the texture cache and unused models, enable them
+        again; wait for their 3D."""
         live_refs = [p for p in ptrs if not (self.live.values(['GetDisabled'], p)[0])]
         for p in live_refs:
             self.live.console('Disable', p)
         try:
             self.sleep(0.2)
+            for rel in textures:
+                self._evict_texture(rel)
             self._purge()
         finally:
             for p in live_refs:             # always bring the references back, even when the purge failed
@@ -289,15 +303,17 @@ class AssetTools:
                 if low in textures:
                     users += [q for q, (_, mm) in models.items() if _norm(mm) == _norm(m)]
             if users:
-                done, slow = self._refresh(sorted(set(users)))
+                done, slow = self._refresh(sorted(set(users)), textures=[low])
             else:
                 done, slow = [], []
+                self._evict_texture(low)
                 self._purge()
             self.live.journal.add({'kind': 'asset_reload', 'path': path, 'refs': len(done), 'undo': None})
             return {'path': path, 'refs': len(done), 'refsWithout3D': len(slow),
                     'modelsInArchives': len(unreadable),
-                    'how': 'textures belong to the models that load them: the loose models of loaded references that '
-                           'name this texture were reloaded (disable, ClearUnusedModels, enable)',
+                    'how': 'the texture is dropped from the texture cache (BSTexturePalette remove by path 0x00A61FB0) '
+                           'while the loose models of loaded references that name it are disabled, unused models are '
+                           'cleared, the references enabled: they read the file again',
                     'note': None if users else 'No loose model of a loaded reference names this texture. Models '
                                                'inside archives cannot be read here: reload such a model by its path.'}
         if low.endswith('.ini'):
