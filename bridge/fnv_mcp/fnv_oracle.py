@@ -180,7 +180,8 @@ ORACLE_SOURCES = {
 WRITES_X87 = re.compile(r'^(fst|fstp|fist|fistp|fisttp|fbstp|fnstsw|fnstcw|fstsw|fstcw|fnsave|fsave|fnstenv|fstenv)$')
 NEVER = ('int', 'int3', 'into', 'syscall', 'sysenter', 'in', 'out', 'ins', 'outs', 'cli', 'sti', 'hlt', 'lock',
          'cmpxchg', 'cmpxchg8b', 'xadd', 'rdtsc', 'cpuid', 'wait', 'leave_never')
-STRING_WRITE = ('stos', 'movs', 'rep', 'repne')
+STRING_WRITE = ('stos', 'rep', 'repne')
+MOVS_STRING = ('movsb', 'movsw', 'movsd', 'movsq')    # not movsx / movss / movsd on xmm registers (Y7)
 
 
 class Purity:
@@ -227,7 +228,7 @@ class Purity:
         stack_regs = ('esp', 'ebp') if frame else ('esp',)
         for i in insns:
             m = i.mnemonic
-            if m in NEVER or m.startswith(STRING_WRITE) or (i.prefix and i.prefix[0] == 0xF0):
+            if m in NEVER or m.startswith(STRING_WRITE) or (m in MOVS_STRING and 'xmm' not in i.op_str) or (i.prefix and i.prefix[0] == 0xF0):
                 return {'pure': False, 'why': '%s at %s' % (m, hx(i.address))}
             if m in ('ret', 'retn'):
                 pops.add(int(i.op_str, 0) if i.op_str else 0)

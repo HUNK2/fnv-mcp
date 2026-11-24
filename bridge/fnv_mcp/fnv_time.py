@@ -360,9 +360,9 @@ class TimeControl:
                        held=bool(gate.get('held')),
                        next='Call fnv_time release to let it run, or step again.')
 
-    def fixed(self, fps, journal=True):
+    def fixed(self, fps, journal=True, restore=False):
         fps = _whole(fps, 'fps')
-        if not 0 <= fps <= FPS_MAX:
+        if not restore and not 0 <= fps <= FPS_MAX:   # an undo puts back whatever the game had
             raise ValueError('fps must be from 0 (off) to %d' % FPS_MAX)
         self.require_game()
         fns = self.functions()
@@ -382,14 +382,14 @@ class TimeControl:
         return verdict('The fixed frame step is off', 'Frames take real time again.', changed=True,
                        fixedFps=None, fixedStepMs=step_ms)
 
-    def speed(self, x, journal=True):
-        if not SPEED_MIN <= x <= SPEED_MAX:
+    def speed(self, x, journal=True, restore=False):
+        if not restore and not SPEED_MIN <= x <= SPEED_MAX:   # an undo puts back whatever the game had
             raise ValueError('x must be from %g to %g' % (SPEED_MIN, SPEED_MAX))
         self.require_game()
         packed = struct.pack('<f', x).hex()
         if journal:
             was = _f32(self.batch([('rd', w(MULTIPLIER), '4')])[0], 'the multiplier')
-            if was is not None and SPEED_MIN <= was <= SPEED_MAX:
+            if was is not None:
                 self._journal('speed', round(was, 6))
         before = self.batch([('rd', w(MULTIPLIER), '4'), ('rd', w(MULTIPLIER_TARGET), '4'),
                              ('wr', w(MULTIPLIER), packed), ('wr', w(MULTIPLIER_TARGET), packed)])

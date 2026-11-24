@@ -1206,10 +1206,16 @@ class _Crash(Exception):
 
 
 # ====================================================================== snapshots
+SNAPSHOT_MAX_ITEMS = 100
+SNAPSHOT_OUTPUT_LINES = 400
+
+
 def snapshot(live, items=None, name=None):
     """Capture chosen state: items like {eval: expr}, {item_count: form}, {actor_value: Health, ref: player},
     {stage: quest}, {global: name}, {variable: name, of: quest}, or 'player'. Saved under state/fnv/snapshots."""
     items = items or ['player']
+    if len(items) > SNAPSHOT_MAX_ITEMS:
+        raise ValueError('items: at most %d (got %d)' % (SNAPSHOT_MAX_ITEMS, len(items)))
     values = {}
     for item in items:
         if item == 'player':
@@ -1221,7 +1227,10 @@ def snapshot(live, items=None, name=None):
             continue
         key = json.dumps(item, sort_keys=True)
         runner = ScenarioRunner(live)
-        values[key] = runner._expect({**item, 'is_true': True}, None).get('actual') if isinstance(item, dict) else None
+        actual = runner._expect({**item, 'is_true': True}, None).get('actual') if isinstance(item, dict) else None
+        if isinstance(actual, list) and len(actual) > SNAPSHOT_OUTPUT_LINES:    # console output (W9)
+            actual = actual[:SNAPSHOT_OUTPUT_LINES]
+        values[key] = actual
     shot = {'name': name or 'snapshot-%d' % time.time(), 'time': time.time(), 'game': live.identity(), 'values': values}
     folder = Path(live.project.state_dir) / 'fnv/snapshots'
     folder.mkdir(parents=True, exist_ok=True)

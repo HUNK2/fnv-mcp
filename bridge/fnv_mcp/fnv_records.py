@@ -92,11 +92,18 @@ def scan_references(path, exists, condition_params=None):
             if big is not None:
                 ssize, big = big, None
             if stag == b'XXXX':
+                if p + 10 > n:
+                    raise DataError('BAD_PLUGIN', '%s is truncated: the %s record at offset %d ends inside an XXXX '
+                                    'subrecord' % (path, tag.decode('latin-1'), pos))
                 big = u32(body, p + 6)[0]
                 p += 6 + 4
                 continue
             sub = stag.decode('latin-1')
             start = p + 6
+            if start + ssize > n:
+                raise DataError('BAD_PLUGIN', '%s is truncated: subrecord %s of the %s record at offset %d runs %d '
+                                'bytes past the record end' % (path, sub, tag.decode('latin-1'), pos,
+                                                               start + ssize - n))
             if sub == 'EDID' or (sub in STRING_TAGS and _is_text(body[start:start + ssize])
                                  and not (ssize == 4 and exists(u32(body, start)[0]))):
                 # Tags like RNAM, TNAM, ONAM, NNAM are text in some record types and form ids in others (NPC_ RNAM
@@ -127,6 +134,9 @@ def scan_references(path, exists, condition_params=None):
             if sub == 'SCDA' and ssize >= 0:  # compiled script: references come through SCRO, not bytecode
                 pass
             p = start + ssize
+        if big is not None:
+            raise DataError('BAD_PLUGIN', '%s is truncated: the %s record at offset %d ends after an XXXX subrecord'
+                            % (path, tag.decode('latin-1'), pos))
         pos = body_at + size
     return out
 
@@ -432,7 +442,10 @@ class RecordsTools:
             target = {'name': path.name, 'path': str(path), 'mod': None}
         if not target.get('path'):
             raise DataError('PLUGIN_NOT_FOUND', '%s: file not found' % plugin)
-        index, roots = self._asset_index(entries)
+        try:
+            index, roots = self._asset_index(entries)
+        except assets.AssetError as e:       # a truncated or damaged archive (X9)
+            raise DataError('BAD_ASSET', str(e)) from None
         try:
             names = _plugin_assets(target['path'])
         except (ValueError, struct.error, OSError) as e:      # FormatError is a ValueError

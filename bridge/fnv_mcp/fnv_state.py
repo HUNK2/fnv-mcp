@@ -112,8 +112,9 @@ def locked(path, timeout=10.0):
 
 
 # ===================================================================== files
-def atomic_write(path, data):
-    """Replace `path` with `data` (bytes or str) so no reader sees half of it."""
+def atomic_write(path, data, in_place_fallback=True):
+    """Replace `path` with `data` (bytes or str) so no reader sees half of it. in_place_fallback=False: when the
+    replace keeps failing, raise PermissionError and leave `path` as it was, rather than write it in place."""
     path = Path(path)
     if isinstance(data, str):
         data = data.encode('utf-8')
@@ -129,6 +130,10 @@ def atomic_write(path, data):
             return
         except PermissionError:   # a reader (antivirus, editor, another process) has the file open without delete share
             time.sleep(0.05)
+    if not in_place_fallback:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise PermissionError('Cannot replace %s: another process holds it open.' % path)
     try:   # last resort: write in place (the lock still keeps writers apart)
         with open(path, 'wb') as f:
             f.write(data)

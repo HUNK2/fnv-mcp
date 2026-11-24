@@ -148,13 +148,16 @@ class Plugin:
 
 # -- helpers -----------------------------------------------------------------------
 
+_CP1252_UNDEFINED = (0x81, 0x8D, 0x8F, 0x90, 0x9D)
+
+
 def _cp1252_bytes(error):
     # cp1252 leaves 0x81, 0x8D, 0x8F, 0x90 and 0x9D undefined; plugins can still hold them. Read each as the
     # same code point (as Latin-1 does), so the text survives and writes back to the same byte.
     if isinstance(error, UnicodeDecodeError):
         return ''.join(chr(b) for b in error.object[error.start:error.end]), error.end
     text = error.object[error.start:error.end]
-    if isinstance(error, UnicodeEncodeError) and all(0x80 <= ord(c) <= 0x9F for c in text):
+    if isinstance(error, UnicodeEncodeError) and all(ord(c) in _CP1252_UNDEFINED for c in text):
         return bytes(ord(c) for c in text), error.end
     raise error
 
@@ -289,7 +292,11 @@ def _parse_record(data, pos, end, lazy):
     return rec, body_end
 
 
-def _parse_items(data, pos, end, lazy):
+# Groups nest about 6 deep in a real plugin; a deeper file is damaged and would otherwise hit RecursionError (X6).
+MAX_GROUP_DEPTH = 64
+
+
+def _parse_items(data, pos, end, lazy, depth=0):
     items = []
     while pos < end:
         if data[pos:pos + 4] == b'GRUP':
@@ -298,8 +305,10 @@ def _parse_items(data, pos, end, lazy):
             _, size, label, gtype, stamp = GROUP_HEADER.unpack_from(data, pos)
             if size < 24 or pos + size > end:
                 raise FormatError('group size %d invalid' % size, pos)
+            if depth >= MAX_GROUP_DEPTH:
+                raise FormatError('groups nested deeper than %d' % MAX_GROUP_DEPTH, pos)
             group = Group(bytes(label), gtype, bytes(stamp))
-            group.children = _parse_items(data, pos + 24, pos + size, lazy)
+            group.children = _parse_items(data, pos + 24, pos + size, lazy, depth + 1)
             items.append(group)
             pos += size
         else:

@@ -95,7 +95,7 @@ class NameExportPathTests(unittest.TestCase):
             (state / 'traces').mkdir()
             other, old = state / 'traces' / 'notes.json', state / 'traces' / 'old.json'
             other.write_text('{"mine": true}', encoding='utf-8')
-            old.write_text('{"format": "fnvsym-trace/2"}', encoding='utf-8')
+            old.write_text('{"format": "fnvsym-trace/2", "tool": "fnv-mcp (geck-mcp-nv bridge)"}', encoding='utf-8')
             with self.assertRaises(Exception) as caught:
                 tools._export_path(str(other))
             self.assertEqual(getattr(caught.exception, 'code', None), 'BAD_PATH')

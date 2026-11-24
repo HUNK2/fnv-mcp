@@ -32,8 +32,9 @@ nothing). The layout follows FalloutNV.esm's own lines: SCHR (begin, empty), NEX
 import hashlib
 import struct
 
-from .codec import Subrecord, zstring
+from .codec import Subrecord
 from .records import SpecError, record
+from .records import text as record_text
 
 # Condition function indices (FNV condition table = script opcode - 0x1000), the ones a quest line needs most.
 FUNCTIONS = {
@@ -145,7 +146,7 @@ def build_line(form_id, topic, line, resolve, where, cache=None, apply_fields=No
             raise SpecError(where + '.responses', 'emotion is one of %s' % ', '.join(EMOTIONS))
         subs += [Subrecord('TRDT', struct.pack('<Ii4sB3sIB3s', emotion, int(resp.get('value', 50)), b'\0' * 4, n,
                                                b'\0' * 3, 0, 1, b'\0' * 3)),
-                 Subrecord('NAM1', zstring(resp['text'])), Subrecord('NAM2', b'\0'), Subrecord('NAM3', b'\0')]
+                 Subrecord('NAM1', record_text(resp.get('text'), '%s.responses[%d].text' % (where, n), 65535)), Subrecord('NAM2', b'\0'), Subrecord('NAM3', b'\0')]
     for i, c in enumerate(line.get('conditions', [])):
         subs.append(Subrecord('CTDA', condition(c, resolve, '%s.conditions[%d]' % (where, i))))
     for choice in line.get('choices', []):

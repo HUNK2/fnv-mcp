@@ -27,6 +27,15 @@ PROTECTED = ('id', 'seq', 'pid', 'started', 'orphan', 'undone', 'kind', 'state',
 _ASK = object()
 
 
+def _well_typed(record):
+    """True when the fields the journal reads have their types: str id and kind, int seq, a list of str ids."""
+    ids = record.get('ids')
+    seq = record.get('seq')
+    return (isinstance(record.get('id', ''), str) and isinstance(record.get('kind', ''), str)
+            and (seq is None or (isinstance(seq, int) and not isinstance(seq, bool)))
+            and (ids is None or (isinstance(ids, list) and all(isinstance(i, str) for i in ids))))
+
+
 class Journal:
     def __init__(self, path, game=None):
         self.path = Path(path)
@@ -85,7 +94,7 @@ class Journal:
                 record = json.loads(line.decode('utf-8'))
             except ValueError:   # a line torn by an older, unlocked writer: skip it, keep the rest
                 continue
-            if isinstance(record, dict):
+            if isinstance(record, dict) and _well_typed(record):   # a hand-edited or foreign line: skip it like a torn one
                 self._records.append(record)
         self._offset += end
 
@@ -264,7 +273,10 @@ class Journal:
                     f.write(''.join(json.dumps(r) + '\n' for r in legacy).encode('utf-8'))
             # entries in file order, then the undo records that still name kept entries
             body = [r for r in records if r.get('kind') not in EVENTS and r.get('id') in kept_ids]
-            atomic_write(self.path, ''.join(json.dumps(r) + '\n' for r in body + events_keep))
+            # never in place: a reader in another process keeps its byte offset, and a crash mid-write would empty
+            # the file. Compaction is best effort: a failed replace leaves the old journal (U6)
+            atomic_write(self.path, ''.join(json.dumps(r) + '\n' for r in body + events_keep),
+                         in_place_fallback=False)
             atomic_write(self.seq_path, str(last))
             with self._mutex:
                 self._records, self._offset, self._fold = [], 0, None

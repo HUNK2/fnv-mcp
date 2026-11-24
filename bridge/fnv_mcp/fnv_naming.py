@@ -17,7 +17,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from .fnv_probe import CALLER_SLOTS, WORDS, ProbeError, call_kind, decode_sample, vtable_class
-
+from .fnv_state import atomic_write
 
 
 class ProofFolderError(Exception):
@@ -464,7 +464,7 @@ class NamingTools:
     def _export_path(self, path):
         """Where the trace goes: a .json under fnvsym/traces or <state>/traces, checked on the resolved path (X1: any
         path was written, under a read-only annotation; review I3: not the state folder itself, which holds the engine
-        map). An existing file is replaced only when it is a trace."""
+        map). An existing file is replaced only when it is an earlier fnv-mcp export."""
         if not path:
             return fnvsym_root() / 'traces' / ('fnvmcp-%s.json' % time.strftime('%Y%m%d'))
         target = Path(path).resolve()
@@ -481,8 +481,9 @@ class NamingTools:
                 old = json.loads(target.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 old = None
-            if not (isinstance(old, dict) and str(old.get('format', '')).startswith('fnvsym-trace/')):
-                raise ProbeError('BAD_PATH', '%s exists and is not an fnvsym trace: not replaced' % target)
+            if not (isinstance(old, dict) and old.get('format') == 'fnvsym-trace/2'
+                    and str(old.get('tool', '')).startswith('fnv-mcp')):     # not fnvsym's own Frida trace (Z3)
+                raise ProbeError('BAD_PATH', '%s exists and is not an earlier fnv-mcp export: not replaced' % target)
         return target
 
     def export(self, path=None, max_callers=8):
@@ -586,7 +587,7 @@ class NamingTools:
             return {'changed': False, 'exported': 0, 'path': None, 'functions': 0,
                     'note': 'Nothing to export: no harvested calls, oracle results, experiments or field watches yet.'}
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(out, indent=1, default=str), encoding='utf-8')
+        atomic_write(path, json.dumps(out, indent=1, default=str))
         return {'changed': True, 'exported': len(functions), 'path': str(path), 'functions': len(functions),
                 'withOracle': sum(1 for f in functions.values() if 'oracle' in f),
                 'withExperiments': sum(1 for f in functions.values() if 'experiments' in f),

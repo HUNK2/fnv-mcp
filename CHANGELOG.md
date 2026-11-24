@@ -4,6 +4,24 @@
 
 The first version of the fork. The entries below this one are geck-mcp-nv's own history, by 2Shay.
 
+- **Bug fixes (2026-11-24, GitHub issues 4, 5, 7, 21, 22, 23, 24, 25, 27, 37, 40):** a journal line with a field
+  of the wrong type is skipped instead of breaking every journal read; journal compaction never rewrites
+  `journal.jsonl` in place (a failed replace keeps the old file); a speed change from an out-of-range multiplier is
+  journaled and undone. `fnv_snapshot` takes at most 100 items and keeps 400 lines of console output each. Record
+  text refuses U+0080 to U+009F except the five bytes cp1252 leaves undefined; generic text fields and dialogue
+  responses refuse a NUL; groups nested deeper than 64 are a format error, not a RecursionError; a truncated
+  subrecord or BSA gives an error naming the file. `fnv_name_export` replaces only its own earlier export, never
+  fnvsym's Frida trace, and writes atomically. The purity check no longer counts `movsx`, `movss` and SSE `movsd`
+  as string writes.
+
+- **Tool gaps (2026-11-24):** `fnv_spec` builds 16 more record types with named fields, overrides of master records,
+  templates and exterior cells; the call log keeps argument names (values with `fnv.call_log_arguments`);
+  `fnv_asset` makes NIF, KF and DDS files from glTF and images, extracts and previews; `fnv_anim play kf=` plays
+  any KF on any actor and `fnv_anim reload` rebuilds an actor's 3D; `fnv_physics set` takes velocity, spin and
+  impulse and pushes actors; `fnv_author package` makes one checked release with the xNVSE module and a manifest;
+  a frame hold of a control holds its bound key too (scripts' `IsControlPressed` sees it), and `fnv_window
+  background` keeps the pause menu shut when the window loses focus.
+
 - **No crash log on every quit under MO2 (2026-11-22):** each quit of the game under MO2 faulted after the game's
   own exit, in xNVSE 6.4.9's static destructor for per-cell objects it keeps in the game's heap
   (`nvse_1_4+0x74CF3`, `LdrShutdownProcess`), and Crash Logger wrote a log for it: 207 of 251 logs. After the

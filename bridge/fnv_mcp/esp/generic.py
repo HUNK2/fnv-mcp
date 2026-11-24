@@ -43,6 +43,7 @@ from .codec import Subrecord, zstring
 from .formids import HEX8, FormIdError
 from .masters import MasterError
 from .records import SpecError, check_edid, record
+from .records import text as record_text
 from . import layouts
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +54,7 @@ GENERIC_TYPES = {'NPC_', 'CREA', 'WEAP', 'ACTI', 'SOUN', 'QUST', 'PACK', 'MESG',
                  'ARMO', 'AMMO', 'KEYM', 'NOTE', 'BOOK', 'IMOD', 'LVLI', 'LVLN', 'LVLC', 'RCPE', 'DOOR', 'TERM',
                  'PERK', 'RACE', 'IDLE', 'BPTD'}
 SCRIPT_TYPES = {'object': 0, 'quest': 1, 'effect': 0x100}
+TEXT_MAX = 65535       # a subrecord's size field is 16 bits
 VALUE_KEYS = ('text', 'texts', 'form', 'forms', 'hex', 'u8', 'u16', 'u32', 's32', 'float', 'pack', 'empty')
 COMPILED_TAGS = ('SCHR', 'SCDA', 'SCTX', 'SLSD', 'SCVR', 'SCRO', 'SCRV')
 
@@ -92,9 +94,9 @@ def make_value(op, resolver, where):
     k = keys[0]
     v = op[k]
     if k == 'text':
-        return zstring(v)
+        return record_text(v, where, TEXT_MAX)
     if k == 'texts':
-        return b''.join(zstring(t) for t in v)
+        return b''.join(record_text(t, where, TEXT_MAX) for t in v)
     if k == 'form':
         return struct.pack('<I', _resolve(resolver, v, where))
     if k == 'forms':

@@ -17,10 +17,7 @@ damaged file. Most are tracked as GitHub issues.
 
 - An undo made between a change and its confirmation is opened again by the confirmation.
 - `fnv_undo` with a count can stop at a newest pending entry whose operation cannot be repeated.
-- When journal compaction falls back, it rewrites `journal.jsonl` in place rather than atomically.
-- One journal line with a field of the wrong type makes every journal read fail.
 - Undoing a probe removal reads and writes `probe_session.json` outside a single lock.
-- A game speed change from an out-of-range multiplier is not journaled.
 - The undo of a pause ignores what the resume reports.
 - `fnv_undo all=true` slows down with many entries (about 22 s for 3,000).
 
@@ -81,7 +78,6 @@ damaged file. Most are tracked as GitHub issues.
 - After a launch in which no game started, `fnv_status` says the game was terminated from outside.
 - The audio-cache setting can stay off when writing it back fails.
 - `fnv_crawl cells` moves the player with a `coc` that is not journaled.
-- `fnv_snapshot` has no cap on the number of items or on console items.
 - `fnv_window persist` and `fnv_warnings enable` write files although `fnv.engine_control` is `"read"`.
 - A frame hold of a control (`fnv_input frames=`) holds its bound key too, so `GetControlState` and
   `IsControlPressed` see it; a control bound to nothing gets the engine's force call alone, which they do not see.
@@ -91,17 +87,13 @@ damaged file. Most are tracked as GitHub issues.
 
 ## Plugins and data files
 
-- Record text accepts the control characters U+0080 to U+009F.
-- Generic text fields and dialogue responses can be written with an embedded NUL.
-- A plugin with very deeply nested groups stops the parser with a recursion error.
-- A truncated subrecord or a truncated BSA archive gives a raw `struct.error` instead of a clear message.
 - The build's missing-file check does not look inside BSAs of enabled MO2 mods.
 - Plugin names are matched case-insensitively for ASCII letters only.
 - When a plugin name appears more than twice, or a disabled plugin is still indexed, record lookups can name the wrong
   plugin.
 - One unreadable active plugin breaks every record tool that uses the index, `fnv_loadorder` included.
+- A plugin with a truncated subrecord makes the lookup of who uses a record fail with `BAD_PLUGIN`
+  instead of skipping that plugin.
 
 ## Naming tools
 
-- `fnv_name_export` can overwrite fnvsym's own Frida trace file.
-- The purity check refuses some functions it could accept (`movsx`, `movss` and `movsd` count as string writes).

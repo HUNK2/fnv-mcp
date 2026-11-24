@@ -2071,9 +2071,9 @@ def _undo_time_restore(live, entry, undo):
     elif what == 'hold':
         control.release()
     elif what == 'fixed':
-        control.fixed(int(undo.get('value') or 0), journal=False)
+        control.fixed(int(undo.get('value') or 0), journal=False, restore=True)
     elif what == 'speed':
-        control.speed(float(undo['value']), journal=False)
+        control.speed(float(undo['value']), journal=False, restore=True)
     else:
         return {'undone': False, 'error': {'code': 'UNKNOWN_UNDO_OP', 'message': 'No time restore %r' % what}}
     return None

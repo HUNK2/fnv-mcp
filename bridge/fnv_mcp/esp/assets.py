@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import struct
 import time
+import zlib
 from . import codec as _codec  # noqa: F401 - registers the cp1252-bytes error handler (R16)
 
 
@@ -20,18 +21,25 @@ class AssetError(ValueError):
 
 
 def bsa_extract(path, wanted):
+    """Extract files from an FNV BSA (see _bsa_extract); a truncated or damaged archive is an AssetError."""
+    try:
+        return _bsa_extract(path, wanted)
+    except (struct.error, IndexError, zlib.error) as e:
+        raise AssetError('%s is truncated or damaged (%s)' % (path, e)) from None
+
+
+def _bsa_extract(path, wanted):
     """Extract files from an FNV BSA. `wanted` is a set of lower-case 'folder\\file' paths.
 
     Returns {path: bytes}. File records: size u32 (bit 30 toggles the archive's default
     compression), offset u32 (absolute). With archive flag 0x100, data starts with a
     bstring of the full path. Compressed data = u32 original size + zlib stream.
     """
-    import zlib
     wanted = {w.lower() for w in wanted}
     out = {}
     with open(path, 'rb') as stream:
         header = stream.read(36)
-        if header[:4] != b'BSA\0':
+        if len(header) != 36 or header[:4] != b'BSA\0':
             raise AssetError('%s is not a BSA archive' % path)
         version, offset, flags, folders, files, _fnl, name_len, _ff = struct.unpack('<8I', header[4:])
         stream.seek(offset)
@@ -57,6 +65,8 @@ def bsa_extract(path, wanted):
                 stream.seek(skip, os.SEEK_CUR)
                 size -= skip + 1
             raw = stream.read(size)
+            if len(raw) != size:
+                raise AssetError('%s is truncated: %s ends %d bytes early' % (path, full, size - len(raw)))
             out[full] = (_codec.inflate(raw[4:], struct.unpack_from('<I', raw.ljust(4, bytes(1)))[0])
                          if compressed else raw)
     return out

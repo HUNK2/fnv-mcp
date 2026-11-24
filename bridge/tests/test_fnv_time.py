@@ -371,6 +371,23 @@ class TimeControlTests(TimeTestCase):
             with self.assertRaises(ValueError):
                 self.control.run('speed', x=bad)
 
+    def test_speed_from_an_out_of_range_multiplier_is_journaled_and_restorable(self):
+        added = []
+        self.live.journal = SimpleNamespace(add=lambda record: added.append(record))
+        self.comp.put_f32(MULT, 20.0)                # for example after sgtm 20 in the console
+        self.control.run('speed', x=2.0)
+        self.assertEqual([r['undo'] for r in added], [{'op': 'time_restore', 'what': 'speed', 'value': 20.0}])
+        self.control.speed(20.0, journal=False, restore=True)   # what the undo does: no range check
+        self.assertEqual(self.comp.get(MULT, 4), struct.pack('<f', 20.0))
+        self.assertEqual(self.comp.get(MULT_T, 4), struct.pack('<f', 20.0))
+        with self.assertRaises(ValueError):
+            self.control.speed(20.0, journal=False)
+
+    def test_fixed_step_faster_than_the_limit_is_restorable(self):
+        self.control.fixed(2000, journal=False, restore=True)
+        with self.assertRaises(ValueError):
+            self.control.fixed(2000, journal=False)
+
     def test_status_measures_the_real_frame_rate(self):
         out = self.control.run('status')
         self.assertEqual(out['verdict'], 'The game is running at frame 100')

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -14,6 +15,7 @@ from fnv_mcp.fnv_state import GameIdentity  # noqa: E402
 
 GAME = GameIdentity(4242, 1000)
 OLD = GameIdentity(1111, 500)
+NL = bytes([10])
 
 
 def _append(path, n, tag):
@@ -109,6 +111,29 @@ class JournalV2Tests(unittest.TestCase):
         self.assertEqual(len(archives), 1)
         self.assertEqual(fresh.last_seq(), 6, 'seq numbers keep counting after a compaction')
         self.assertEqual(fresh.add({'kind': 'x'}, GAME)['seq'], 7)
+
+    def test_compact_never_rewrites_the_journal_in_place(self):
+        for _ in range(3):
+            self.add(ident=OLD)
+        self.add()
+        before = self.path.read_bytes()
+        with mock.patch('fnv_mcp.fnv_state.os.replace', side_effect=PermissionError), \
+                mock.patch('fnv_mcp.fnv_state.time.sleep'):
+            with self.assertRaises(PermissionError):
+                self.j.compact(GAME)
+        self.assertEqual(self.path.read_bytes(), before, 'the old journal stays as it was')
+        self.assertEqual(list(self.dir.glob('*.tmp')), [])
+
+    def test_a_line_with_a_wrong_field_type_does_not_break_reads(self):
+        first = self.add()
+        with open(self.path, 'ab') as f:
+            f.write(b'{"id":"a","seq":"7"}' + NL + b'{"kind":"_confirm","id":["x"]}' + NL
+                    + b'{"kind":"_undone","ids":[["y"]]}' + NL + b'{"id":["z"],"seq":3}' + NL)
+        j = Journal(self.path)
+        self.assertEqual([e['id'] for e in j.entries()], [first['id']])
+        self.assertEqual(j.last_seq(), first['seq'])
+        self.assertEqual([e['id'] for e in j.entries(since_seq=0)], [first['id']])
+        self.assertEqual(j.add({'kind': 'x'}, GAME)['seq'], first['seq'] + 1)
 
     def test_legacy_entries_archived_once(self):
         self.path.write_text(json.dumps({'id': 'leg1', 'time': 1, 'undone': False, 'kind': 'memory'}) + '\n' +
