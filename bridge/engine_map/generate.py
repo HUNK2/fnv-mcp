@@ -11,8 +11,8 @@ shipped with this repository. Inputs:
               DRM-packed; use a Steamless-unpacked copy. Only addresses, names and hashes are written.
   --nvse-src / --plugin-src LABEL=PATH   script-extender source trees for their command tables
 
-    python -m engine_map.generate --decomp C:/src/fnv_decomp --verified C:/src/fnvsym/proofs/verified.csv \\
-        --exe %USERPROFILE%/.fnvdecomp/FalloutNV.exe --nvse-src C:/src/NVSE --plugin-src jip=C:/src/JIP-LN-NVSE \\
+    python -m engine_map.generate --decomp C:/path/to/fnv_decomp --verified C:/path/to/fnvsym/proofs/verified.csv \\
+        --exe C:/path/to/unpacked/FalloutNV.exe --nvse-src C:/path/to/NVSE --plugin-src jip=C:/path/to/JIP-LN-NVSE \\
         --out state/engine_map.json
 """
 import argparse

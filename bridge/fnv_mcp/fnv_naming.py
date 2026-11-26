@@ -748,8 +748,9 @@ def this_offsets(engine, image, address, max_size=4000):
     """Field offsets the body reads or writes through `this` (ecx at entry, and registers copied from it until
     they are overwritten), from a linear scan of its machine code. Conservative: stops tracking a register at the
     first write to it."""
-    import capstone
-    from capstone import x86
+    from .fnv_probe import capstone_module
+    capstone = capstone_module()
+    x86 = capstone.x86
     size = int(engine.functions[address].get('size') or 0)
     if not size or size > max_size or image is None:
         return []

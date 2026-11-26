@@ -93,6 +93,14 @@ class Project(BaseModel):
             data.pop(key, None)
         if isinstance(data.get('toolsets'), list):
             data['toolsets'] = [t for t in data['toolsets'] if t not in ('editor', 'legacy')]
+        if isinstance(data.get('game_root'), str) and data['game_root'].strip().lower() == 'auto':
+            from . import locate
+            found = locate.find_game_root()
+            if found is None:
+                raise ValueError('game_root is "auto" but no Fallout: New Vegas install was found (the game\'s '
+                                 'registry key, Steam\'s libraries): set game_root to the game folder, the one with '
+                                 'FalloutNV.exe')
+            data['game_root'] = str(found)
         for key in ('game_root', 'state_dir'):
             if data.get(key) is None:
                 continue

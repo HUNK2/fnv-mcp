@@ -27,7 +27,8 @@ class VersionTests(unittest.TestCase):
     def test_the_server_announces_them(self):
         from fnv_mcp.config import Project
         from fnv_mcp.server import make_server
-        server = make_server(Project.load(BRIDGE / 'projects' / 'example-fnv.json'))
+        from fakes import load_example
+        server = make_server(load_example())
         self.assertEqual(server.name, NAME)
         self.assertEqual(server.version, VERSION)
 

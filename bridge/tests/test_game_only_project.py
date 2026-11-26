@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
 
-from fnv_mcp import fnv_plugin_build  # noqa: E402
+from fnv_mcp import fnv_plugin_build, locate  # noqa: E402
 from fnv_mcp.config import Project  # noqa: E402
 from fnv_mcp.server import make_server  # noqa: E402
 
@@ -35,7 +35,8 @@ def game_only(folder):
 
 class LoadTests(unittest.TestCase):
     def test_the_example_loads(self):
-        project = Project.load(EXAMPLE)
+        from fakes import load_example
+        project = load_example(EXAMPLE.name)
         self.assertIsNone(project.plugin)
         self.assertIsNone(project.spec)
         self.assertEqual(project.fnv.engine_control, 'read')
@@ -110,7 +111,7 @@ class CleanExeTests(unittest.TestCase):
                 self.assertEqual(self.tools(SimpleNamespace(clean_exe=None))._image_path(), env)
                 self.assertEqual(self.tools(None)._image_path(), env)
             with mock.patch.dict(os.environ, {}, clear=True):
-                self.assertEqual(self.tools(None)._image_path(), fnv_plugin_build.IMAGE)
+                self.assertEqual(self.tools(None)._image_path(), locate.clean_image(None))
 
 
 if __name__ == '__main__':

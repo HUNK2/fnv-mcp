@@ -1,7 +1,7 @@
 # fnv-mcp
 
 MCP server for building and testing Fallout: New Vegas mods in the running game. Python package `bridge/fnv_mcp`,
-branch `main`, checkout `C:\DecompModGithub\fnv-mcp-code` (the only one; `geck-mcp-nv` is the old one).
+branch `main`. On the dev PC this clone is the only checkout (`geck-mcp-nv` is the old one).
 
 ## Git
 - "Push" / "GitHub" means the private remote `fnv-mcp` (`git push fnv-mcp main`). Never push
@@ -28,6 +28,8 @@ branch `main`, checkout `C:\DecompModGithub\fnv-mcp-code` (the only one; `geck-m
   hangs (or is never resumed) is ended and started once more; after a second hang, `fnv_game quit force` and
   launch again.
 - Never touch real saves (`Documents\My Games\FalloutNV\Saves`); `engine_control` stays `read` by default.
+- The live runner and tests take the project file from `--project`, else `FNV_LIVE_PROJECT`, else
+  `projects/my-fnv.json`, else the only project file in `projects/`; with several, pass `--project`.
 - Before a push that changes `bridge/fnv_mcp` or `bridge/native`, run `tools/fnv_live_regress.py --suite loop`
   (from `bridge`, in the Terminal panel; it launches the game when none runs, about 3 minutes) and put its summary
   line in the commit message. A push without it says why.

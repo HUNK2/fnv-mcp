@@ -13,7 +13,6 @@ unpacked game image, which never leaves the machine) into fnvmcp_plan.h.
     log name               the plugin's log file (written next to its DLL; MO2 puts new files in overwrite)
 """
 import json
-import os
 import re
 import struct
 import subprocess
@@ -25,7 +24,6 @@ from .fnv_native import SDK_SOURCE, c_name, source_path
 from .safe_paths import check_includes
 
 RUNTIME = Path(__file__).resolve().parents[1] / 'native' / 'runtime'
-IMAGE = Path(os.environ.get('USERPROFILE', '~')).expanduser() / '.fnvdecomp' / 'FalloutNV.exe'
 TEMPLATE = '''/* %(name)s: a native module for Fallout: New Vegas (fnvmcp_module.h). Runs inside the game as a hot module
  * (fnv_native load) or as its own xNVSE plugin (fnv_plugin_build). */
 #include "fnvmcp_module.h"
@@ -71,9 +69,8 @@ class PluginTools:
 
     def _image_path(self):
         """The unpacked game image: fnv.clean_exe, then FNV_CLEAN_EXE, then ~/.fnvdecomp/FalloutNV.exe."""
-        fnv = getattr(self.live.project, 'fnv', None)
-        path = getattr(fnv, 'clean_exe', None) or os.environ.get('FNV_CLEAN_EXE')
-        return Path(path) if path else IMAGE
+        from .locate import clean_image
+        return clean_image(self.live.project)
 
     def scaffold(self, name):
         folder = self._folder(name)

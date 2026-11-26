@@ -54,13 +54,19 @@ def disassembler():
     without it and only the probe planner and caller decoding need it."""
     global _DISASSEMBLER
     if _DISASSEMBLER is None:
-        try:
-            import capstone
-        except ImportError:
-            raise ProbeError('CAPSTONE_MISSING', 'The probe planner needs capstone: pip install "capstone==5.0.7" '
-                             '(the naming extra of the bridge)') from None
+        capstone = capstone_module()
         _DISASSEMBLER = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
     return _DISASSEMBLER
+
+
+def capstone_module():
+    """The capstone package, or CAPSTONE_MISSING with the install line (it is the optional naming extra)."""
+    try:
+        import capstone
+    except ImportError:
+        raise ProbeError('CAPSTONE_MISSING', 'This needs capstone, the naming extra of the bridge: '
+                         '.venv\\Scripts\\python.exe -m pip install "capstone==5.0.7"') from None
+    return capstone
 
 
 # ===================================================================================== reading the game's memory

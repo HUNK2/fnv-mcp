@@ -45,7 +45,7 @@ def make_types():
 def make_parsed(files=None):
     return {
         'compiler': 'x', 'warnings': [],
-        'files': files or ['c:\\decompmodgithub\\x\\src\\bscore\\bsrandom.cpp', 'c:\\sdk\\include\\stdio.h'],
+        'files': files or ['c:\\work\\x\\src\\bscore\\bsrandom.cpp', 'c:\\sdk\\include\\stdio.h'],
         'types': make_types(),
         'functions': [
             {'symbol': '?A@@YAXXZ', 'name': 'A', 'isGlobal': True, 'length': 16, 'debugStart': 3, 'debugEnd': 12,

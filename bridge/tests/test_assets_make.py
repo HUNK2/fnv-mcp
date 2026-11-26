@@ -15,10 +15,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from fnv_mcp import locate  # noqa: E402
 from fnv_mcp.assets import convert, dds, kf, mesh, nif, render
 from fnv_mcp.assets.convert import AssetMakeError
 
-DATA = Path(os.environ.get('FNV_DATA', r'C:\Program Files (x86)\Steam\steamapps\common\Fallout New Vegas\Data'))
+DATA = (locate.game_data() or Path('no-game-data'))
 UNITS = 1 / 0.0142875
 
 CORPUS = ['meshes\\characters\\_male\\skeleton.nif', 'meshes\\creatures\\protectron\\mtidle.kf',

@@ -444,11 +444,13 @@ def source_hashes():
 
 def find_zig(project=None):
     fnv = getattr(project, 'fnv', None) if project else None
-    for candidate in (getattr(fnv, 'zig', None), envvars.get('FNV_MCP_ZIG')):
+    import shutil
+    for candidate in (getattr(fnv, 'zig', None), envvars.get('FNV_MCP_ZIG'), shutil.which('zig')):
         if candidate and Path(candidate).is_file():
             return Path(candidate)
     raise LinkError('ZIG_MISSING', 'Zig 0.14.1 is needed to build the engine companion: set fnv.zig in the project '
-                    'file or the FNV_MCP_ZIG environment variable')
+                    'file or the FNV_MCP_ZIG environment variable, or put zig.exe on PATH (ziglang.org/download, '
+                    'zig-x86_64-windows-0.14.1.zip)')
 
 
 COMPILE_FLAGS = ('cc', '-target', 'x86-windows-gnu', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror')

@@ -18,6 +18,17 @@ from fnv_mcp.config import Project  # noqa: E402
 from fnv_mcp.fnv_facts import FACTS  # noqa: E402
 
 WIRE = Path(__file__).resolve().parent / 'wire'
+PROJECTS = Path(__file__).resolve().parents[1] / 'projects'
+
+
+def load_example(name='example-fnv.json'):
+    """A shipped example project file. Its game_root is \"auto\": the found game, else the temp folder (CI has no
+    game), so the example loads on any machine."""
+    from unittest import mock
+    from fnv_mcp import locate
+    found = locate.find_game_root() or Path(tempfile.gettempdir())
+    with mock.patch.object(locate, 'find_game_root', return_value=found):
+        return Project.load(PROJECTS / name)
 
 
 def wire(key):

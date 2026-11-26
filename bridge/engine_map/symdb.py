@@ -5,8 +5,8 @@ second compile without /Z7), and the CodeView debug sections are parsed (engine_
 source lines, locals and compiler-exact type layouts. Nothing is written except the --out file. See
 docs/FNV-SYMDB.md.
 
-    python -m engine_map.symdb --decomp C:/src/fnv_decomp --out state/symdb.sqlite \\
-        --image %USERPROFILE%/.fnvdecomp/FalloutNV.exe [--jobs N] [--only TEXT]... [--limit N]
+    python -m engine_map.symdb --decomp C:/path/to/fnv_decomp --out state/symdb.sqlite \\
+        --image C:/path/to/unpacked/FalloutNV.exe [--jobs N] [--only TEXT]... [--limit N]
 
 The work is in three separate steps: build_unit (compile, check, parse one unit; returns a plain dict),
 Store.add_unit (write one unit's result), and build (select units, process pool, progress, atomic replace).

@@ -365,13 +365,13 @@ class DeepTools:
         return image.read(address, length) if image else None
 
     def _image(self, required=True):
-        fnv = getattr(self.live.project, 'fnv', None)
-        path = getattr(fnv, 'clean_exe', None) or os.environ.get('FNV_CLEAN_EXE')
-        if not path or not Path(path).is_file():
+        from .locate import clean_image
+        path = clean_image(self.live.project)
+        if not path.is_file():
             if required:
-                raise HookError('CLEAN_EXE_MISSING', 'Set fnv.clean_exe to your own unpacked FalloutNV.exe 1.4.0.525 '
-                                '(the Steam exe keeps its code encrypted on disk; Steamless unpacks it). It is read '
-                                'locally only.')
+                raise HookError('CLEAN_EXE_MISSING', 'No unpacked game image at %s. Set fnv.clean_exe (or '
+                                'FNV_CLEAN_EXE) to your own unpacked FalloutNV.exe 1.4.0.525 (the Steam exe keeps '
+                                'its code encrypted on disk; Steamless unpacks it). It is read locally only.' % path)
             return None
         if getattr(self, '_image_cache', None) is None or self._image_cache.path != Path(path):
             self._image_cache = CleanImage(path)

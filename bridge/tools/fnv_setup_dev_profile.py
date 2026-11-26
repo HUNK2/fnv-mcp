@@ -3,7 +3,7 @@
 Dry run by default: prints what it would do. --apply does it and writes an install manifest
 (<mo2>/fnv-mcp-install.json) listing every file it added to the game folder, for undo.
 
-    py -3.12 tools\\fnv_setup_dev_profile.py --mo2 C:\\Modding\\FNV-Dev --downloads C:\\Modding\\downloads [--apply]
+    py -3.12 tools\\fnv_setup_dev_profile.py --mo2 <MO2 folder> --downloads <downloads folder> [--game <game folder>] [--apply]
 
 Steps (each skipped when already done):
  1. the MO2 portable instance: ModOrganizer.ini for New Vegas (Steam) as MO2's wizard would write it,
@@ -27,9 +27,16 @@ import sys
 import tempfile
 from pathlib import Path
 
-GAME = Path(r'C:\Program Files (x86)\Steam\steamapps\common\Fallout New Vegas')
-DOCS = Path(os.environ.get('USERPROFILE', '~')) / 'Documents' / 'My Games' / 'FalloutNV'
-SEVENZIP = Path(r'C:\Program Files\7-Zip\7z.exe')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fnv_mcp import locate  # noqa: E402
+from fnv_mcp.fnv_layout import default_user_dir  # noqa: E402
+
+# Found on this machine (fnv_mcp.locate): the game from Steam's libraries or its registry key, 7-Zip from PATH or
+# its registry key, the INIs from the shell's Documents folder (it may be redirected). --game and --7zip override.
+GAME = locate.find_game_root()
+DOCS = default_user_dir()
+SEVENZIP = locate.find_7zip()
+ARGS_7ZIP = SEVENZIP
 INI_FILES = ('Fallout.ini', 'FalloutPrefs.ini', 'FalloutCustom.ini')
 INI_SETTINGS = {
     'Fallout.ini': {'General': {'bAlwaysActive': '1', 'SIntroSequence': ''},
@@ -89,7 +96,7 @@ def set_ini(path, settings):
 
 def extract(archive, into):
     into.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(SEVENZIP), 'x', '-y', '-o' + str(into), str(archive)], check=True,
+    subprocess.run([str(ARGS_7ZIP), 'x', '-y', '-o' + str(into), str(archive)], check=True,
                    stdout=subprocess.DEVNULL)
 
 
@@ -109,12 +116,21 @@ def newest(downloads, pattern):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--mo2', type=Path, default=Path(r'C:\Modding\FNV-Dev'))
+    ap.add_argument('--mo2', type=Path, required=True, help='the folder you unpacked the portable MO2 into')
     ap.add_argument('--profile', default='Dev')
-    ap.add_argument('--downloads', type=Path, default=Path(r'C:\Modding\downloads'))
-    ap.add_argument('--game', type=Path, default=GAME)
+    ap.add_argument('--downloads', type=Path, required=True,
+                    help='the folder with the xNVSE, JIP LN NVSE and Crash Logger archives')
+    ap.add_argument('--game', type=Path, default=GAME, help='the game folder (default: found from Steam)')
+    ap.add_argument('--7zip', dest='sevenzip', type=Path, default=SEVENZIP, help='7z.exe (default: found)')
     ap.add_argument('--apply', action='store_true')
     args = ap.parse_args()
+    if args.game is None or not (args.game / 'FalloutNV.exe').exists():
+        sys.exit('Fallout: New Vegas not found%s: pass --game <the folder with FalloutNV.exe>'
+                 % (' at %s' % args.game if args.game else ''))
+    if args.sevenzip is None or not args.sevenzip.exists():
+        sys.exit('7-Zip not found: install it from 7-zip.org, or pass --7zip <path to 7z.exe>')
+    global ARGS_7ZIP
+    ARGS_7ZIP = args.sevenzip
     plan = Plan(args.apply)
     problems = []
 

@@ -29,8 +29,13 @@ from a JSON spec. The count is checked against the server's own tool list by the
 - Zig 0.14.1, to build the engine companion that runs inside the game.
 - A checkout of the [fnv_decomp](https://github.com/momusdigital/fnv_decomp) decompilation, from which you generate
   the engine map on your own machine.
-Nothing from the game or the decompilation is in this repository: each user builds the engine map and
-symbol database from their own copies.
+- Optional: the 4 GB patch, capstone, your own unpacked FalloutNV.exe (made with Steamless from your own copy), the
+  compiler kit for `fnv_code` and an fnvsym proof folder for the `fnv_name_*` tools.
+
+The full list of downloads, with the tested version of each, where it comes from and which tools need it, is
+"What you need (the downloads)" in [the setup guide](bridge/docs/FNV-MCP-SETUP.md#what-you-need-the-downloads);
+`fnv_setup_check` reports the same list on your machine. Nothing from the game or the decompilation is in this
+repository: each user builds the engine map and symbol database from their own copies.
 
 ## Start
 
@@ -52,9 +57,11 @@ listed in [KNOWN-ISSUES.md](bridge/docs/KNOWN-ISSUES.md). To remove it again, se
 
 - **2Shay**: author of [geck-mcp-nv](https://github.com/2Shay96/geck-mcp-nv), the project this repository is built
   on: the server's start and the offline plugin builder (`fnv_spec`).
+- **maksimka2432fr23**: author of GECK MCP for Fallout 3, the start of geck-mcp-nv's first server.
 - **HUNK2**: the `fnv_*` live, engine and debugging tools and the engine companion.
-- The [fnv_decomp](https://github.com/momusdigital/fnv_decomp) project, xNVSE, JIP LN NVSE and Yvile's Crash Logger,
-  whose work these tools read at runtime; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- The [fnv_decomp](https://github.com/momusdigital/fnv_decomp) project, xNVSE, JIP LN NVSE, kNVSE and Yvile's
+  Crash Logger, whose work these tools read or follow; Mod Organizer 2, Zig, Steamless, Capstone and the MCP Python
+  SDK, which they use; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Built on geck-mcp-nv
 

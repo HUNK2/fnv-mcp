@@ -34,7 +34,7 @@ cd bridge
 .venv\Scripts\python.exe -m engine_map.generate `
     --decomp C:\src\fnv_decomp `
     --verified C:\src\fnvsym\proofs\verified.csv `
-    --exe $env:USERPROFILE\.fnvdecomp\FalloutNV.exe `
+    --exe C:\src\unpacked\FalloutNV.exe `
     --nvse-src C:\src\NVSE --plugin-src "JIP LN=C:\src\JIP-LN-NVSE" `
     --out state\engine_map.json --header state\fnv_engine_addresses.h
 ```
@@ -91,7 +91,7 @@ It is optional. Without it every tool works as before.
 Build it once (and again after the decomp changes), with your own copies of the decomp and the unpacked exe:
 
 ```powershell
-.venv\Scripts\python.exe -m engine_map.symdb --decomp C:\src\fnv_decomp --image $env:USERPROFILE\.fnvdecomp\FalloutNV.exe --out state\symdb.sqlite
+.venv\Scripts\python.exe -m engine_map.symdb --decomp C:\src\fnv_decomp --image C:\src\unpacked\FalloutNV.exe --out state\symdb.sqlite
 ```
 
 The tools look for it in this order: `fnv.symdb` in the project file, the `FNV_SYMDB` environment

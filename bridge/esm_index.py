@@ -19,10 +19,9 @@ from fnv_mcp.esp import index as index_module  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 def default_data():
-    """FNV Data folder: $FNV_DATA, else the usual Steam location (Windows only, decision D5)."""
-    if os.environ.get('FNV_DATA'):
-        return Path(os.environ['FNV_DATA'])
-    return Path(r'C:\Program Files (x86)\Steam\steamapps\common\Fallout New Vegas\Data')
+    """FNV Data folder: $FNV_DATA, else the found game's Data (fnv_mcp.locate), else None (pass --data)."""
+    from fnv_mcp.locate import game_data
+    return game_data()
 
 
 DEFAULT_DATA = default_data()
@@ -36,6 +35,8 @@ def main():
     parser.add_argument('--data', type=Path, default=DEFAULT_DATA)
     parser.add_argument('--out', type=Path, default=ROOT / 'state' / 'index')
     args = parser.parse_args()
+    if args.data is None:
+        parser.error('no Fallout: New Vegas install found: pass --data <game folder>\\Data or set FNV_DATA')
     args.out.mkdir(parents=True, exist_ok=True)
     for name in args.masters:
         target, index = index_module.write_index(args.data / name, args.out)

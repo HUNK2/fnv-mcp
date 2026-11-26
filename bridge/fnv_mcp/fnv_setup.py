@@ -162,18 +162,25 @@ def setup_check(project):
     add('proof folder', bool(proofs and Path(proofs).is_dir()), proofs or 'FNVSYM_ROOT not set',
         'Optional, for the fnv_name_* tools only: set the FNVSYM_ROOT environment variable (in the MCP server '
         'registration) to a fnvsym checkout.', required=False)
+    from .locate import COMPILER_ROOTS, compiler_problem
+    kit = compiler_problem('sp1')
+    add('compiler kit (fnv_code)', kit is None, os.environ.get(COMPILER_ROOTS['sp1']) or '%s not set' % COMPILER_ROOTS['sp1'],
+        'Optional, for fnv_code build only: %s. Some units use the 2008 RTM kit (FNV_MSVC9_RTM_ROOT) or 2005 SP1 '
+        '(FNV_MSVC8_ROOT); see your fnv_decomp checkout\'s tools/msvc.py.' % kit, required=False)
     capstone = importlib.util.find_spec('capstone') is not None
     add('capstone', capstone, 'installed' if capstone else 'not installed',
         'Optional, for fnv_probe and fnv_atlas: .venv\\Scripts\\python.exe -m pip install capstone==5.0.7.',
         required=False)
-    clean = fnv.clean_exe
-    if clean and Path(clean).exists():
+    from .locate import clean_image
+    clean = clean_image(project)
+    if clean.exists():
         data = Path(clean).read_bytes()[:4096]
         add('unpacked exe (patch map)', b'.bind' not in data, str(clean),
             'fnv.clean_exe must be an unpacked FalloutNV.exe (Steamless output, no .bind section).', required=False)
     else:
-        add('unpacked exe (patch map)', False, 'fnv.clean_exe not set',
-            'Optional, for fnv_patch_map: your own unpacked FalloutNV.exe (Steamless), read locally only.',
+        add('unpacked exe (patch map)', False, '%s not found (fnv.clean_exe, FNV_CLEAN_EXE)' % clean,
+            'Optional, for fnv_patch_map, fnv_code and planning hooks with the game closed: unpack your own '
+            'FalloutNV.exe with Steamless and set fnv.clean_exe to it (read locally, never copied).',
             required=False)
     control = fnv.engine_control or 'read'
     add('full control', control == 'full', 'fnv.engine_control = %s' % control,

@@ -8,12 +8,13 @@ import struct
 import tempfile
 import unittest
 
+from fnv_mcp import locate  # noqa: E402
 from fnv_mcp.esp import build as builder, codec, layouts
 from fnv_mcp.esp.codec import Subrecord
 from fnv_mcp.esp.formids import FormIdMap, MasterIndex
 from fnv_mcp.esp.records import SpecError
 
-ESM = Path(os.environ.get('FNV_DATA', r'C:\Program Files (x86)\Steam\steamapps\common\Fallout New Vegas\Data')) \
+ESM = (locate.game_data() or Path('no-game-data')) \
     / 'FalloutNV.esm'
 
 

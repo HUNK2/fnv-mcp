@@ -16,3 +16,13 @@ bridge/projects/*.json
 windows/backups/
 windows/screenshots/
 .DS_Store
+# machine-local files that must never ship (detach-from-pc, 2026-11-26; tests/test_release.py checks these)
+*.pdb
+*.obj
+*.sqlite
+*.sqlite3
+*.jsonl
+*.fos
+.env
+api_key
+.fnvdecomp/

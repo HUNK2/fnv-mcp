@@ -188,7 +188,8 @@ class Purity:
     """Is a function free of side effects? Decided from its machine code in the clean exe."""
 
     def __init__(self, engine, image):
-        import capstone
+        from .fnv_probe import capstone_module
+        capstone = capstone_module()
         self.engine, self.image = engine, image
         self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         self.md.detail = True

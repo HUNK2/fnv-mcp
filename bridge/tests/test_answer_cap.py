@@ -101,7 +101,8 @@ class DefaultTests(unittest.TestCase):
 class PlayerCharacterVtableTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_player_vtable_fits_and_says_how_to_get_the_rest(self):
         example = BRIDGE / 'projects' / 'example-fnv.json'
-        p = Project.load(example)
+        from fakes import load_example
+        p = load_example(example.name)
         if not (BRIDGE / 'state' / 'engine_map.json').is_file():
             self.skipTest('needs the engine map in bridge/state')
         async with Client(server_module.make_server(p)) as client:

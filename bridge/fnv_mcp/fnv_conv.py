@@ -71,6 +71,13 @@ NEXT_STEPS = {
                                 'fnv.allow_direct_install_changes to true in the project file if you want that, or '
                                 'start at the menu or with coc: instead of a save.',
     'ZIG_MISSING': 'Zig is not installed: call fnv_setup_check and follow the fix for Zig.',
+    'DECOMP_UNAVAILABLE': 'Set fnv.decomp_root (or FNV_DECOMP) to your fnv_decomp checkout, then call again.',
+    'NO_DECOMP': 'Set fnv.decomp_root (or FNV_DECOMP) to your fnv_decomp checkout (with build/units.json), then '
+                 'call again.',
+    'COMPILER_MISSING': 'fnv_code needs the compiler kit fnv_decomp builds with: call fnv_setup_check and follow '
+                        'the fix for the compiler kit.',
+    'CAPSTONE_MISSING': 'Install the naming extra: .venv\\Scripts\\python.exe -m pip install "capstone==5.0.7", '
+                        'then reconnect the server.',
     'CONTROL_DISABLED': 'This call needs fnv.engine_control = "full": it changes the running game, or puts code or '
                         'files into the game or its mod profile. Set it in the project file.',
     'ENGINE_MAP_UNAVAILABLE': 'The engine map is missing: call fnv_setup_check and follow the fix for the engine map.',

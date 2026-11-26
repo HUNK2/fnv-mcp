@@ -241,6 +241,10 @@ class CodeTools:
         obj = folder / 'unit.obj'
         if obj.exists():
             obj.unlink()
+        from .locate import compiler_problem
+        problem = compiler_problem(unit['compiler'])
+        if problem:
+            raise ConvError('COMPILER_MISSING', 'fnv_code build needs the compiler kit: %s.' % problem)
         cmd = self._compile_cmd(self.decomp, unit, meta, obj)
         result = subprocess.run(cmd, cwd=str(self.decomp), capture_output=True, text=True, errors='replace',
                                 timeout=300)

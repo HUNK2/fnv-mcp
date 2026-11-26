@@ -17,7 +17,8 @@ def game_data():
     """The game's Data folder from the project file, or None (tests that need it are skipped)."""
     try:
         from fnv_mcp.config import Project
-        root = Path(__file__).resolve().parents[1] / 'projects' / 'hellowasteland.windows.json'
+        from fnv_mcp import locate
+        root = locate.project_file(Path(__file__).resolve().parents[1] / 'projects')
         data = Project.load(str(root)).game_root / 'Data'
         return data if (data / 'FalloutNV.esm').exists() else None
     except Exception:  # noqa: BLE001
@@ -333,8 +334,9 @@ class LintVanillaTests(unittest.TestCase):
     def engine():
         from fnv_mcp import fnv_engine
         from fnv_mcp.config import Project
-        root = Path(__file__).resolve().parents[1] / 'projects' / 'hellowasteland.windows.json'
-        if not root.exists():       # a local project file (CI has none)
+        from fnv_mcp import locate
+        root = locate.project_file(Path(__file__).resolve().parents[1] / 'projects')
+        if root is None or not root.exists():       # a local project file (CI has none)
             raise unittest.SkipTest('needs the local project file and the engine map')
         paths = fnv_engine.default_paths(Project.load(str(root)))
         if not paths[0].exists():

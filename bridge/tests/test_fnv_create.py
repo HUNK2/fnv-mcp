@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from fnv_mcp import locate  # noqa: E402
 from fnv_mcp import fnv_create  # noqa: E402
 from fnv_mcp.esp.codec import Record, Subrecord  # noqa: E402
 from fnv_mcp.fnv_create import AssetTools, AuthorTools, FormTools, PlaceTools, bsa_hashes  # noqa: E402
@@ -343,7 +344,7 @@ class ScaffoldTests(unittest.TestCase):
         from fnv_mcp.esp.formids import FormIdMap, MasterIndex
         from fnv_mcp.esp.masters import MasterRecords
         from fnv_mcp.fnv_create import SCAFFOLDS
-        data = Path(os.environ.get('FNV_DATA', r'C:\Program Files (x86)\Steam\steamapps\common\Fallout New Vegas\Data'))
+        data = (locate.game_data() or Path('no-game-data'))
         index = index_files(Path(__file__).resolve().parents[1] / 'state', ['FalloutNV.esm'])
         if not (data / 'FalloutNV.esm').exists() or not index:
             self.skipTest('FalloutNV.esm or its index not found')

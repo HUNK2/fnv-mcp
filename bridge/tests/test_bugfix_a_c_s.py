@@ -375,7 +375,8 @@ class EngineNameTests(unittest.TestCase):
         from fnv_mcp import fnv_engine
         from fnv_mcp.config import Project
         try:
-            project = Project.load(ROOT / 'projects' / 'hellowasteland.windows.json')
+            from fnv_mcp import locate
+            project = Project.load(locate.project_file(ROOT / 'projects'))
             engine = fnv_engine.load(*fnv_engine.default_paths(project))
         except Exception as exc:
             self.skipTest('no engine map here: %s' % exc)

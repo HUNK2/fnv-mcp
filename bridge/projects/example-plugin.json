@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project_id": "hellowasteland",
-  "game_root": "C:/Program Files (x86)/Steam/steamapps/common/Fallout New Vegas",
+  "game_root": "auto",
   "state_dir": "../state",
   "plugin": "HelloWasteland.esp",
   "spec": "../examples/hello-wasteland.spec.json",

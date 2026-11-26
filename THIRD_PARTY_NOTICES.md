@@ -4,6 +4,15 @@
 - Source: https://github.com/2Shay96/geck-mcp-nv
 - fnv-mcp is built on it and keeps its full commit history; its copyright notice is kept in `LICENSE`.
 
+## GECK MCP (Fallout 3), by maksimka2432fr23 (MIT)
+- Source: https://github.com/maksimka2432fr23/codex-skill-mcp-fallout3 (commit `b3c1044a`, 2026-09-06)
+- geck-mcp-nv's first `windows/` server was a modified copy of it. That folder was removed on 2026-11-15
+  (commit `0e2f999`); the credit and the note in `LICENSE` stay, and its licence text is in the git history.
+
+## kNVSE (animation route)
+- `fnv_anim` plays a KF file on an actor along the route kNVSE's `PlayAnimationPath` takes in the engine (see the
+  comments in `fnv_inspect.py`); the engine functions are called from the companion and no kNVSE code is copied.
+
 ## Engine knowledge and crash doctor (`bridge/engine_map/`, `bridge/fnv_mcp/fnv_*.py`)
 Nothing from these projects is bundled. The engine map is generated on the user's machine from the
 user's own checkouts and game files; the code here only reads them.

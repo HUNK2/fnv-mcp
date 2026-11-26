@@ -175,12 +175,16 @@ def write_summary(out, summary):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--project', default=str(BRIDGE / 'projects' / 'hellowasteland.windows.json'))
+    parser.add_argument('--project', default=None, help='default: FNV_LIVE_PROJECT, projects/my-fnv.json, or the '
+                        'only project file in projects/')
     parser.add_argument('--suite', choices=('smoke', 'loop', 'spec', 'assets', 'physics', 'anim', 'input', 'full'), default='smoke')
     parser.add_argument('--attach', action='store_true', help='never launch the game')
     parser.add_argument('--start', default='coc:GoodspringsSource', help='where to launch when not attached')
     parser.add_argument('--out', default=None, help='default: <state_dir>/fnv/regress/<stamp>')
     args = parser.parse_args(argv)
+    if args.project is None:
+        from fnv_mcp import locate
+        args.project = str(locate.project_file_or_exit(BRIDGE / 'projects'))
     os.environ['FNV_LIVE'] = '1'
     os.environ['FNV_LIVE_PROJECT'] = str(Path(args.project).resolve())
     from live.base import Session

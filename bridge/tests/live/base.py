@@ -2,7 +2,7 @@
 
 Skipped unless FNV_LIVE=1 (tools/fnv_live_regress.py sets it for its own run). One in-process MCP server serves the
 whole run, so there is one pipe user: its client lives on a background event loop and every test calls through it.
-The project is FNV_LIVE_PROJECT (default projects/hellowasteland.windows.json); the game must already run in its
+The project is FNV_LIVE_PROJECT (else projects/my-fnv.json, or the only project file there); the game must already run in its
 MO2 dev profile (launch it with fnv_game launch, then let the MCP server go idle so the pipe is free)."""
 import asyncio
 import json
@@ -16,7 +16,7 @@ BRIDGE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(BRIDGE))
 
 LIVE = os.environ.get('FNV_LIVE') == '1'
-DEFAULT_PROJECT = BRIDGE / 'projects' / 'hellowasteland.windows.json'
+PROJECTS = BRIDGE / 'projects'
 # A base form every test may place and remove: Caps001 (FalloutNV.esm), a misc item with no script.
 CAPS = '0000000F'
 
@@ -30,7 +30,8 @@ class Session:
     def get(cls, project_path=None):
         with cls._lock:
             if cls._instance is None:
-                cls._instance = cls(project_path or os.environ.get('FNV_LIVE_PROJECT') or DEFAULT_PROJECT)
+                from fnv_mcp import locate
+                cls._instance = cls(project_path or locate.project_file_or_exit(PROJECTS))
             return cls._instance
 
     def __init__(self, project_path, engine_control=None):
