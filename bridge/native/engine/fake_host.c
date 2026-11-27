@@ -482,10 +482,10 @@ int main(int argc, char **argv) {
            (unsigned)(uintptr_t)fake_poll, (unsigned)(uintptr_t)&poll_count, (unsigned)(uintptr_t)fake_force,
            (unsigned)(uintptr_t)&force_count, (unsigned)(uintptr_t)&last_force, (unsigned)(uintptr_t)&fake_os_ptr,
            (unsigned)(uintptr_t)fake_os, (unsigned)(uintptr_t)faulter, (unsigned)(uintptr_t)ud2fn,
-           (unsigned)(uintptr_t)hookme, (unsigned)hook_last, (unsigned)hook_thread_result,
-           (unsigned)hook_thread_done, (unsigned)crash_done, (unsigned)crash_thread_done,
+           (unsigned)(uintptr_t)hookme, (unsigned)(uintptr_t)&hook_last, (unsigned)(uintptr_t)&hook_thread_result,
+           (unsigned)(uintptr_t)&hook_thread_done, (unsigned)(uintptr_t)&crash_done, (unsigned)(uintptr_t)&crash_thread_done,
            (unsigned)(uintptr_t)bp_target, (unsigned)(uintptr_t)bp_call_site, (unsigned)(uintptr_t)bp_after_site,
-           (unsigned)(uintptr_t)bp_ret_site, (unsigned)(uintptr_t)bp_callee, (unsigned)bp_result,
+           (unsigned)(uintptr_t)bp_ret_site, (unsigned)(uintptr_t)bp_callee, (unsigned)(uintptr_t)&bp_result,
            (unsigned)(uintptr_t)(void *)GetProcAddress(dll, "fnvmcp_seam"), /* 0 unless a seam build */
            (unsigned)(uintptr_t)(void *)GetProcAddress(dll, "fnvmcp_hook_reuse_ms"), /* 0 unless a seam build */
            (unsigned)(uintptr_t)(void *)GetProcAddress(dll, "fnvmcp_slow_writes"), /* 0 unless a seam build */
