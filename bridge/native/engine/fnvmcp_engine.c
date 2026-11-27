@@ -2256,7 +2256,9 @@ static void op_write(int argc, char **argv) {
     /* (BUG-011) code goes the way `code patch` does: coverage bytes released first, threads frozen, none inside */
     if (code) {
         cov_release_range(address, (uint32_t)length);
+#ifdef FNVMCP_TEST_SEAM
         InterlockedIncrement(&fnvmcp_slow_writes); /* tests: code never takes the fast data path */
+#endif
     }
     int written = 0;
     if (!read_bytes(address, old, (size_t)length)) fail("unreadable");
