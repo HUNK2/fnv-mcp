@@ -535,7 +535,7 @@ class _Debug:
         self.data_at = {}
         self.rel = {}
         self.pieces = []        # (section index, data, [(kind, body start, body length)])
-        self.strings = {}
+        self.strings = b''
         self.file_index = {}
         self.stack = []
         self.func = None
@@ -606,11 +606,13 @@ class _Debug:
             p = 4
             while p + 8 <= len(d):
                 kind, length = _unpack('<II', d, p)
+                ignored = bool(kind & 0x80000000)  # DEBUG_S_IGNORE: the linker dropped this subsection
                 kind &= 0x7FFFFFFF
                 if p + 8 + length > len(d):
                     self.warn('truncated debug subsection 0x%x' % kind)
                     break
-                subs.append((kind, p + 8, length))
+                if not ignored:
+                    subs.append((kind, p + 8, length))
                 p += 8 + ((length + 3) & ~3)
             self.pieces.append((si, d, subs))
         table = {}

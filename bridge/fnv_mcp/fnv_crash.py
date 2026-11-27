@@ -164,7 +164,7 @@ def parse_text(text):
             out['warnings'].append(l.strip())
     section = None
     current = None   # register/stack entry that continuation lines belong to
-    for raw in lines[1:]:
+    for raw in (lines[1:] if m or out['format'] == 'cobb' else lines):  # a header-less log keeps its first line
         line = raw.rstrip()
         sm = SECTION.match(line)
         if sm and not raw.startswith((' ', '\t')):
@@ -533,7 +533,7 @@ def explain(parsed, engine, project=None, max_frames=40):
             f['hint'] = INJECTED_NOTES.get((f.get('module') or '').lower())
     exc = parsed['exception'] or {}
     forms = _collect_forms(parsed)
-    suspects = _suspects(parsed, frames, forms, exc)
+    suspects = _suspects(parsed, frames, forms, exc, engine is not None)
     shutdown = during_shutdown(parsed)
     crash_site = frames[0] if frames else None
     return {'file': parsed.get('file'), 'modified': parsed.get('modified'), 'logger': parsed['logger'],
@@ -581,7 +581,7 @@ def _collect_forms(parsed):
     return out
 
 
-def _suspects(parsed, frames, forms, exc):
+def _suspects(parsed, frames, forms, exc, resolved=True):
     suspects = []
 
     def add(kind, name, confidence, reasons, **extra):
@@ -625,7 +625,7 @@ def _suspects(parsed, frames, forms, exc):
                      % (i, where)],
                     module=f['module'], offset=f.get('offset'), symbol=f.get('logSymbol'), source=f.get('logSource'))
     top = frames[0] if frames else None
-    if top and top['kind'] == 'game' and not (top.get('function') or {}).get('name'):
+    if resolved and top and top['kind'] == 'game' and not (top.get('function') or {}).get('name'):
         caller = next((f for f in frames[1:8] if f['kind'] == 'game' and (f.get('function') or {}).get('name')), None)
         add('pattern', 'crash in runtime/library code', 'medium',
             ['the faulting address %s is outside the decomp functions (runtime code such as memcpy/memset); '

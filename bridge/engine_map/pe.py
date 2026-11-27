@@ -55,9 +55,9 @@ class Image:
         if not s:
             return b''
         off = va - s['va']
-        if off >= s['rawsize']:
-            return b'\0' * size
-        return self.data[s['raw'] + off: s['raw'] + min(off + size, s['rawsize'])]
+        size = min(size, max(s['vsize'], s['rawsize']) - off)
+        raw = self.data[s['raw'] + off: s['raw'] + min(off + size, s['rawsize'])] if off < s['rawsize'] else b''
+        return raw + b'\0' * (size - len(raw))  # the part past the raw data is zero-initialised BSS
 
     def u32(self, va):
         b = self.read(va, 4)

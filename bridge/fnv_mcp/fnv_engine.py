@@ -224,7 +224,7 @@ class EngineMap:
         address = parse_address(ref)
         if address is not None and address in self.functions:
             return address
-        if address is not None and re.fullmatch(r'(0x)?[0-9a-fA-F]{6,8}', str(ref).strip()):
+        if address is not None and re.fullmatch(r'(0x)?[0-9a-fA-F]{6,8}', str(ref).strip().replace('`', '')):
             hit = self.containing(address)
             if hit:
                 return hit[0]
@@ -432,7 +432,7 @@ class EngineMap:
                 for address in by_file[rel]:
                     start, end = self.functions[address]['lines']
                     matches = []
-                    for n in range(start, end + 1):
+                    for n in range(start, min(end, len(lines)) + 1):  # the file may have shrunk since the map loaded
                         if rx.search(lines[n - 1]):
                             matches.append({'line': n, 'text': lines[n - 1].strip()[:200]})
                             if len(matches) >= max_matches_per_function:

@@ -60,7 +60,7 @@ ACTOR_VALUES = (
     'Variable06 Variable07 Variable08 Variable09 Variable10 IgnoreCrippledLimbs Dehydration Hunger '
     'SleepDeprevation DamageThreshold').split()
 SPECIAL = ACTOR_VALUES[5:12]
-SKILLS = ACTOR_VALUES[32:45]
+SKILLS = ACTOR_VALUES[32:46]
 
 # Extra data type ids (xNVSE GameExtraData.h ExtraDataType).
 EXTRA_TYPES = dict((int(k, 16), v) for k, v in (item.split(':') for item in (
