@@ -164,7 +164,10 @@ class FieldWatchTools:
             if not r.get('ok'):
                 raise ValueError('The companion could not set the watchpoint: %s' % (r.get('error') or r))
         except BaseException:
-            release_debug_register(self.link, slot)
+            try:
+                release_debug_register(self.link, slot)
+            except Exception:  # noqa: BLE001 - a dead pipe here must not replace the original error
+                pass
             raise
         try:
             # inside the try: a reply without seq or a journal error must still free the register (bug hunt 2026-11-18)

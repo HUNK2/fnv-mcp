@@ -37,13 +37,29 @@ def log_path(state_dir):
 def _homes():
     """The user's profile folder, as it may be written in a value (both slashes)."""
     home = os.environ.get('USERPROFILE') or str(Path.home())
-    return sorted({home, home.replace('\\', '/')}, key=len, reverse=True) if home else []
+    if not home:
+        return []
+    # slash forms, and the doubled backslash a JSON dump (or an escaped string) writes
+    forms = {home, home.replace('\\', '/'), home.replace('\\', '\\\\'), home.replace('\\', '//')}
+    return sorted(forms, key=len, reverse=True)
 
 
 def scrub(text):
     for home in _homes():
         text = re.sub(re.escape(home), '%USERPROFILE%', text, flags=re.I)
     return text
+
+
+def _scrub_tree(node):
+    """node with the profile folder removed from every string (keys too) BEFORE it is serialised: json.dumps doubles
+    backslashes and escapes non-ASCII, so scrubbing the dumped text would miss them."""
+    if isinstance(node, str):
+        return scrub(node)
+    if isinstance(node, dict):
+        return {(scrub(k) if isinstance(k, str) else k): _scrub_tree(v) for k, v in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [_scrub_tree(v) for v in node]
+    return node
 
 
 def _value(value, limit=VALUE_MAX):
@@ -54,7 +70,7 @@ def _value(value, limit=VALUE_MAX):
     if isinstance(value, str):
         text = scrub(value)
     else:
-        text = scrub(json.dumps(value, default=str))
+        text = scrub(json.dumps(_scrub_tree(value), default=str))
         if len(text) <= limit:
             return json.loads(text)
     return text if len(text) <= limit else text[:limit - 3] + '...'

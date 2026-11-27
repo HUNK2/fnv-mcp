@@ -114,7 +114,10 @@ class ReplayTools:
             if rest > 0:
                 at += self._step(control, rest)
         except Exception:
-            control.release()
+            try:
+                control.release()
+            except Exception:  # noqa: BLE001 - a dead pipe here must not replace the error of the replay
+                pass
             raise
         return verdict('Replayed %s: %d jobs over %d frames; the game is held at the end' % (name, len(done), at),
                        'Loaded %s, seeded the generator with %s, then stepped the frame gate to each job. Inspect the '

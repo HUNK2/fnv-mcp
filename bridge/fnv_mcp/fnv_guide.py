@@ -264,6 +264,9 @@ class GuideTools:
         if not words or not words.strip():
             raise ValueError('engine needs words, for example "barter price" or "fast travel"')
         query = stems(words)
+        if not query:
+            raise ValueError('engine needs words that say something: "%s" has only filler words. Next: name the thing, '
+                             'for example "barter price" or "fast travel"' % words.strip()[:60])
         facts = []
         from .fnv_facts import FACTS
         for name, fact in FACTS.items():

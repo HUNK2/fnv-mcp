@@ -285,7 +285,7 @@ class ProfileTools:
         if action == 'diff':
             if not a.get('before') or not a.get('after'):
                 raise ConvError('BAD_ARGUMENTS', 'diff needs before and after (saved profile names or paths).')
-            return self.diff(a['before'], a['after'])
+            return self.diff(a['before'], a['after'], a.get('top') or 20)
         raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: sample, diff.' % action)
 
 
@@ -412,7 +412,10 @@ class MemoryTools:
             time.sleep(float(seconds))
             rows = self.deep.table(hook) if self.deep else []
         finally:
-            self.live.link.one('unhook', word(hook['id']))
+            try:
+                self.live.link.one('unhook', word(hook['id']))
+            except Exception:  # noqa: BLE001 - a dead pipe here must not replace the error of the run
+                pass
         engine = self.live.engine()
         out = []
         for r in sorted(rows, key=lambda r: -r['count'])[:int(top)]:

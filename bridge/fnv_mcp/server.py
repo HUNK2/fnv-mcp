@@ -341,6 +341,8 @@ def cap_answer(structured, parameters, arguments, cap=None):
         parent = parent[key]
     rows = parent[path[-1]] if path else holder
     total = len(rows)
+    if len(json.dumps(rows, default=str)) * 2 < len(json.dumps(holder, default=str)) and total <= 10:
+        return structured             # a few rows are not what makes it big: cutting them would only lose data
     holder['truncated'] = True
     holder['truncatedNote'] = ''
     low, high = 0, total                          # the most rows that fit, by bisection
@@ -353,13 +355,16 @@ def cap_answer(structured, parameters, arguments, cap=None):
         else:
             high = mid - 1
     parent[path[-1]] = rows[:low]
+    if low == 0 and (total <= 10 or len(json.dumps(out, default=str)) > cap):
+        return structured             # cutting the rows would not make it fit (or loses a small list): cut nothing
     holder['truncatedNote'] = _cap_note(low, total, path, parameters, arguments)
     return out
 
 
 def _cap_note(kept, total, path, parameters, arguments):
     name = '.'.join(map(str, path)) or 'the rows'
-    start = int((arguments or {}).get('offset') or 0)
+    start = (arguments or {}).get('offset')
+    start = start if isinstance(start, int) and not isinstance(start, bool) else 0   # only an int offset pages
     text = 'Cut to fit %d characters: %d of the %d rows of %s.' % (ANSWER_CAP, kept, total, name)
     if 'offset' in parameters:
         return text + ' Call again with offset=%d for the next rows.' % (start + kept)
