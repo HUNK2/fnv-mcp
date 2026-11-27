@@ -1,8 +1,24 @@
 # Changelog
 
-## fnv-mcp 0.5.0b1 (0.5.0 beta 1) - unreleased
+## fnv-mcp 0.5.0b1 (0.5.0 beta 1) - 2026-11-27
 
-The first version of the fork. The entries below this one are geck-mcp-nv's own history, by 2Shay.
+The first version of the fork, and its first public beta. It is tested on one PC (Windows 11, the Steam game, with
+Mod Organizer 2 and without). The entries below this one are geck-mcp-nv's own history, by 2Shay.
+
+- **README and release download (2026-11-27):** the README shows three pictures taken through the tools
+  (`docs/images`), a table of what it needs and a safety section, and the release download carries the pictures.
+  The download links in the setup guide were checked and the "to confirm" marks are gone. The note in `LICENSE`
+  about GECK MCP for Fallout 3 no longer points to a folder that was removed; the credit stays.
+
+- **Runs on another PC (2026-11-26):** the server finds the game itself. The example project files say
+  `"game_root": "auto"`: the game's registry key, Steam's entry for app 22380 and every Steam library are searched,
+  and the server stops with one plain line when no game is found. 7-Zip, Zig on PATH, the unpacked game image and
+  the compiler kit are looked up in one place (`fnv_mcp/locate.py`). A missing optional part answers with a plain
+  code and its fix: `CAPSTONE_MISSING`, `COMPILER_MISSING`, `DECOMP_UNAVAILABLE` or `NO_DECOMP`,
+  `CLEAN_EXE_MISSING`. The setup guide lists every download with its tested version and where it comes from, and
+  `fnv_setup_check` has a row for the compiler kit. The live runner takes its project file from `--project`,
+  `FNV_LIVE_PROJECT`, `projects/my-fnv.json` or the only project file. The tests fail if a path of the build
+  machine comes back into a tracked file.
 
 - **Bug fixes (2026-11-24, GitHub issues 4, 5, 7, 21, 22, 23, 24, 25, 27, 37, 40):** a journal line with a field
   of the wrong type is skipped instead of breaking every journal read; journal compaction never rewrites

@@ -246,6 +246,28 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(any(n.endswith('bridge/run_mcp.py') for n in names))
         self.assertTrue(any(n.endswith('.yaml') for n in names))
 
+    def test_readme_pictures_go_in_and_other_images_stay_out(self):
+        """The README shows pictures from docs/images: the download must carry them, and no other image."""
+        self.assertTrue(release.included('docs/images/build-campfire.jpg'))
+        self.assertTrue(release.included('docs/images/diagram.png'))
+        for name in ('bridge/state/fnv/screens/shot.png', 'bridge/tests/fixtures/tex.png', 'docs/shot.jpg',
+                     'bridge/docs/images/shot.jpg', 'docs/images/notes.exe', 'docs/images/sub/shot.jpg'):
+            with self.subTest(name=name):
+                self.assertFalse(release.included(name))
+
+    def test_every_picture_the_readme_shows_is_tracked(self):
+        repo = Path(__file__).resolve().parents[2]
+        text = (repo / 'README.md').read_text(encoding='utf-8')
+        shown = sorted(set(re.findall(r'\((docs/images/[^)\s]+)\)', text)))
+        self.assertTrue(shown, 'the README shows no picture from docs/images')
+        tracked_names = tracked()
+        if tracked_names is None:
+            self.skipTest('not a git checkout')
+        for name in shown:
+            with self.subTest(name=name):
+                self.assertIn(name, tracked_names)
+                self.assertTrue(release.included(name))
+
     def test_unsafe_paths_refused(self):
         for name in ('../outside.py', '/outside.py', 'bridge/../../outside.py',
                      'bridge\\outside.py', 'bridge/file:stream.py'):

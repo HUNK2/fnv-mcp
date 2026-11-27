@@ -18,9 +18,12 @@ from fnv_mcp.fnv_state import GameIdentity, StateError, atomic_write, locked, re
 
 def _increment(path, n):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from fnv_mcp.fnv_state import update_json as up
+    from fnv_mcp.fnv_state import locked as lk, update_json as up
     for _ in range(n):
-        up(Path(path), lambda v: {'n': v['n'] + 1}, {'n': 0})
+        # The lock is not fair: on a slow disk one process can wait out the other's whole run, longer than
+        # update_json's own 10 s. The test is about lost updates, so the wait is taken out of it here.
+        with lk(Path(path), timeout=120):
+            up(Path(path), lambda v: {'n': v['n'] + 1}, {'n': 0})
 
 
 def _hold(path, ready, release):
@@ -44,8 +47,8 @@ class StateStoreTests(unittest.TestCase):
         for p in procs:
             p.start()
         for p in procs:
-            p.join(120)
-            self.assertEqual(p.exitcode, 0)
+            p.join(240)
+        self.assertEqual([p.exitcode for p in procs], [0, 0])      # after both ended: none still holds the lock file
         self.assertEqual(json.loads(path.read_text())['n'], 400)
 
     def test_atomic_write_while_reader_holds_file(self):

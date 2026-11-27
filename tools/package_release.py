@@ -2,8 +2,8 @@
 
 The archive is fnv-mcp-<version>.zip with one top folder of the same name; the version comes from
 bridge/pyproject.toml and must agree with fnv_mcp/__init__.py and the first CHANGELOG heading. Source, scenario
-(.yaml) and script (.gek) files go in; binaries, private state, game-derived fixtures and internal working notes
-stay out."""
+(.yaml) and script (.gek) files go in, and the README's pictures (docs/images); other binaries, private state,
+game-derived fixtures and internal working notes stay out."""
 import argparse
 import ast
 import hashlib
@@ -17,6 +17,7 @@ import zipfile
 NAME = 'fnv-mcp'
 ROOT_FILES = {'README.md', 'CHANGELOG.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'}
 SOURCE_SUFFIXES = {'.py', '.cs', '.c', '.h', '.json', '.toml', '.txt', '.md', '.yaml', '.yml', '.gek'}
+IMAGE_SUFFIXES = {'.jpg', '.png'}       # only directly in docs/images (the README's pictures)
 # Working notes that are not for users (they live outside the repository now; kept out if they come back).
 INTERNAL = {'HANDOFF.md', 'STATUS.md', 'MCPworkflow.md', 'BUG-LOG.md', 'M1-FAST-BRIDGE.md'}
 INTERNAL_DIRS = {'audit3', 'audit4', 'internal'}
@@ -31,6 +32,8 @@ def included(name):
         raise ValueError('unsafe archive path')
     if name in ROOT_FILES:
         return True
+    if p.parts[:2] == ('docs', 'images'):       # the README's pictures, and nothing else binary
+        return len(p.parts) == 3 and p.suffix.lower() in IMAGE_SUFFIXES
     if not p.parts or p.parts[0] not in {'bridge', 'docs', 'tools'}:
         return False
     if p.name in INTERNAL or INTERNAL_DIRS & set(p.parts):

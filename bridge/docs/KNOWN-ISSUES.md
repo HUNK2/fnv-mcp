@@ -7,11 +7,22 @@ damaged file. Most are tracked as GitHub issues.
 
 - The Claude app does not fetch the tool list again after the server announces a change; restart the client after
   updating the server.
+- With `game_root` `"auto"` and no game found, the server stops at start with one line (the client shows it in its
+  MCP log), so `fnv_setup_check` cannot be asked what is missing. Set `game_root` to the game folder.
 
 ## Tool arguments
 
 - A few `fnv_*` parameters are accepted but change nothing in some actions, so a call does not say that an argument
   had no effect.
+- `fnv_move` does not turn a reference in place: a rotation with no target, cell or position is refused
+  (`INVALID_ARGUMENT`). Use `fnv_world_edit rotate`.
+- `fnv_place array shape=circle` gives every copy the same heading. To make them face the centre, place them one
+  by one with `at` and a rotation each.
+
+## State files
+
+- The lock on a state file is not fair. A process that updates one state file without a pause for more than 10 s
+  makes another process's update of that file fail with `STATE_LOCKED`. Seen only in a test on a slow disk.
 
 ## Undo and the journal
 
@@ -76,6 +87,9 @@ damaged file. Most are tracked as GitHub issues.
 
   After a hang, end the game with `fnv_game action=quit force=true` and launch again.
 - After a launch in which no game started, `fnv_status` says the game was terminated from outside.
+- `fnv_photo view label=true` also draws a box for a reference that is behind a wall.
+- `fnv_actor_control set_position` on an actor that `fnv_move` has just moved to another cell can leave the actor
+  in the old cell with the new coordinates (seen once, 2026-11-27).
 - The audio-cache setting can stay off when writing it back fails.
 - `fnv_crawl cells` moves the player with a `coc` that is not journaled.
 - `fnv_window persist` and `fnv_warnings enable` write files although `fnv.engine_control` is `"read"`.

@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ---------------------------------------------------------------------------
-The windows/ folder is a modified copy of "GECK MCP" for Fallout 3,
-Copyright (c) 2026 maksimka2432fr23, also MIT-licensed. Its original licence
-text is kept unchanged in windows/LICENSE. See THIRD_PARTY_NOTICES.md.
+geck-mcp-nv's first windows/ server was a modified copy of "GECK MCP" for
+Fallout 3, Copyright (c) 2026 maksimka2432fr23, also MIT-licensed. That folder
+was removed from this repository on 2026-11-15; its original licence text
+(windows/LICENSE) is in the git history. See THIRD_PARTY_NOTICES.md.

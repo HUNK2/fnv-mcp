@@ -11,29 +11,29 @@ tested end to end: [examples/hello-quest](../examples/hello-quest/README.md).
 ## What you need (the downloads)
 
 You download everything below yourself; fnv-mcp downloads nothing and ships no game files, no decompilation and
-nothing generated from them. "Tested" is the version the tools are tested with. Where the page is marked
-"to confirm", the exact link is not checked here: get the file from the project's own page.
+nothing generated from them. "Tested" is the version the tools are tested with. The links were checked on
+2026-11-27.
 
 | What | Tested | Where it comes from | Needed? | Which tools need it |
 | --- | --- | --- | --- | --- |
 | Windows 10 or 11 (64-bit) | Windows 11 | | required | all (Windows only) |
-| Fallout: New Vegas, **Steam edition**, FalloutNV.exe 1.4.0.525 | 1.4.0.525 | Steam (app 22380) | required | everything that reads or runs the game. GOG and Epic copies are untested (to confirm) |
+| Fallout: New Vegas, **Steam edition**, FalloutNV.exe 1.4.0.525 | 1.4.0.525 | Steam (app 22380) | required | everything that reads or runs the game. GOG copies are untested. Epic, Bethesda.net and Game Pass copies do not run xNVSE (the FNV 4GB Patcher's page says so), so the live tools cannot work with them |
 | Python 3.12 with the `py` launcher | 3.12.10 | https://www.python.org | required | the server itself |
 | The Python packages, pinned in `requirements.lock.txt` (direct ones: `mcp` 2.2.0, `pydantic` 2.13.5, `anyio` 4.15.1, `pillow` 12.3.0, `numpy` 2.5.3; also `pywin32` 312) | as pinned | PyPI, through `pip install -r requirements.lock.txt` (step 1) | required | the server itself |
 | `capstone` 5.0.7 (the `naming` extra) | 5.0.7 | PyPI (https://www.capstone-engine.org) | optional | `fnv_probe`, `fnv_atlas`, `fnv_engine_get` purity check, the `fnv_name_*` tools; without it they answer `CAPSTONE_MISSING` |
 | An MCP client (Claude Code, Claude Desktop, Codex...) | Claude Code | its maker | required | |
 | xNVSE | 6.4.9 | https://github.com/xNVSE/NVSE (its releases; the file is `nvse_6_4_9.7z`) | required | the engine companion is an xNVSE plugin: every live tool |
-| JIP LN NVSE | 57.30 | Nexus Mods, Fallout New Vegas mod 58277 (to confirm) | required (setup check) | live tools that call its script commands, such as `CloseActiveMenu` in test runs and menu handling |
-| Yvile's Crash Logger | 5.17a | Nexus Mods, Fallout New Vegas mod 82540 (to confirm); source https://github.com/yvileapsis/yUI-NVSE | required (setup check) | `fnv_crash` reads its logs |
-| 4 GB patch (makes FalloutNV.exe large address aware) | the FNV 4GB Patcher (`FalloutNVpatch.exe`), version to confirm | Nexus Mods (to confirm) | recommended | none directly; a modded game runs out of memory without it |
+| JIP LN NVSE | 57.30 | Nexus Mods: https://www.nexusmods.com/newvegas/mods/58277; source https://github.com/jazzisparis/JIP-LN-NVSE | required (setup check) | live tools that call its script commands, such as `CloseActiveMenu` in test runs and menu handling |
+| Yvile's Crash Logger | 5.17a | Nexus Mods: https://www.nexusmods.com/newvegas/mods/82540; source and releases https://github.com/yvileapsis/yUI-NVSE | required (setup check) | `fnv_crash` reads its logs |
+| 4 GB patch (makes FalloutNV.exe large address aware) | the FNV 4GB Patcher (`FalloutNVpatch.exe`); its version on the test machine was not recorded | Nexus Mods: https://www.nexusmods.com/newvegas/mods/62552 | recommended | none directly; a modded game runs out of memory without it |
 | Mod Organizer 2, portable | 2.5.2 (`Mod.Organizer-2.5.2.7z`) | https://github.com/ModOrganizer2/modorganizer (its releases) | optional (without it the tools use the game as Steam installed it, see "Without Mod Organizer 2") | the MO2 dev profile: `fnv_game launch`, `fnv_install`, `fnv_profile_set`, `fnv_bisect` on a profile of its own |
 | 7-Zip | 24.09 | https://www.7-zip.org | needed for step 3 only | `tools\fnv_setup_dev_profile.py` unpacks the archives with it (found on PATH or from its install; `--7zip` otherwise) |
 | Zig | 0.14.1 (`zig-x86_64-windows-0.14.1.zip`) | https://ziglang.org/download/0.14.1/zig-x86_64-windows-0.14.1.zip (the CI downloads this file and checks its SHA-256 `554f5378228923ffd558eac35e21af020c73789d87afeabf4bfd16f2e6feed2c`) | required for the live tools | builds the engine companion (`fnv_companion_install`), `fnv_native`, `fnv_plugin_build`; without it they answer `ZIG_MISSING` |
 | A checkout of the fnv_decomp decompilation | the current `main` | https://github.com/momusdigital/fnv_decomp | required for engine knowledge | the engine map (`fnv_func`, `fnv_class`, `fnv_symbolize`, `fnv_global_find`, `fnv_setting_info`, `fnv_command_info`, `fnv_script_explain`, `fnv_probe`, the debugger's names); `fnv_code` and `fnv_func` source need the checkout itself |
 | Your own unpacked FalloutNV.exe (see below) | from 1.4.0.525 | you make it from your own copy | optional | `fnv_patch_map`, `fnv_code`, `fnv_probe`, the symbol database and planning hooks while the game is closed; without it they answer `CLEAN_EXE_MISSING` or ask for the running game |
-| The compiler kit fnv_decomp builds with: Visual C++ 2008 SP1 (15.00.30729.01), some units 2008 RTM (15.00.21022.08) or 2005 SP1 | as named | Microsoft (to confirm); fnv_decomp's `tools/msvc.py` says how it is laid out | optional | `fnv_code build` only; set `FNV_MSVC9_ROOT` (and `FNV_MSVC9_RTM_ROOT`, `FNV_MSVC8_ROOT`) to the folder with `VC\` and `SDK\`; without it, `COMPILER_MISSING` |
-| The xNVSE and JIP LN NVSE source trees | as above | https://github.com/xNVSE/NVSE; JIP LN source (to confirm) | optional | `engine_map.generate --nvse-src/--plugin-src`: script command names in the engine map |
-| An fnvsym proof folder | | not public (to confirm) | optional | the `fnv_name_*` tools (`FNVSYM_ROOT`); without it they answer `NO_PROOF_FOLDER` |
+| The compiler kit fnv_decomp builds with: Visual C++ 2008 SP1 (15.00.30729.01), some units 2008 RTM (15.00.21022.08) or 2005 SP1 | as named | Microsoft (no download link was checked for this guide); fnv_decomp's `tools/msvc.py` says how it is laid out | optional | `fnv_code build` only; set `FNV_MSVC9_ROOT` (and `FNV_MSVC9_RTM_ROOT`, `FNV_MSVC8_ROOT`) to the folder with `VC\` and `SDK\`; without it, `COMPILER_MISSING` |
+| The xNVSE and JIP LN NVSE source trees | as above | https://github.com/xNVSE/NVSE; https://github.com/jazzisparis/JIP-LN-NVSE | optional | `engine_map.generate --nvse-src/--plugin-src`: script command names in the engine map |
+| An fnvsym proof folder | | not public | optional | the `fnv_name_*` tools (`FNVSYM_ROOT`); without it they answer `NO_PROOF_FOLDER` |
 | Git | any | https://git-scm.com | optional | to clone this repository |
 
 `fnv_setup_check` reports the same things on your machine: the game and its version, the 4 GB patch, xNVSE, JIP LN
@@ -43,7 +43,7 @@ database, the proof folder, the compiler kit, capstone, the unpacked exe and the
 **Your own unpacked FalloutNV.exe.** The Steam FalloutNV.exe keeps its code encrypted on disk (SteamStub), so tools
 that read the engine's code with the game closed need an unpacked copy. Make it from your own game: copy the
 original exe (if you used the 4 GB patcher, it kept the original as `FalloutNV_backup.exe`) to a folder of your
-own, run Steamless (https://github.com/atom0s/Steamless, version to confirm) on the copy, and set `fnv.clean_exe`
+own, run Steamless (https://github.com/atom0s/Steamless, tested with 3.1.0.5) on the copy, and set `fnv.clean_exe`
 (or `FNV_CLEAN_EXE`) to the unpacked file. fnv-mcp reads it on your machine only and never copies it. Never put it in
 a repository or share it: it is the game's code.
 
