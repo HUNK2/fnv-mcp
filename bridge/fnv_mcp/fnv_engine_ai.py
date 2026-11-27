@@ -180,8 +180,9 @@ class EngineAITools:
     def _unhook(self, h):
         try:
             self.agent.deep.remove(h['id'])
+            return True
         except Exception:
-            pass
+            return False
 
     # ================================================================== fnv_detection
     def detection(self, observer, target='player', recompute=True):
@@ -468,12 +469,14 @@ class EngineAITools:
         if action == 'evaluate':
             return self._perk_evaluate(entry_point, value, actor, filters or [])
         if action == 'stop':
-            removed = 0
+            removed = failed = 0
             for h in self.agent.deep.hooks():
                 if h['label'] in labels:
-                    self._unhook(h)
-                    removed += 1
-            return {'stopped': removed}
+                    if self._unhook(h):
+                        removed += 1
+                    else:
+                        failed += 1
+            return {'stopped': removed, 'failed': failed} if failed else {'stopped': removed}
         if action == 'start':
             filt = (SEL_ARG[0], int(entry_point)) if entry_point is not None else (0, 0)
             # Result pointer: argument 1 + filter count (ep, actor, filters..., result); dereference both candidates
@@ -568,6 +571,10 @@ class EngineAITools:
         kept_since = getattr(self, '_perk_since', (0, 0))
         if not recording:
             self.perk_entries('start')
+        else:
+            # read only what this call records, not the caller's earlier checks of the same entry point
+            running = {h['label']: h for h in self.agent.deep.hooks() if h['label'] in labels}
+            self._perk_since = (self._seq(running[labels[0]]), self._seq(running[labels[1]]))
         try:
             self.link.one('wr', word(buf), struct.pack('<f', start).hex())
             self._call(APPLY_PERK_MODIFIERS, 0, ep, owner, *fptrs, buf)
@@ -579,10 +586,14 @@ class EngineAITools:
             else:
                 self.perk_entries('stop')
         mine = [c for c in recorded['calls'] if c['entryPoint']['id'] == ep]
+        note = ("Run now with the game's own ApplyPerkModifiers: only the player (and teammates, through the "
+                'player) have perk entries. No entry applied means no perk of the owner changes this value.')
+        if recording and not mine:
+            note += (' A recording you started earlier is running; if it was started with another entry_point its '
+                     'filter drops this call, so appliedEntries may be empty for that reason.')
         return {'entryPoint': {'id': ep, 'name': name}, 'valueBefore': start, 'valueAfter': _r(result, 4),
                 'appliedEntries': mine[-1]['appliedEntries'] if mine else [],
-                'note': "Run now with the game's own ApplyPerkModifiers: only the player (and teammates, through the "
-                        'player) have perk entries. No entry applied means no perk of the owner changes this value.',
+                'note': note,
                 'uses': recorded['uses']}
 
     def _perk_entry_map(self):

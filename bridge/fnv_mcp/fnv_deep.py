@@ -68,7 +68,7 @@ _MODRM_IMM8 = {0x80, 0x82, 0x83, 0x6B, 0xC0, 0xC1, 0xC6}
 _MODRM_IMM32 = {0x81, 0x69, 0xC7}
 _IMM8 = {0x6A, 0x04, 0x0C, 0x14, 0x1C, 0x24, 0x2C, 0x34, 0x3C, 0xA8} | set(range(0xB0, 0xB8))
 _IMM32 = {0x68, 0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x35, 0x3D, 0xA9} | set(range(0xB8, 0xC0))
-_PLAIN = set(range(0x40, 0x60)) | {0x90, 0x98, 0x99, 0xCC, 0xFC, 0xF8, 0xF9}
+_PLAIN = set(range(0x40, 0x60)) | {0x90, 0x98, 0x99, 0xFC, 0xF8, 0xF9}
 _0F_MODRM = {0xB6, 0xB7, 0xBE, 0xBF, 0xAF, 0x1F, 0x10, 0x11, 0x28, 0x29, 0x57, 0x6E, 0x7E, 0xD6} | \
     set(range(0x40, 0x50)) | set(range(0x90, 0xA0))
 
@@ -105,11 +105,15 @@ def _instruction(code, i):
     if op in (0xA0, 0xA1, 0xA2, 0xA3):
         return i + 4 - start, None
     if op in (0xE8, 0xE9):
+        if op16:
+            raise HookError('UNSUPPORTED_PROLOGUE', 'A 16-bit relative jump or call (66 %02X) in the prologue' % op)
         return i + 4 - start, i - start
     if op == 0x0F:
         op2 = code[i]
         i += 1
         if 0x80 <= op2 <= 0x8F:
+            if op16:
+                raise HookError('UNSUPPORTED_PROLOGUE', 'A 16-bit conditional jump (66 0F %02X) in the prologue' % op2)
             return i + 4 - start, i - start
         if op2 in _0F_MODRM:
             return i + _modrm_length(code, i) - start, None
@@ -294,7 +298,11 @@ class DeepTools:
         if live is None:
             raise HookError('UNREADABLE', 'Cannot read %s' % spec['function'])
         clean = self._clean_bytes(address, 24)
-        if clean is not None and live[:8] != clean[:8] and live[0] != 0xE9:
+        try:
+            same_to = max(8, decode_prologue(live)[0])      # the whole stolen length, not only the first 8 bytes
+        except HookError:
+            same_to = 8
+        if clean is not None and live[:same_to] != clean[:same_to] and live[0] != 0xE9:
             raise HookError('PATCHED_ELSEWHERE', '%s was changed by another module in a way the hook cannot chain onto'
                             % spec['function'], {'live': live[:16].hex(' '), 'clean': clean[:16].hex(' ')})
         stolen, relocs = decode_prologue(live)
@@ -709,7 +717,12 @@ class DeepTools:
             targets = [h for h in self.hooks() if hook_id in (None, 'all') or str(h['id']) == str(hook_id)]
             for h in targets:
                 self.remove(h['id'])
-            self._baseline = {}
+            if hook_id in (None, 'all'):
+                self._baseline = {}
+            else:       # one hook: only the windows that relied on it end
+                for h in targets:
+                    self._baseline.pop(h['label'], None)
+                    self._hook_gone(h['label'])
             if targets:      # the history is complete even for hooks no entry knew (S3.6)
                 self.live.journal.add({'kind': 'hook_removed', 'labels': [h['label'] for h in targets],
                                        'targets': [h['target'] for h in targets], 'undo': None})
@@ -798,8 +811,9 @@ class DeepTools:
             cpu_before = {tid: proc.thread_cpu_ms(tid) for tid in threads}
             busy_window = time.monotonic()
             time.sleep(0.5)
-            cpu = {tid: (proc.thread_cpu_ms(tid) or 0.0) - (cpu_before.get(tid) or 0.0) for tid in threads
-                   if cpu_before.get(tid) is not None}
+            after = {tid: proc.thread_cpu_ms(tid) for tid in threads}
+            cpu = {tid: after[tid] - cpu_before[tid] for tid in threads
+                   if cpu_before.get(tid) is not None and after.get(tid) is not None}
             window_ms = (time.monotonic() - busy_window) * 1000.0
             busy = [tid for tid, ms in sorted(cpu.items(), key=lambda kv: -kv[1])
                     if tid != main and ms >= 0.25 * window_ms][:3]
@@ -1041,9 +1055,11 @@ class DeepTools:
         for slot, (dll, fn) in image.imports().items():
             value = proc.u32(slot)
             m = fnv_procmem.module_at(modules, value) if value else None
-            if not m or m['path'].lower().startswith(system):
+            if not value or (m and m['path'].lower().startswith(system)):
                 continue
-            out.append({'slot': '0x%08X' % slot, 'import': '%s!%s' % (dll, fn), 'owner': m['name'],
+            # a target in no module is a trampoline someone allocated (a detour-style IAT hook)
+            out.append({'slot': '0x%08X' % slot, 'import': '%s!%s' % (dll, fn),
+                        'owner': m['name'] if m else 'allocated memory (trampoline or stub)',
                         'destination': '0x%08X' % value})
         return out
 

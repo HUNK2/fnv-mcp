@@ -746,10 +746,12 @@ class Debugger:
             swept = {'bps': result.get('cleared'), 'toSites': result.get('toSites'), 'hooks': []}
             self.pending_to.clear()
             self.link.one('faulthold', 'off')
+            held = {b.get('id') for b in self.breaks.values()}          # stuck ones stay listed, not swept
             for h in self.link.one('hooks').get('hooks', []):
-                if str(h.get('label') or '').startswith('dbg ') and h.get('stolen', 1):
-                    self.link.one('unhook', word(h['id']))
-                    swept['hooks'].append(h['id'])
+                if str(h.get('label') or '').startswith('dbg ') and h.get('stolen', 1) and h['id'] not in held:
+                    out = self.link.one('unhook', word(h['id']))
+                    if out.get('ok') or out.get('error') in ('already_removed', 'unknown_hook'):
+                        swept['hooks'].append(h['id'])
             kept = {b.get('predSlot') for b in self.breaks.values()}     # (K6) a break whose unhook failed
             if self.breaks:
                 kept.add(MAIN_SLOT)                                     # its thread filter may be the `main` slot

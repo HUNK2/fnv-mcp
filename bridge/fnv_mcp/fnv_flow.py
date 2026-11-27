@@ -135,11 +135,16 @@ class FlowTools:
 
     def run(self, action, **args):
         if action == 'call':
+            if args.get('when'):
+                raise ConvError('BAD_ARGUMENTS', 'when applies to action=trace only; call runs the function at once.')
             return self.trace(args.get('function'), None, args.get('depth') or 0, args.get('max_steps'),
                               call=(args.get('this'), list(args.get('args') or [])))
         if action != 'trace':
             raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid actions: trace, call.' % action,
                             {'actions': ['trace', 'call']})
+        if args.get('this') or args.get('args'):
+            raise ConvError('BAD_ARGUMENTS', 'this and args apply to action=call only; trace waits for the game to '
+                            'call the function.')
         return self.trace(args.get('function'), args.get('when'), args.get('depth') or 0, args.get('max_steps'))
 
     # ================================================================ trace
@@ -212,15 +217,17 @@ class FlowTools:
                 pass
             raise
         if stop is None:
-            with self.dbg.lock:     # no other tool takes the bp id between the clear and the look below
-                self.link.one('bp', 'clear', word(bp_id))
-                # (K9) a hit between the last look and the clear has parked its thread already (bp clear does not
-                # release stops): let it go on, nothing waits on it
-                late = self._await_bp(bp_id, 0, addr=fn['addr'], seen=seen)
-            if late is not None:
-                self._release_quietly(late['seq'], None)
-            if slot:                        # the module must not make the call later, into another tool's break
-                self.link.write(slot, struct.pack('<I', 0))
+            try:
+                with self.dbg.lock:     # no other tool takes the bp id between the clear and the look below
+                    self.link.one('bp', 'clear', word(bp_id))
+                    # (K9) a hit between the last look and the clear has parked its thread already (bp clear does not
+                    # release stops): let it go on, nothing waits on it
+                    late = self._await_bp(bp_id, 0, addr=fn['addr'], seen=seen)
+                if late is not None:
+                    self._release_quietly(late['seq'], None)
+            finally:
+                if slot:                    # the module must not make the call later, into another tool's break
+                    self.link.write(slot, struct.pack('<I', 0))
             raise ConvError('NOT_CALLED', '%s was not called within %d s, so nothing was traced; the breakpoint is '
                             'cleared. Next: make the game call it, then trace again.' % (fn['name'], arm_wait))
         ended = {}
