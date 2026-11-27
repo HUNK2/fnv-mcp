@@ -395,7 +395,8 @@ def forget_plugin(state_dir, path):
     db = index.db
     try:
         with write_txn(db):
-            ids = [r[0] for r in db.execute('select id from files where lower(path) = ?', (str(path).lower(),))]
+            ids = [r[0] for r in db.execute('select id, path from files')
+                   if (r[1] or '').lower() == str(path).lower()]       # Python lower(): SQLite's folds A-Z only
             for old in ids:
                 db.execute('delete from records where file = ?', (old,))
                 db.execute('delete from files where id = ?', (old,))
@@ -535,7 +536,7 @@ class DataTools:
         offset = max(0, min(int(offset), 2 ** 31 - 1))
         entries, built = self._active()
         by_file = {e['fileId']: e for e in entries}
-        clauses, args = ['file in (%s)' % ','.join(str(i) for i in by_file) or '0'], []
+        clauses, args = ['file in (%s)' % (','.join(str(i) for i in by_file) or '0')], []
         q = (query or '').strip()
         m = re.match(r'^(?:0x)?([0-9A-Fa-f]{8})$', q)
         local = re.match(r'^(.+\.es[mp]):(?:0x)?([0-9A-Fa-f]{1,6})$', q, re.I)
@@ -598,8 +599,10 @@ class DataTools:
         if ref.startswith('@') and re.match(r'^@[A-Za-z0-9_]+$', ref):   # fnv_spec's "@EditorID", as fnv_form takes it
             ref = ref[1:]
         files = [e['fileId'] for e in entries]
-        row = self.index.db.execute('select owner, local from records where edid = ? collate nocase and file in (%s) '
-                                    'limit 1' % ','.join(map(str, files)), (ref,)).fetchone()
+        rows = self.index.db.execute('select owner, local, file from records where edid = ? collate nocase and file in (%s)'
+                                     % ','.join(map(str, files)), (ref,)).fetchall()
+        position = {e['fileId']: e['index'] for e in entries}
+        row = max(rows, key=lambda r: position.get(r[2], -1))[:2] if rows else None   # the later plugin wins
         if not row:
             raise DataError('RECORD_NOT_FOUND', 'No record %r in the active load order' % ref)
         return row

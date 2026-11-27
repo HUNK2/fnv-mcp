@@ -96,7 +96,7 @@ class PluginPlanTests(unittest.TestCase):
                                project=SimpleNamespace(state_dir=tempfile.gettempdir()))
         t = fnv_plugin_build.PluginTools(live)
         if image:
-            t._image_code = lambda address, length=24: PROLOGUE
+            t._image_code = lambda address, length=24: (PROLOGUE, 'local game image')   # the real return (BUG-109)
         else:
             def none(address, length=24):
                 raise ConvError('NO_CODE', 'no image')

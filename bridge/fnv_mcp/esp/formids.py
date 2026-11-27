@@ -164,6 +164,7 @@ class Resolver:
         self.own_lower = {k.lower(): v for k, v in self.own.items()}
         self.index = index or MasterIndex()
         self.self_byte = len(self.masters)
+        self._masters_lower = [m.lower() for m in self.masters]
 
     def resolve_typed(self, ref):
         """Like resolve(), but also return the base record type when known (else None)."""
@@ -174,7 +175,7 @@ class Resolver:
             if edid in self.own_lower:
                 rtype = self.own_types.get(edid)
             else:
-                hits = [h for h in self.index.lookup(ref[1:]) if self.index.masters[h[0]] in self.masters]
+                hits = [h for h in self.index.lookup(ref[1:]) if self.index.masters[h[0]].lower() in self._masters_lower]
                 rtype = max(hits, key=lambda h: h[0])[1] if hits else None
         return form, rtype
 
@@ -186,8 +187,11 @@ class Resolver:
         if ref.startswith('@'):
             edid = ref[1:]
             if edid.lower() in self.own_lower:
+                own_type = self.own_types.get(edid.lower())
+                if expect_types and own_type and own_type not in expect_types:
+                    raise FormIdError('%s is a %s, expected %s' % (ref, own_type, '/'.join(expect_types)))
                 return self.own_lower[edid.lower()]
-            hits = [h for h in self.index.lookup(edid) if self.index.masters[h[0]] in self.masters]
+            hits = [h for h in self.index.lookup(edid) if self.index.masters[h[0]].lower() in self._masters_lower]
             if expect_types:
                 typed = [h for h in hits if h[1] in expect_types]
                 if not typed and hits:
@@ -215,4 +219,4 @@ class Resolver:
 
     def _from_master(self, master, form_in_master):
         # Inside a master file, its own records carry that master's master-count as top byte.
-        return (self.masters.index(master) << 24) | (form_in_master & 0xFFFFFF)
+        return (self._masters_lower.index(master.lower()) << 24) | (form_in_master & 0xFFFFFF)

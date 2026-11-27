@@ -62,7 +62,7 @@ def scan_references(path, exists, condition_params=None):
     """[(from raw id, from type, record offset, tag, to raw id)] for a plugin. `exists(raw_id)` says whether a
     raw form id (as written in this plugin) names a record in its masters or itself."""
     data = Path(path).read_bytes()
-    if data[:4] != b'TES4':
+    if data[:4] != b'TES4' or len(data) < 24:
         raise DataError('NOT_A_PLUGIN', '%s is not a TES4 plugin' % path)
     header_size = struct.unpack_from('<I', data, 4)[0]
     out, pos, end = [], 24 + header_size, len(data)
@@ -569,7 +569,11 @@ class RecordsTools:
         backup = None
         if changes and not dry_run:
             backup = Path(project.state_dir) / 'fnv' / 'profile-backups' / time.strftime('%Y%m%d-%H%M%S')
-            backup.mkdir(parents=True, exist_ok=True)
+            serial = 1
+            while backup.exists():          # two changes in one second must not overwrite the first backup (BUG-123)
+                serial += 1
+                backup = backup.with_name('%s-%d' % (time.strftime('%Y%m%d-%H%M%S'), serial))
+            backup.mkdir(parents=True)
             for n, p in files.items():
                 if p.exists():
                     shutil.copy2(p, backup / n)

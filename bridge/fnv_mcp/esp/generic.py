@@ -238,6 +238,9 @@ def build_override(key, spec, resolver, masters, master_records, where=None):
     Returns (record, source file name). `override` is true (the key is the master's EditorID) or the record's
     "@EditorID" / FormID (the key is a label)."""
     where = where or 'records.%s' % key
+    unknown = set(spec) - {'type', 'override', 'fields', 'set', 'template', 'flags'}
+    if unknown:         # a typo such as "feilds" was dropped silently (BUG-119)
+        raise SpecError(where, 'unknown field(s) for an override: %s' % ', '.join(sorted(unknown)))
     target = spec['override'] if isinstance(spec['override'], str) else '@' + key
     source, rec = master_record(target, spec['type'], resolver, masters, master_records, where + '.override')
     subs = list(rec.subrecords)

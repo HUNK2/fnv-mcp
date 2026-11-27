@@ -499,7 +499,7 @@ def record_conditions(rtype, subs, items, resolve, where):
     if rtype == 'PERK':
         head = [s for s in subs if s.tag in ('EDID', 'FULL', 'DESC', 'ICON', 'MICO')]
         old = [s for s in subs[len(head):] if s.tag == 'CTDA' and not _in_effects(subs, s)]
-        rest = [s for s in subs[len(head):] if s not in old]
+        rest = [s for s in subs[len(head):] if not any(s is o for o in old)]
         subs[:] = head + made + rest
         return
     at = _drop(subs, {'CTDA'})

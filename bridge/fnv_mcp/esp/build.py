@@ -408,7 +408,8 @@ def override_topic(edid, rec_spec, resolver, masters, templates):
         raise SpecError('records.%s.override' % edid, str(e))
     if form >> 24 >= len(masters):
         raise SpecError('records.%s.override' % edid, '%s is not a master record' % edid)
-    rec = generic.build_generic(form, edid, {'type': 'DIAL', 'template': edid, 'fields': rec_spec.get('fields', [])},
+    rec = generic.build_generic(form, edid, {'type': 'DIAL', 'template': edid, 'fields': rec_spec.get('fields', []),
+                                 'set': rec_spec.get('set')},
                                 resolver, masters=masters, templates=templates)
     return rec
 

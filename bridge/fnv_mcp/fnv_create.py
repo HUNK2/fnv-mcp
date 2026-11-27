@@ -671,7 +671,7 @@ class AssetTools:
                                                     'and path in (?, ?) order by rowid', (file_id, want, bare)):
                 rows.append({'plugin': e['name'], 'type': rtype, 'formId': '%08X' % fid, 'editorId': edid,
                              'field': tag})
-        return {'path': want, 'users': rows, 'count': len(rows), 'unreadable': unreadable[:20] or None,
+        return {'path': want, 'users': rows[:max(1, int(limit or 100))], 'count': len(rows), 'unreadable': unreadable[:20] or None,
                 'how': 'every record of the load order plugins with a model, icon or texture field naming the file '
                        '(form ids as in each plugin, as fnv_record action=find shows them); each plugin is read once and '
                        'kept in the record index until its file changes'}
@@ -1056,7 +1056,7 @@ class FormTools:
 
     def changes(self, since=None):
         entries = [e for e in self.live.journal.entries() if e['kind'] in ('form_create', 'form_reload', 'form_edit',
-                                                                          'mem_write', 'place', 'asset_reload')]
+                                                                          'mem_write', 'memory', 'place', 'asset_reload')]
         if since:
             entries = [e for e in entries if e['time'] >= float(since)]
         return {'changes': entries[-200:], 'count': len(entries), 'created': self.created,
@@ -2275,8 +2275,8 @@ class AuthorTools:
                 index = value_of(self.live.link.eval('GetModIndex %s' % quoted(e['name'])))
                 if index is not None and int(index) == int(form_id, 16) >> 24:
                     row = self.data.index.db.execute(
-                        'select edid from records where file = ? and local = ? limit 1',
-                        (e['fileId'], int(form_id, 16) & 0xFFFFFF)).fetchone()
+                        'select edid from records where file = ? and owner = ? and local = ? limit 1',
+                        (e['fileId'], e['name'].lower(), int(form_id, 16) & 0xFFFFFF)).fetchone()
                     break
             return row[0] if row else None
         except Exception:  # noqa: BLE001 - names are best effort
@@ -2468,7 +2468,8 @@ class AuthorTools:
             if not dll.is_file():
                 raise LiveError('MODULE_NOT_BUILT', 'No built module %s. Next: fnv_plugin_build action=build name=%s '
                                 '(or package with build=true).' % (dll.name, module))
-        report = self.records.asset_check(plugin)
+        # a built plugin is what is packaged, so its assets are checked, not the installed copy's (BUG-112)
+        report = self.records.asset_check(str(plugin_file) if plugin_file else plugin)
         from .fnv_data import load_order, plugin_masters
         entries = load_order(self.live.project, self.records.data._live_plugins())
         target = next((e for e in entries if e['name'].lower() == Path(plugin).name.lower()), None)
@@ -2509,7 +2510,16 @@ class AuthorTools:
         else:
             from .fnv_records import _plugin_assets
             index = self.records._asset_index(entries)[0]
-            for rel in sorted(_plugin_assets(target['path'])):
+            names = set(_plugin_assets(plugin_src))
+            from .esp.assets import nif_textures, AssetError
+            for rel in sorted(names):            # textures the packaged meshes name (BUG-112)
+                nif = index._loose(mod_root, rel.replace('/', '\\')) if rel.lower().endswith('.nif') else None
+                if nif:
+                    try:
+                        names.update(nif_textures(nif.read_bytes()))
+                    except (OSError, AssetError):
+                        pass
+            for rel in sorted(names):
                 src = index._loose(mod_root, rel.replace('/', '\\'))
                 if not src:
                     continue
