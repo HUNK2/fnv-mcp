@@ -716,7 +716,9 @@ class Game:
             timeline.append({'t': 0, 'event': 'stale_mo2_state_moved', 'files': stale})
         if leftover:
             timeline.append({'t': 0, 'event': 'leftover_mo2_closed', **leftover})
-        self.save_session(pid=None, launchedAt=launched, start=start, ready=False, via=layout.kind)
+        # companion=None: the previous game's companion build must not stand for this launch, or a launch where no
+        # game started reads as "terminated from outside" in fnv_status (W5); it is written once the companion answers.
+        self.save_session(pid=None, launchedAt=launched, start=start, ready=False, via=layout.kind, companion=None)
         deadline = time.monotonic() + timeout
         retried = False
         pid = self._spawn(direct, launched, deadline, timeline)

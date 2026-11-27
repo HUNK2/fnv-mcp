@@ -557,14 +557,23 @@ class EngineAITools:
         fptrs = [self.live.resolve(f)['ptr'] for f in filters]
         buf = self.agent._buffer() + 0x800
         start = 0.0 if value is None else float(value)
-        self.perk_entries('start')
+        labels = (PERK_PREFIX + 'apm', PERK_PREFIX + 'fn')
+        # A recording the caller started stays as found: its hooks and its read position (Y4). Starting again would
+        # reinstall the hooks and stopping would remove them, losing the checks recorded so far.
+        recording = len({h['label'] for h in self.agent.deep.hooks() if h['label'] in labels}) == 2
+        kept_since = getattr(self, '_perk_since', (0, 0))
+        if not recording:
+            self.perk_entries('start')
         try:
             self.link.one('wr', word(buf), struct.pack('<f', start).hex())
             self._call(APPLY_PERK_MODIFIERS, 0, ep, owner, *fptrs, buf)
             result = self._floats([buf])[0]
             recorded = self.perk_entries('read', None, 20)
         finally:
-            self.perk_entries('stop')
+            if recording:
+                self._perk_since = kept_since       # the caller's next read still sees its own checks
+            else:
+                self.perk_entries('stop')
         mine = [c for c in recorded['calls'] if c['entryPoint']['id'] == ep]
         return {'entryPoint': {'id': ep, 'name': name}, 'valueBefore': start, 'valueAfter': _r(result, 4),
                 'appliedEntries': mine[-1]['appliedEntries'] if mine else [],
