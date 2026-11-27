@@ -39,7 +39,7 @@ from .safe_paths import inside, no_unc, read_roots
 
 SCENARIO_KEYS = {'name', 'start', 'plugins', 'plugin', 'steps', 'setup', 'teardown', 'restart',
                  'continue_on_failure', 'relaunch_on_crash', 'timeout', 'description', 'tags',
-                 'allow_menus', 'guard', 'trace_script', 'deterministic', 'repeat', 'on_crash'}
+                 'allow_menus', 'guard', 'trace_script', 'deterministic', 'repeat', 'on_crash', 'crash_context'}
 # Step keys not available in a scenario: refused at load, not silently skipped. A breakpoint or a function trace stops
 # the main thread, which the scenario runner itself needs to drive the next step; use fnv_debug / fnv_flow directly.
 NOT_AVAILABLE_YET = {'break', 'flow'}
@@ -71,10 +71,18 @@ def _starts_scalar(line, i):
 
 def _strip_comment(line):
     quote = None
+    skip = False
     for i, c in enumerate(line):
-        if quote:
-            if c == quote:
-                quote = None
+        if skip:
+            skip = False
+        elif quote:
+            if c == '\\' and quote == '"':
+                skip = True                     # an escaped character (\" does not close the string)
+            elif c == quote:
+                if quote == "'" and line[i + 1:i + 2] == "'":
+                    skip = True                 # '' inside a single-quoted scalar is one apostrophe
+                else:
+                    quote = None
         elif c in '"\'' and _starts_scalar(line, i):
             quote = c
         elif c == '#' and (i == 0 or line[i - 1] in ' \t'):
@@ -147,7 +155,12 @@ def _flow_token(text, i, stops):
     if i < len(text) and text[i] in '"\'':
         quote = text[i]
         i += 1
-        while i < len(text) and text[i] != quote:
+        while i < len(text):
+            if text[i] == quote:
+                if quote == "'" and text[i + 1:i + 2] == "'":
+                    i += 2                      # '' is an apostrophe inside the text
+                    continue
+                break
             i += 2 if text[i] == '\\' and quote == '"' else 1
         return text[start:i + 1], i + 1
     while i < len(text) and text[i] not in stops:
@@ -211,7 +224,7 @@ def _block(lines, index, indent):
             m = re.match(r'^([A-Za-z_][\w .-]*?)\s*:(\s+|$)(.*)$', item)
             if item.startswith('- ') or item == '-':
                 # "- - x": a list inside a list item
-                child = indent + 2
+                child = indent + 1 + (len(text) - 1 - len(text[1:].lstrip()))      # where the item's text starts
                 synthetic = [(child, item, number)]
                 j = index
                 while j < len(lines) and lines[j][0] > indent:
@@ -222,7 +235,7 @@ def _block(lines, index, indent):
                 index = j
             elif m and not item.startswith(('"', "'", '{', '[')):
                 # "- key: value" starts a mapping whose other keys are indented under the item
-                child = indent + 2
+                child = indent + 1 + (len(text) - 1 - len(text[1:].lstrip()))      # where the item's text starts
                 synthetic = [(child, item, number)]
                 j = index
                 while j < len(lines) and lines[j][0] > indent:
@@ -484,7 +497,8 @@ class ScenarioRunner:
             report['scriptErrors'] = self.live.script_errors('last')['errors'] if not report['crash'] else None
             report['passed'] = not failed
             if traced:
-                report['scriptTrace'] = self._trace_summary(traced)
+                script, traced = traced, None           # _trace_summary stops it (and the finally must not twice)
+                report['scriptTrace'] = self._trace_summary(script)
             if failed:
                 report['debug'] = self.debug_bundle(scenario)
         except _Crash as crash:
@@ -509,6 +523,15 @@ class ScenarioRunner:
                         result = self.step(step, None)
                     except _Crash as crash:
                         report['crash'] = crash.diagnosis
+                        report['failures'].append({'phase': 'teardown', 'step': number, 'spec': step,
+                                                   'reason': 'the game crashed or quit: %s' % crash.reason})
+                        report['passed'] = False
+                        if relaunch and scenario.get('relaunch_on_crash', True):
+                            try:
+                                self.game.link.close()
+                                report['relaunched'] = self.game.launch(self._start(scenario), timeout=240)
+                            except GameError as e:
+                                report['relaunched'] = {'failed': True, 'code': e.code, 'message': str(e)}
                         break
                     result['step'] = number
                     report['teardown'].append(result)
@@ -528,6 +551,11 @@ class ScenarioRunner:
                 elif self._gate_touched:
                     self._release_gate()
             finally:
+                if traced and not report['crash']:      # an error before the summary left the trace hook installed
+                    try:
+                        self.live.deep.script_trace(traced, 'stop')
+                    except Exception:  # noqa: BLE001 - best effort
+                        pass
                 if not report['crash']:
                     self.game.stop_task(unpause)
         if not report['passed'] and not report['crash'] and not (report.get('debug') or {}).get('screenshot'):
@@ -1015,6 +1043,8 @@ class ScenarioRunner:
     # ------------------------------------------------------------ agent steps and checks
     def _subst(self, value):
         """$name -> a value saved by an earlier step (spawn ... as: name)."""
+        if isinstance(value, str) and value.startswith('$') and value[1:] in self.vars:
+            return self.vars[value[1:]]                 # a whole-string $name keeps its type (a number stays one)
         if isinstance(value, str) and '$' in value:
             for key in sorted(self.vars, key=len, reverse=True):
                 value = value.replace('$' + key, str(self.vars[key]))
@@ -1075,12 +1105,12 @@ class ScenarioRunner:
             out = agent.trace(arg['called'], 'read', limit=20)
             count = out['recorded']
             spec = dict(arg)
-            if not any(k in spec for k in COMPARISONS):
-                spec['ge'] = 1
             if 'at_least' in spec:
                 spec['ge'] = spec.pop('at_least')
             if 'at_most' in spec:
                 spec['le'] = spec.pop('at_most')
+            if not any(k in spec for k in COMPARISONS):     # at_most: 0 alone must stay satisfiable
+                spec['ge'] = 1
             return count, '%s calls' % arg['called'], spec
         if 'condition' in arg:
             out = agent.condition_eval(arg['condition'], arg.get('subject', 'player'), arg.get('target'),

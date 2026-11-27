@@ -111,8 +111,8 @@ class BisectCrashTests(unittest.TestCase):                   # R2
                      masters={'A.esp': ['B.esp']})
         out = fx.tools.bisect('plugins', [{'wait': 1}])
         self.assertLessEqual(len(fx.seen), 4, 'it kept relaunching without progress')
-        self.assertIsNone(out.get('culprit'))
-        self.assertEqual(sorted(out['suspects']), ['A.esp', 'B.esp'])
+        # BUG-135: the second half (B alone, a master with no dependent) is tried too, and it narrows to A
+        self.assertEqual(out.get('culprit'), 'A.esp')
 
     def test_close_under_masters_is_transitive(self):
         fx = Fixture(self, lambda on: PASS, level='plugins', names=('A.esp', 'B.esp', 'C.esp'),

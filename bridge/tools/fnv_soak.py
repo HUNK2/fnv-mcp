@@ -38,6 +38,11 @@ def game_pid():
 
 
 def private_mb(pid):
+    from ctypes import wintypes
+    kernel32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
+    kernel32.OpenProcess.argtypes, kernel32.OpenProcess.restype = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
     h = ctypes.windll.kernel32.OpenProcess(0x1000 | 0x0010, False, pid)
     if not h:
         return None
@@ -52,6 +57,8 @@ def private_mb(pid):
 
 
 pid = game_pid()
+if pid is None:
+    sys.exit('The game is not running: start it first (this soak attaches to a running game).')
 start = time.time()
 result = {'pid': pid, 'startMB': private_mb(pid) if pid else None, 'passes': 0, 'failures': [], 'memory': []}
 while time.time() - start < MINUTES * 60:

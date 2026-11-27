@@ -250,7 +250,7 @@ class AtlasTools:
                         seg = db.execute('INSERT INTO segments (run, action, dose, rep, seconds, frames) VALUES (?,?,?,?,?,?)',
                                          (run_id, name, dose, rep, round(elapsed, 3), frames)).lastrowid
                         db.executemany('INSERT INTO counts VALUES (?,?,?)',
-                                       [(seg, addresses[k], after[k] - before[k]) for k in range(n) if after[k] != before[k]])
+                                       [(seg, addresses[k], (after[k] - before[k]) & 0xFFFFFFFF) for k in range(n) if after[k] != before[k]])
                         db.commit()
                         segs += 1
                 for s in spec.get('teardown', []):
@@ -372,7 +372,7 @@ class AtlasTools:
         engine = self.live.engine()
         db = self.db()
         try:
-            run = run or (db.execute('SELECT MAX(run) FROM fits WHERE action = ?', (name,)).fetchone() or [None])[0]
+            run = run or (db.execute('SELECT MAX(run) FROM segments WHERE action = ?', (name,)).fetchone() or [None])[0]
             if run is None:
                 return {'action': name, 'functions': [], 'note': 'no run measured this action yet'}
             q = 'SELECT address, kind, per_unit, r2, idle, acted, driver FROM fits WHERE run = ? AND action = ?'
