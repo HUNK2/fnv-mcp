@@ -43,10 +43,8 @@ class TrapBreakThreadTests(DebugTestBase):
         self.assertIsNotNone(slot)
         self.assertEqual(self.bp_sets()[-1][5], word(slot))
         self.assertEqual(out['break']['when'], 'frame > 5')      # the record keeps the user's condition
-        main_and = fnv_conv.compile_predicate('main and (frame > 5)')['hex'] \
-            if hasattr(fnv_conv, 'compile_predicate') else None
-        if main_and:
-            self.assertEqual(self.link.preds[slot], main_and)
+        main_and = compile_predicate('main and (frame > 5)')['hex']
+        self.assertEqual(self.link.preds[slot], main_and)
 
     def test_hw_refused_falls_back_to_int3_with_main(self):
         original = self.link.one

@@ -114,11 +114,8 @@ class MaintainTests(unittest.TestCase):
         self.assertIn('maintain', fnv_live_tools.register.__code__.co_varnames)
         before = {t.name for t in threading.enumerate()}
         with mock.patch.object(fnv_live_tools.LiveService, 'maintain') as m:
-            try:
-                fnv_live_tools.register(SimpleNamespace(tool=lambda *a, **k: (lambda f: f)), _project(),
-                                        ('read', 'act', 'control'), dict, maintain=False)
-            except Exception:  # noqa: BLE001 - registration details do not matter here
-                pass
+            fnv_live_tools.register(SimpleNamespace(tool=lambda *a, **k: (lambda f: f)), _project(),
+                                    ('read', 'act', 'control'), dict, maintain=False)
         self.assertFalse(m.called)
         self.assertNotIn('fnv-state-maintenance', {t.name for t in threading.enumerate()} - before)
 
