@@ -22,7 +22,7 @@ from .fnv_conv import ConvError, verdict
 from .fnv_link import enable_mod
 from .fnv_live import LiveError
 from .fnv_layout import ini_value
-from .fnv_shader_hlsl import compile_hlsl, disassemble, parse_ctab, version_of
+from .fnv_shader_hlsl import _PATH_RE, compile_hlsl, disassemble, parse_ctab, version_of
 from .fnv_shader_pkg import (Package, check_replacement, effect_template, package_index, profile_for,
                              read_sdp, replacement_template, write_sdp)
 from .fnv_state import GameIdentity, locked, read_json, write_json
@@ -42,6 +42,26 @@ REG_LETTER = {'float4': 'c', 'int4': 'i', 'bool': 'b', 'sampler': 's'}
 EXPORT_HOOKS = ['0x0086BA10']
 SHADERFX_SOURCE = Path(__file__).resolve().parents[1] / 'native' / 'modules' / 'fnvmcp_shaderfx.c'
 MENU_NOTE = 'pictures need the game out of menus (effects do not draw in menus)'
+
+
+_USER_PATH = re.compile(r'[A-Za-z]:[\\/]+Users[\\/]+[^\\/\r\n]+', re.I)
+
+
+def _scrub(value):
+    """Text (or the strings inside a list or dict) with every Windows user folder replaced: compiler and builder
+    messages carry the state folder's path."""
+    if isinstance(value, str):
+        return _PATH_RE.sub('<path>', _USER_PATH.sub('<user>', value))
+    if isinstance(value, (list, tuple)):
+        return [_scrub(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub(v) for k, v in value.items()}
+    return value
+
+
+def _scrubbed(e):
+    """The same ConvError with its text and evidence scrubbed."""
+    return ConvError(e.code, _scrub(str(e)), _scrub(e.evidence) if e.evidence else None)
 
 
 def _rel(path, base):
@@ -895,7 +915,7 @@ class ShaderTools:
             try:
                 entries = read_sdp(path)
             except ConvError as e:
-                skipped.append({'package': file, 'name': None, 'problems': [{'code': 'BAD_PACKAGE', 'text': str(e)}]})
+                skipped.append({'package': file, 'name': None, 'problems': [{'code': 'BAD_PACKAGE', 'text': _scrub(str(e))}]})
                 continue
             codes = {}
             for n, c in entries:
@@ -973,7 +993,10 @@ class ShaderTools:
             (dest / 'sfx_baked.h').write_text(header, encoding='utf-8')
             text = '#define SFX_BAKED 1\n' + header + '\n' + SHADERFX_SOURCE.read_text(encoding='utf-8')
             plugin_name = c_name('fnvmcp_shaders_' + label)
-            built = self._plugin_tools().build(plugin_name, source=text, hooks=list(EXPORT_HOOKS))
+            try:
+                built = self._plugin_tools().build(plugin_name, source=text, hooks=list(EXPORT_HOOKS))
+            except ConvError as e:
+                raise _scrubbed(e) from None
             dll = Path(built['dll'])
             if dll.is_file():
                 shutil.copyfile(dll, dest / dll.name)
@@ -989,7 +1012,10 @@ class ShaderTools:
         mo2_mod = None
         if install:
             if plugin:
-                self._plugin_tools().install(plugin['name'])
+                try:
+                    self._plugin_tools().install(plugin['name'])
+                except ConvError as e:
+                    raise _scrubbed(e) from None
                 installed = True
             if packages and layout.kind == 'mo2':
                 mo2_mod = layout.mods_dir / ('fnvmcp shaders %s' % label)

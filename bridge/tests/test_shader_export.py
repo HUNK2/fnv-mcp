@@ -187,6 +187,44 @@ class EffectExport(Export):
         self.assertTrue(result['dll'].endswith('.dll'))
 
 
+class PluginBuildErrors(Export):
+    def test_build_failure_leaks_no_user_path(self):
+        home = 'C:' + chr(92) + 'Users' + chr(92) + 'Some Name'            # built here: no user path in the file
+        text = 'zig cc failed:\n' + home + chr(92) + 'state' + chr(92) + 'x.c:3:1: error: bad'
+        self.plugins.build.side_effect = ConvError('BUILD_FAILED', text, {'stderr': text})
+        self.tools.effect_add('tint', TINT, photo=False)
+        with self.assertRaises(ConvError) as cm:
+            self.tools.export()
+        self.assertEqual(cm.exception.code, 'BUILD_FAILED')
+        self.assertNotIn('Users' + chr(92), str(cm.exception))
+        self.assertNotIn('Some Name', json.dumps(cm.exception.evidence) + str(cm.exception))
+        self.assertIn('error: bad', str(cm.exception))
+
+    def test_install_failure_leaks_no_user_path(self):
+        self.plugins.install.side_effect = ConvError('NOT_BUILT', 'missing C:/' + 'Users/Some Name/x.dll')
+        self.tools.effect_add('tint', TINT, photo=False)
+        with self.assertRaises(ConvError) as cm:
+            self.tools.export(install=True)
+        self.assertNotIn('Some Name', str(cm.exception))
+
+    def test_real_plugin_build_of_the_generated_source(self):
+        """PluginTools.build for real (includes check, plugin runtime, plan header, zig); only the prologue plan of
+        the device-lost hook, which needs the game image, is stubbed."""
+        try:
+            find_zig(None)
+        except LinkError:
+            self.skipTest('no zig found')
+        from fnv_mcp.fnv_plugin_build import PluginTools
+        self.tools.effect_add('tint', TINT, order=2, params={'gain': [0.5]}, photo=False)
+        self.tools.plugins = PluginTools(self.live)
+        row = '    {0x0086BA10u, 5u, {0}, 0u},'
+        with mock.patch.object(PluginTools, '_plans', return_value=([row], [])):
+            out = self.tools.export()
+        self.assertEqual(out['plugin']['name'], 'fnvmcp_shaders_live')
+        self.assertTrue((self.state / out['plugin']['dll']).is_file())
+        self.assertTrue((self.state / out['folder'] / 'fnvmcp_shaders_live.dll').is_file())
+
+
 class SetsAndEmpty(Export):
     def test_set_saves_then_exports(self):
         self.tools.effect_add('tint', TINT, photo=False)
