@@ -9,6 +9,7 @@ import ast
 import hashlib
 import io
 import json
+import re
 from pathlib import Path, PurePosixPath
 import subprocess
 import tomllib
@@ -45,7 +46,7 @@ def included(name):
         return False
     if p.parts[:2] == ('bridge', 'projects') and not p.name.startswith('example-'):
         return False
-    return p.name == 'LICENSE' or p.suffix in SOURCE_SUFFIXES
+    return p.name == 'LICENSE' or p.suffix.lower() in SOURCE_SUFFIXES
 
 
 def git(repo, *args):
@@ -76,15 +77,16 @@ def package(repo, revision, output, working_tree=False):
         files[item.filename] = source.read(item)
     if working_tree:
         # Explicit local candidate mode: default publication packaging still uses committed source only.
-        files = {}
+        files, excluded = {}, []
         names = git(repo, 'ls-files', '-z', '--cached', '--others', '--exclude-standard').decode().split('\0')
         for name in sorted(set(names) - {''}):
             if not included(name):
+                excluded.append(name)
                 continue
             path = repo / name
             if path.is_symlink():
                 raise ValueError('source symlinks are not supported')
-            if path.exists():
+            if path.is_file():
                 files[name] = path.read_bytes()
     version = tomllib.loads(files['bridge/pyproject.toml'].decode())['project']['version']
     module = ast.parse(files['bridge/fnv_mcp/__init__.py'].decode())
@@ -92,7 +94,7 @@ def package(repo, revision, output, working_tree=False):
                 and any(isinstance(t, ast.Name) and t.id == '__version__' for t in n.targets)]
     changelog = files.get('CHANGELOG.md', b'').decode()
     heading = next((line for line in changelog.splitlines() if line.startswith('## ')), '')
-    if declared != [version] or version not in heading:
+    if declared != [version] or version not in re.split(r'[\s()\[\],]+', heading[3:]):
         raise ValueError('release version markers disagree (pyproject, fnv_mcp.__version__, CHANGELOG)')
     if folder is not None:
         output = folder / ('%s-%s.zip' % (NAME, version))

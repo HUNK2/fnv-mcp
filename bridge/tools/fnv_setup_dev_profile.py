@@ -207,7 +207,8 @@ def main():
             if not dst.exists():
                 plan.do('xNVSE: copy %s -> %s' % (p.name, dst), lambda s=p, d=dst: (shutil.copy2(s, d),
                                                                                     plan.added.append(str(d))))
-        data = next((p for p in tmp.iterdir() if p.is_dir() and p.name.lower() == 'data'), None)
+        data = next((p for p in sorted(tmp.rglob('*'), key=lambda x: len(x.parts))      # also under a wrapper folder
+                    if p.is_dir() and p.name.lower() == 'data'), None)
         if data:
             target = args.mo2 / 'mods' / 'xNVSE Data'
             plan.do('xNVSE Data folder -> MO2 mod %s' % target, lambda: shutil.copytree(data, target, dirs_exist_ok=True))
@@ -255,6 +256,8 @@ def main():
     for p in problems:
         print('PROBLEM ' + p)
     print('launch: "%s" -p %s run -e "NVSE"' % (args.mo2 / 'ModOrganizer.exe', args.profile))
+    if problems:
+        sys.exit(1)             # the docstring promises that a conflicting file stops the run: say so in the exit code
 
 
 MODS_ENABLED = []

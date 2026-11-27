@@ -27,6 +27,8 @@ DATA = default_data()
 def load(name):
     path = Path(name)
     if not path.exists():
+        if DATA is None:
+            raise SystemExit('%s is not a file and no game Data folder was found (pass a full path)' % name)
         path = DATA / name
     return path.read_bytes()
 

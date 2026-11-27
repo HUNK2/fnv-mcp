@@ -256,7 +256,9 @@ class BisectTools:
         from .esp import codec
         path, data = self._original
         plugin = codec.parse(data, lazy=False)
-        everything = set(self._record_candidates(None))
+        everything = getattr(self, '_variant_candidates', None)
+        if everything is None:
+            everything = set(self._record_candidates(None))
 
         def prune(items):
             kept = []
@@ -331,6 +333,22 @@ class BisectTools:
         return self._write_marker('profile.restore.json', {'profile': str(profile), 'backups': backups,
                                                            'sha256': shas,
                                                            'lock': str(lock)})
+
+    def _restore_profile_backup(self):
+        """Write the profile lists back from this bisect's own backup (exact bytes and order); False if none."""
+        if not self._state_dir():
+            return False
+        marker = bisect_dir(self._state_dir()) / 'profile.restore.json'
+        if not marker.is_file():
+            return False
+        data = json.loads(marker.read_text(encoding='utf-8'))
+        data['marker'] = str(marker)
+        if not data.get('backups'):
+            return False
+        if self.live.game.process():
+            self.quit_game()
+        self._settle_lists(Path(data.get('profile', '')), data)
+        return True
 
     def _drop_marker(self, name):
         if self._state_dir():
@@ -420,6 +438,8 @@ class BisectTools:
                 self.finish_pending()
                 # Everything is validated before the game is closed.
                 everything = self._candidates(level, keep)
+                # only the candidates are ever pruned: the keep records stay in every variant
+                self._variant_candidates = set(everything) if level == 'records' else None
                 if len(everything) < 1:
                     raise ConvError('NO_CANDIDATES', 'No %s to bisect (protected ones are kept on).' % level)
                 backup = None
@@ -448,7 +468,8 @@ class BisectTools:
                         restore_failed.append('putting the plugin back: %s' % str(e)[:200])
                 elif everything and level != 'records':
                     try:
-                        self._set(level, everything, [])        # the profile as it was
+                        if not self._restore_profile_backup():
+                            self._set(level, everything, [])    # no backup (no state dir): the profile as it was
                         self._drop_marker('profile.restore.json')
                     except Exception as e:  # noqa: BLE001 - reported in the verdict; the marker stays for next time
                         restore_failed.append(str(e)[:300])
@@ -495,7 +516,9 @@ class BisectTools:
         while len(suspects) > 1 and n <= max_rounds:
             half = closed(suspects[:len(suspects) // 2])     # plugins: with the masters they need
             if all(x in half for x in suspects):
-                break                            # the suspects are masters of each other: no half splits them
+                half = closed(suspects[len(suspects) // 2:])  # the first half needs every suspect: try the other
+                if all(x in half for x in suspects):
+                    break                        # the suspects are masters of each other: no half splits them
             rest = [x for x in everything if x not in half]
             self._set(level, half, rest)         # only the first half of the suspects on
             ok, why = self._passes(scenario)

@@ -120,13 +120,15 @@ def run_tests(suite):
 
 def run_scenarios(session):
     rows = []
-    saves = Path(session.project.fnv.mo2_root) / 'profiles' / session.project.fnv.mo2_profile / 'saves'
+    from fnv_mcp import fnv_layout
+    from fnv_mcp.fnv_agent import TEST_SAVE_PREFIX
+    saves = Path(fnv_layout.current(session.project).saves_dir)      # layout aware (MO2 profile or direct install)
     gone = None
     for rel, expected, needs in SCENARIOS:
         if gone:
             rows.append({'scenario': rel, 'expected': expected, 'result': 'not run', 'detail': gone})
             continue
-        if needs and needs.startswith('save:') and not (saves / (needs[5:] + '.fos')).exists():
+        if needs and needs.startswith('save:') and not (saves / (TEST_SAVE_PREFIX + needs[5:] + '.fos')).exists():
             rows.append({'scenario': rel, 'expected': expected, 'result': 'skipped',
                          'detail': 'needs the test save %s' % needs[5:]})
             continue
