@@ -278,7 +278,8 @@ class FormIndexTests(unittest.TestCase):
         db.execute("insert into records values (1, 'mymod.esp', 0x800, 'MISC', 'Thing', null)")
         tools = DataTools.__new__(DataTools)
         tools._index = SimpleNamespace(db=db)
-        entries = [{'name': 'FalloutNV.esm', 'index': 0}, {'name': 'MyMod.esp', 'index': 1}]
+        # file ids as _active gives them: _form reads only the active plugins' rows (Z2)
+        entries = [{'name': 'FalloutNV.esm', 'index': 0, 'fileId': 0}, {'name': 'MyMod.esp', 'index': 1, 'fileId': 1}]
         plugin_entry = {'name': 'MyMod.esp', 'masters': ['FalloutNV.esm']}
         self.assertEqual(tools._form(entries, plugin_entry, 0x01000800)['editorId'], 'Thing')   # index 1: itself
         # past it: the plugin itself too, the record index's rule (S6 review B M7: P6 was not a bug)

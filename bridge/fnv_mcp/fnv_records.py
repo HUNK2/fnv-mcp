@@ -198,6 +198,7 @@ class RecordsTools:
         """Make sure every active plugin has its references indexed. Returns the names built now."""
         built = []
         db = self.db
+        active = {x['fileId'] for x in entries}
         for e in entries:
             row = db.execute('select version from ref_files where file = ?', (e['fileId'],)).fetchone()
             if row and row[0] >= REFS_VERSION:
@@ -206,7 +207,9 @@ class RecordsTools:
             own = [m.lower() for m in info['masters']] + [info['name'].lower()]
             known = {}
             for owner in own:
-                ids = {local for (local,) in db.execute('select local from records where owner = ?', (owner,))}
+                # only the active plugins' records: a disabled plugin's rows stay in the index (Z2)
+                ids = {local for (fid, local) in db.execute('select file, local from records where owner = ?', (owner,))
+                       if fid in active}
                 known[owner] = ids
             hardcoded = own[0] == 'falloutnv.esm'
 
@@ -272,10 +275,16 @@ class RecordsTools:
         keys = list(users)
         for i in range(0, len(keys), 500):  # SQLite allows 32,766 bound variables: look names up in chunks
             chunk = keys[i:i + 500]
-            for o, l, edid, full in self.db.execute(
-                    'select owner, local, edid, full from records where (owner, local) in (%s)' %
+            for fid, o, l, edid, full in self.db.execute(
+                    'select file, owner, local, edid, full from records where (owner, local) in (%s)' %
                     ','.join('(?, ?)' for _ in chunk), [x for k in chunk for x in k]):
-                names.setdefault((o, l), (edid, full))
+                # the load-order winner among the active plugins names it, not whichever row came first (Z2)
+                if fid not in by_file:
+                    continue
+                kept = names.get((o, l))
+                if kept is None or by_file[fid]['index'] > kept[0]:
+                    names[(o, l)] = (by_file[fid]['index'], edid, full)
+        names = {k: v[1:] for k, v in names.items()}
         out = []
         for key, u in users.items():
             edid, full = names.get(key, (None, None))
@@ -301,8 +310,7 @@ class RecordsTools:
         by_type = {}
         for x in out:
             by_type[x['type']] = by_type.get(x['type'], 0) + 1
-        target = self.db.execute('select type, edid from records where owner = ? and local = ? limit 1',
-                                 (owner, local)).fetchone()
+        target = self.data._winner_row(entries, 'type, edid', owner, local)     # Z2
         return {'record': {'formId': self._global(entries, owner, local), 'type': target[0] if target else None,
                            'editorId': target[1] if target else None},
                 'count': len(out), 'byType': by_type, 'users': out[offset:offset + limit],
@@ -379,8 +387,7 @@ class RecordsTools:
         out = items[offset:offset + limit]
         for item in out:
             owner, local = item.pop('_key')
-            edid = self.db.execute('select edid from records where owner = ? and local = ? and edid is not null limit 1',
-                                   (owner, local)).fetchone()
+            edid = self.data._winner_row(entries, 'edid', owner, local, ' and edid is not null')     # Z2
             item['editorId'] = edid[0] if edid else None
         return {'count': len(items), 'bySeverity': severity, 'byType': summary, 'identicalSkipped':
                 identical if not include_identical else 0, 'scanCapped': capped, 'conflicts': out,

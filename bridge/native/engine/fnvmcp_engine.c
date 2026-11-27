@@ -659,21 +659,25 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
         }
     }
     uint32_t act = h->act_mode == ACT_HOLD ? ACT_NONE : h->act_mode, original_arg = 0;
+    unsigned char *skip_stub = h->skip_stub; /* read once: hookact may publish a fresh one meanwhile (K7) */
     if (act) {
         LONG hit = InterlockedIncrement(&h->act_hits);
         if (h->act_limit && (uint32_t)hit > h->act_limit) act = ACT_NONE;
-        else {
-            InterlockedIncrement(&h->act_applied);
-            if (h->script[0]) InterlockedIncrement(&h->script_pending);
-        }
     }
     if (act == ACT_ARG) {
         uint32_t *slot = h->act_aux == 100 ? &fr[7] : h->act_aux == 101 ? &fr[6] : &fr[11 + (h->act_aux & 31)];
         original_arg = *slot;
         *slot = h->act_value;
     }
-    bool skip = (act == ACT_SKIP || act == ACT_SKIP_FLOAT) && h->skip_stub;
+    bool skip = (act == ACT_SKIP || act == ACT_SKIP_FLOAT) && skip_stub;
     Shadow *s = (h->flags & HF_EXIT) && !skip ? shadow_get() : NULL;
+    /* (K11) a result replacement needs its exit frame: with the shadow stack full (or none) the caller gets the real
+     * result, so the call is neither counted as applied nor recorded with the action */
+    if (act == ACT_RESULT && !(s && s->count < SHADOW)) act = ACT_NONE;
+    if (act) {
+        InterlockedIncrement(&h->act_applied);
+        if (h->script[0]) InterlockedIncrement(&h->script_pending);
+    }
     LONG seq = 0;
     if (h->flags & HF_RECORD) {
         seq = InterlockedIncrement(&h->seq);
@@ -706,7 +710,7 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
     }
     if (skip) {
         SetLastError(error);
-        return (uint32_t)(uintptr_t)h->skip_stub;
+        return (uint32_t)(uintptr_t)skip_stub;
     }
     if (s && s->count < SHADOW) {
         ShadowFrame *f = &s->frames[s->count++];
@@ -1012,16 +1016,24 @@ static void op_unhook(int argc, char **argv) {
     unsigned char now[16], expected[5] = {0xE9};
     uint32_t value = (uint32_t)(uintptr_t)h->entry - (h->target + 5);
     memcpy(expected + 1, &value, 4);
+    uint32_t was_active = h->active, was_mode = h->act_mode;
     h->active = 0;
     h->act_mode = ACT_NONE;
-    if (!read_bytes(h->target, now, 5)) return fail("unreadable");
-    if (memcmp(now, expected, 5)) return fail("overwritten_by_another_patch");
+    const char *error = NULL;
     unsigned char restore[16];
-    uint32_t chained, length = hook_restore_bytes(h, restore, &chained);
-    int written = code_write_frozen(h->target, restore, length);
-    if (written) {
-        h->active = 1; /* still hooked: keep recording until a later unhook succeeds */
-        return fail(written == 1 ? "busy" : "unwritable");
+    uint32_t chained = 0, length = 0;
+    if (!read_bytes(h->target, now, 5)) error = "unreadable";
+    else if (memcmp(now, expected, 5)) error = "overwritten_by_another_patch";
+    else {
+        length = hook_restore_bytes(h, restore, &chained);
+        int written = code_write_frozen(h->target, restore, length);
+        if (written) error = written == 1 ? "busy" : "unwritable";
+    }
+    if (error) {
+        /* still hooked: recording and the action (skip, result, hold) go on until a later unhook succeeds (K6) */
+        h->act_mode = was_mode;
+        h->active = was_active;
+        return fail(error);
     }
     probe_unchained(chained);
     h->stolen = 0;
@@ -1052,6 +1064,11 @@ static void op_hookctl(int argc, char **argv) {
  * (ACT_*). limit 0 = every call, else only the first <limit> calls. The script line runs on the main thread
  * once per triggering call (at most 8 per frame). */
 static void op_hookhold(int argc, char **argv); /* w2_stop.c: hookact <id> hold <pred|ff> [pop] */
+/* Skip stubs of the skip actions, 16 bytes each: every hookact takes the next one, which comes round again only after
+ * HOOK_SKIP_STUBS more (K7, as stop_skip_stub does for the stop stubs, B13). */
+#define HOOK_SKIP_STUBS 256u
+static unsigned char *hook_skip_stubs;
+static volatile LONG hook_skip_next;
 static void op_hookact(int argc, char **argv) {
     uint32_t id, mode, value, aux, limit;
     if (argc >= 3 && !strcmp(argv[2], "hold")) return op_hookhold(argc, argv);
@@ -1072,20 +1089,25 @@ static void op_hookact(int argc, char **argv) {
     h->act_mode = ACT_NONE;
     MemoryBarrier();
     if (mode == ACT_SKIP || mode == ACT_SKIP_FLOAT) {
-        if (!h->skip_stub) {
-            if (hook_code_used + 16 > 65536) return fail("out_of_memory");
-            h->skip_stub = hook_code + hook_code_used;
-            hook_code_used += 16;
-        }
-        unsigned char stub[16], *q = stub;
+        /* (K7) a fresh stub from a ring, never the live one rewritten in place: a thread that took the old stub may
+         * still be about to run it. The float is kept inside the stub, so the old stub keeps its own value. */
+        if (!hook_skip_stubs)
+            hook_skip_stubs = VirtualAlloc(NULL, 16u * HOOK_SKIP_STUBS, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (!hook_skip_stubs) return fail("out_of_memory");
+        unsigned char *fresh = hook_skip_stubs + 16u * ((unsigned)InterlockedIncrement(&hook_skip_next) % HOOK_SKIP_STUBS);
+        unsigned char stub[16] = {0}, *q = stub;
         if (mode == ACT_SKIP) { *q++ = 0xB8; memcpy(q, &value, 4); q += 4; } /* mov eax, value */
-        else { /* fld dword [act_value] */
-            uint32_t at = (uint32_t)(uintptr_t)&h->act_value;
+        else { /* fld dword [fresh + 12] */
+            uint32_t at = (uint32_t)(uintptr_t)(fresh + 12);
             *q++ = 0xD9; *q++ = 0x05; memcpy(q, &at, 4); q += 4;
+            memcpy(stub + 12, &value, 4);
         }
         if (aux) { *q++ = 0xC2; *q++ = (unsigned char)(aux & 0xFF); *q++ = (unsigned char)(aux >> 8); } /* ret aux */
         else *q++ = 0xC3;
-        if (!code_write((uint32_t)(uintptr_t)h->skip_stub, stub, (size_t)(q - stub))) return fail("unwritable");
+        memcpy(fresh, stub, sizeof(stub));
+        FlushInstructionCache(GetCurrentProcess(), fresh, 16);
+        MemoryBarrier();
+        h->skip_stub = fresh;
     }
     memset(h->script, 0, sizeof(h->script));
     if (script) memcpy(h->script, argv[6], (size_t)script);

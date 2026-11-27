@@ -184,6 +184,7 @@ class AssetIndex:
             bsas = sorted(Path(data_dir).glob('*.bsa'))
         self.archived = archive_names(list(bsas or []))
         self.archives = [Path(bsa).name for bsa in bsas or []]
+        self.archive_paths = [Path(bsa) for bsa in bsas or []]     # each from its own folder (X8)
         self._lower = {}
 
     def _loose(self, root, rel):

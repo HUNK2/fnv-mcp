@@ -179,8 +179,11 @@ class BisectVerdictTests(unittest.TestCase):                  # F5
 class CrawlTests(unittest.TestCase):                          # F4 F11 F13 F16
     def test_exterior_cell_is_visited_with_the_worldspace_edid(self):
         console = []
-        live = SimpleNamespace(console=lambda line: console.append(line) or {'accepted': True})
-        crawl = CrawlTools(live, data=SimpleNamespace())
+        live = SimpleNamespace(console=lambda line: console.append(line) or {'accepted': True},
+                               resolve=lambda spec: {'formId': '00000014', 'ptr': 0x14}, changing=lambda reason: None,
+                               journal=SimpleNamespace(add=lambda entry: {'id': 1}))   # the move is journaled (W8)
+        agent = SimpleNamespace(_place=lambda r: {}, _undo_place=lambda before: None)
+        crawl = CrawlTools(live, agent=agent, data=SimpleNamespace())
         crawl._edid = lambda form: {'0100ABCD': 'MyWorld'}.get(form)
         crawl._wait_loaded = lambda: None
         crawl._go({'interior': False, 'editorId': None, 'grid': (3, -4), 'world': 0x0100ABCD, 'formId': 5})

@@ -568,12 +568,24 @@ class Debugger:
                 if hold_slot is not None:
                     self.release_pred_slot(hold_slot)
                 raise
-        pred, pred_slot = 'ff', None
-        if when:
-            pred_slot = self._store_pred(when)
-            pred = word(pred_slot)
-            record['predSlot'] = pred_slot
         mechanism = 'hw' if thread == 'main' and self._hw_in_use() < HW_SLOTS else 'int3'
+        pred, pred_slot = 'ff', None
+
+        def condition(kind):
+            # (K5) BP_FLAG_ALL only scopes the debug registers: an int3 break parks every thread that runs it, so a
+            # thread=main int3 break puts `main and` into its condition, as E24 does for hook holds.
+            nonlocal pred, pred_slot
+            if pred_slot is not None:
+                self.release_pred_slot(pred_slot)
+                pred, pred_slot = 'ff', None
+            main = thread == 'main' and kind == 'int3'
+            if when:
+                pred_slot = self._store_pred('main and (%s)' % when if main else when)
+                pred = word(pred_slot)
+            elif main:
+                pred = self._main_slot()
+
+        condition(mechanism)
         flags = (1 if do == 'log' else 0) | (2 if thread == 'any' else 0)
         try:
             bp_id = self._free_bp_id()
@@ -593,6 +605,7 @@ class Debugger:
                     if mechanism != 'hw':
                         raise
                     mechanism = 'int3'
+                    condition(mechanism)          # (K5) the int3 needs the main-thread condition
                     result = self._set_bp(bp_id, address, mechanism, pred, flags, log_hex)
             except ConvError:
                 if hits and hits > 1:
@@ -602,7 +615,7 @@ class Debugger:
             if pred_slot is not None:
                 self.release_pred_slot(pred_slot)
             raise
-        record.update(mechanism=result.get('kind', mechanism), id=bp_id)
+        record.update(mechanism=result.get('kind', mechanism), id=bp_id, predSlot=pred_slot)
         self.breaks[number] = record
         self._persist()
         return self._break_result(record, 'A trap breakpoint (%s).' % record['mechanism'])
@@ -633,7 +646,8 @@ class Debugger:
 
     def _hook_hold(self, address, pred, label, nargs, pop=0):
         for h in self.link.one('hooks').get('hooks', []):
-            if int(str(h.get('target')), 16) == address:
+            # (Q3) the companion keeps removed hooks in its list with stolen = 0: those no longer patch the function
+            if h.get('stolen') and int(str(h.get('target')), 16) == address:
                 raise HookError('ALREADY_HOOKED', 'The function already carries a hook (%s).' % h.get('label'),
                                 {'hook': h.get('label')})
         raw = self.read(address, 24)
@@ -704,13 +718,18 @@ class Debugger:
 
     def _break_clear(self, number):
         targets = sorted(self.breaks) if number is None else [int(number)]
-        cleared = []
+        cleared, stuck = [], []
         for n in targets:
             b = self.breaks.get(n)
             if b is None:
                 raise ConvError('NO_BREAK', 'No break %s. Next: call fnv_debug break list.' % n)
             if b['mechanism'] == 'hook':
-                self.link.one('unhook', word(b['id']))
+                result = self.link.one('unhook', word(b['id']))
+                if not result.get('ok') and result.get('error') not in ('already_removed', 'unknown_hook'):
+                    # (K6) the hook is still patched (busy, or its bytes changed): keep the break, it can be cleared
+                    # again; dropping it would leave a hold nothing lists
+                    stuck.append({'break': n, 'error': result.get('error')})
+                    continue
             elif b['mechanism'] in ('hw', 'int3'):
                 self.link.one('bp', 'clear', word(b['id']))
             elif b['mechanism'] == 'fault':
@@ -731,12 +750,24 @@ class Debugger:
                 if str(h.get('label') or '').startswith('dbg ') and h.get('stolen', 1):
                     self.link.one('unhook', word(h['id']))
                     swept['hooks'].append(h['id'])
+            kept = {b.get('predSlot') for b in self.breaks.values()}     # (K6) a break whose unhook failed
+            if self.breaks:
+                kept.add(MAIN_SLOT)                                     # its thread filter may be the `main` slot
             for item in self.link.one('pred', 'list').get('preds', []):
                 slot = int(item['id'])
-                if PRED_SLOT_FIRST <= slot <= PRED_SLOT_LAST and slot not in self._claimed_slots:
+                if PRED_SLOT_FIRST <= slot <= PRED_SLOT_LAST and slot not in self._claimed_slots and slot not in kept:
                     self.link.one('pred', 'clear', word(slot))
         self._persist()
-        return verdict('Cleared %d break(s).' % len(cleared), None, cleared=cleared, swept=swept)
+        if stuck and number is not None:
+            raise ConvError('UNHOOK_FAILED', 'Break %s stays armed: the companion could not remove its hook (%s). Next: '
+                            'fnv_debug continue any parked stop, then clear it again.' % (number, stuck[0]['error']),
+                            {'break': number, 'error': stuck[0]['error']})
+        note = None
+        if stuck:
+            note = ('%d break(s) stay armed: the companion could not remove their hooks. Next: fnv_debug continue any '
+                    'parked stop, then clear again.' % len(stuck))
+        return verdict('Cleared %d break(s).' % len(cleared), note, cleared=cleared, swept=swept,
+                       **({'notCleared': stuck} if stuck else {}))
 
     # ================================================================ frames and stops
     def _why(self, stop):
