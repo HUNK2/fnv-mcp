@@ -522,9 +522,16 @@ FNVMCP_EXPORT int sfx_info(void) {
 
 /* ------------------------------------------------------------------------------------------------ engine shaders */
 
-static Swap *find_swap(uint32_t obj, uint32_t off) {
-    for (int i = 0; i < g_nswap; i++)
-        if (g_swap[i].obj == obj && g_swap[i].off == off) return &g_swap[i];
+/* The swap entry of an object, given the pointer the object holds now. An entry whose replacement is no longer in the
+ * object is stale (the engine freed the object and reused the address, or changed the pointer): it is dropped without
+ * releasing anything and the object counts as unswapped. Call with g_cs held. */
+static Swap *find_swap(uint32_t obj, uint32_t off, uint32_t live) {
+    for (int i = 0; i < g_nswap; i++) {
+        if (g_swap[i].obj != obj || g_swap[i].off != off) continue;
+        if (g_swap[i].cur == live) return &g_swap[i];
+        g_swap[i] = g_swap[--g_nswap];
+        return 0;
+    }
     return 0;
 }
 
@@ -544,7 +551,7 @@ FNVMCP_EXPORT int sfx_scan(void) {
             uint32_t obj = (uint32_t)(uintptr_t)p, kind = *p == VT_VS, off = kind ? OFF_VS_D3D : OFF_PS_D3D;
             uint32_t d3d = rd(obj + off), size = 0, hash = 0, ver = 0;
             if (!is_d3d(d3d)) continue;
-            Swap *sw = find_swap(obj, off);
+            Swap *sw = find_swap(obj, off, d3d);
             if (sw) {
                 size = sw->size;
                 hash = sw->hash;
@@ -587,16 +594,21 @@ static void row_set_d3d(uint32_t obj, uint32_t kind, uint32_t d3d) {
 FNVMCP_EXPORT int sfx_swap(int hash, int addr, int size) {
     if (size < 8 || size > (int)MAX_BYTES || (size & 3)) return -2;
     int first = -1;
+    uint32_t kind = 0, first_ver = 0;
+    EnterCriticalSection(&g_cs);
     for (int i = 0; i < g_nrow; i++)
         if (g_row[i].hash == (uint32_t)hash) {
             first = i;
+            kind = g_row[i].kind;
+            first_ver = g_row_ver[i];
             break;
         }
+    LeaveCriticalSection(&g_cs);
     if (first < 0) return -1;
-    uint32_t kind = g_row[first].kind, vt = kind ? VT_VS : VT_PS, off = kind ? OFF_VS_D3D : OFF_PS_D3D;
+    uint32_t vt = kind ? VT_VS : VT_PS, off = kind ? OFF_VS_D3D : OFF_PS_D3D;
     DWORD *code = (DWORD *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)size);
     if (!code) return -2;
-    if (!A->read((uint32_t)addr, code, (uint32_t)size) || code[0] != g_row_ver[first]) {
+    if (!A->read((uint32_t)addr, code, (uint32_t)size) || code[0] != first_ver) {
         HeapFree(GetProcessHeap(), 0, code);
         return -2;
     }
@@ -613,8 +625,8 @@ FNVMCP_EXPORT int sfx_swap(int hash, int addr, int size) {
     for (int i = 0; i < g_nrow; i++) {
         Row *r = &g_row[i];
         if (r->hash != (uint32_t)hash || r->kind != kind || rd(r->obj) != vt) continue;
-        Swap *sw = find_swap(r->obj, off);
         uint32_t live = rd(r->obj + off), mine = (uint32_t)(uintptr_t)shader;
+        Swap *sw = find_swap(r->obj, off, live);
         if (live != r->d3d) continue; /* the engine changed it since the scan */
         if (!sw && g_nswap >= MAX_SWAPS) {
             refused++;

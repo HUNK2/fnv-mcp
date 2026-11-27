@@ -65,6 +65,9 @@ class ShaderfxModuleTests(unittest.TestCase):
         self.assertIn('shaderfx: call site 0x00B55AD6 is not the expected call', self.text)
         self.assertEqual(self.text.count('->write('), 1)
         self.assertIn('->write(', function_body(self.text, 'static int patch_call_site(void)'))
+        self.assertEqual(self.text.count('volatile uint32_t *'), 1)
+        self.assertIn('volatile uint32_t *', function_body(
+            self.text, 'static int swap_pointer(uint32_t obj, uint32_t off, uint32_t value)'))
         self.assertIn('sfx_restore_all()', function_body(self.text, 'void fnvmcp_module_exit(void)'))
 
     def test_releases_on_device_lost(self):
@@ -72,7 +75,7 @@ class ShaderfxModuleTests(unittest.TestCase):
         self.assertRegex(self.text, r'->hook\(\s*0x0086BA10|->hook\(\s*FN_DEVICE_LOST|->hook\(\s*ADDR_DEVICE_LOST')
         draw = function_body(self.text, 'static void draw_effects(void)')
         self.assertIn('vf(D, 3)', draw)  # TestCooperativeLevel
-        self.assertLess(draw.index('vf(D, 3)'), draw.index('StretchRect'))
+        self.assertLess(draw.index('vf(D, 3)'), draw.index('vf(D, DV_STRETCH_RECT)'))
 
     def test_engine_constants(self):
         for token in ('0x010EF7D4', '0x010EF87C', '0x2C', '0x34', '0x011F9508', '0x288'):
