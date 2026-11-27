@@ -133,6 +133,15 @@ class Authoring:
             roots.insert(0, own)
         return roots
 
+    def asset_index(self):
+        """Loose files of Data and the mod roots, and the BSAs of both: a model a mod ships in its own BSA was
+        "model missing" while fnv_asset_check found it (X8)."""
+        roots = self.mod_roots()
+        bsas = sorted(self.data_dir.glob('*.bsa'))
+        for root in roots:
+            bsas.extend(sorted(root.glob('*.bsa')))
+        return AssetIndex(self.data_dir, roots, bsas)
+
     # -- build ---------------------------------------------------------------------------
     def asset_manifest(self, data, assets):
         """Content identities for referenced loose assets; archive identities remain explicit."""
@@ -150,8 +159,8 @@ class Authoring:
         if assets is None:
             return {'scope': 'asset checks unavailable', 'files': {}, 'archives': []}
         archived = {}
-        for name in assets.archives:
-            archived.update(bsa_extract(self.data_dir / name, {m for m in models if (assets.find(m) or {}).get('where') == 'bsa'}))
+        for bsa in assets.archive_paths:        # each archive from its own folder: Data or a mod's (X8)
+            archived.update(bsa_extract(bsa, {m for m in models if (assets.find(m) or {}).get('where') == 'bsa'}))
         for model in sorted(models):
             hit = assets.find(model)
             if hit:
@@ -161,16 +170,16 @@ class Authoring:
                         wanted.update(nif_textures(payload))
                 except AssetError:
                     pass  # validate() records this as a failure; never used to authorize installation
-        for name in assets.archives:
-            archived.update(bsa_extract(self.data_dir / name, {m for m in wanted if (assets.find(m) or {}).get('where') == 'bsa'}))
+        for bsa in assets.archive_paths:
+            archived.update(bsa_extract(bsa, {m for m in wanted if (assets.find(m) or {}).get('where') == 'bsa'}))
         for relative in sorted(wanted):
             hit = assets.find(relative)
             result[relative.lower()] = ({'where': 'missing'} if not hit else
                                        {'where': 'loose', 'sha256': sha(Path(hit['path']).read_bytes())}
                                        if hit['where'] == 'loose' else {'where': 'bsa',
                                            'sha256': sha(archived[relative.lower()]) if relative.lower() in archived else None})
-        archives = [{'name': name, 'size': (self.data_dir / name).stat().st_size,
-                     'modifiedNs': (self.data_dir / name).stat().st_mtime_ns} for name in assets.archives]
+        archives = [{'name': bsa.name, 'size': bsa.stat().st_size,
+                     'modifiedNs': bsa.stat().st_mtime_ns} for bsa in assets.archive_paths]
         return {'scope': 'MODL/NIFZ models, model texture references, ICON/MICO; content hashes and archive stat identity',
                 'files': result, 'archives': archives}
 
@@ -206,7 +215,7 @@ class Authoring:
         data, receipt = builder.build(spec, formids, index, base_dir=self.spec_path.parent,
                                       script_cache=cache,
                                       templates=self.templates, master_records=self.master_records(spec['masters']))
-        assets = AssetIndex(self.data_dir, self.mod_roots()) if check_assets and self.data_dir.is_dir() else None
+        assets = self.asset_index() if check_assets and self.data_dir.is_dir() else None
         receipt['validation'] = validate(data, index, assets, spec['masters'])
         receipt['assets'] = self.asset_manifest(data, assets)
         receipt['compileContext'] = context

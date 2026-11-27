@@ -421,6 +421,14 @@ class LiveService:
         ping = self.link.ping()
         if not ping.get('deferredInit'):
             raise LiveError('GAME_STARTING', 'The game is still starting; wait or call fnv_game launch')
+        game = self._game
+        if game is not None and game.session().get('audioCacheRestore'):
+            try:        # W6: the audio cache flag a stalled start could not turn back on
+                proc = game.process()
+                if proc:
+                    game.retry_audio_cache(proc[0])
+            except Exception:  # noqa: BLE001 - best effort; fnv_status retries too
+                pass
         return ping
 
     def in_game(self):
