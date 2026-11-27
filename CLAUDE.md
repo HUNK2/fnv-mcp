@@ -4,9 +4,12 @@ MCP server for building and testing Fallout: New Vegas mods in the running game.
 branch `main`. On the dev PC this clone is the only checkout (`geck-mcp-nv` is the old one).
 
 ## Git
-- "Push" / "GitHub" means the private remote `fnv-mcp` (`git push fnv-mcp main`). Never push
+- "Push" / "GitHub" means the remote `fnv-mcp` (`git push fnv-mcp main`). It is the public home of the project
+  (since the 0.5.0b1 beta): what is pushed there, and every issue and release text, can be read by anyone. Never push
   to `origin` (public fork) or open anything upstream (`2Shay96/geck-mcp-nv`).
-- Commit only when asked. Never commit the unpacked game image, the fnvdecomp API key or personal data.
+- Commit only when asked. Never commit the unpacked game image, the fnvdecomp API key or personal data. A path
+  with a Windows user folder (`C:\Users\<name>`) is personal data, in a file, a commit message or an issue;
+  `tests/test_release.py` fails when a tracked file holds one.
 
 ## Tests
 - Use the project's Python: `bridge/.venv/Scripts/python.exe` (3.12). The system Python has an old `mcp`.

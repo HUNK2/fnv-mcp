@@ -1,7 +1,7 @@
 """Tool quality part 5: a smaller tool list.
 
 - The size budget: the whole listing (every tool as it goes on the wire) must not grow back. Measured on
-  2026-11-18: 231,716 characters at 4a3dc9f (138 tools); 197,668 after dropping the output schema stub and the
+  2026-11-18: 231,716 characters at dc21098 (138 tools); 197,668 after dropping the output schema stub and the
   default annotation values; 198,281 with the brief parameters; 217,593 on the merged tree, where every parameter
   has a description (187 had none, about 19,000 characters). A new tool or a longer description spends from the
   headroom; raise BUDGET only with a reason in the commit.
@@ -23,7 +23,7 @@ from fnv_mcp.fnv_guide import GuideTools  # noqa: E402
 from fnv_mcp.server import make_server, toolset_list  # noqa: E402
 from fnv_mcp.toolsets import ALWAYS, CORE_TOOLS, registered  # noqa: E402
 
-BEFORE = 231716          # characters at 4a3dc9f, the start of the tool quality pass
+BEFORE = 231716          # characters at dc21098, the start of the tool quality pass
 BUDGET = 219500          # 217,593 measured with every parameter described, plus about 1% headroom
 CORE_BUDGET = 55800      # the core list of 29: 55,248 measured 2026-11-21 (six engine-loop tools added), about 13,900 tokens
 

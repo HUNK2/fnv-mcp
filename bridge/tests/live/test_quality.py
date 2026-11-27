@@ -1,5 +1,5 @@
 """Live re-check of the nine failures of the tool quality live check (TOOL-QUALITY-LIVE-CHECK.md, 2026-11-18) that a
-script can make. e29ffce says it fixed them; nobody had seen that in the game (critique fix Task 5, 2026-11-21)."""
+script can make. 02ddcab says it fixed them; nobody had seen that in the game (critique fix Task 5, 2026-11-21)."""
 import json
 
 from .base import LiveCase

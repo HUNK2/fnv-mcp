@@ -7,7 +7,7 @@
 ## GECK MCP (Fallout 3), by maksimka2432fr23 (MIT)
 - Source: https://github.com/maksimka2432fr23/codex-skill-mcp-fallout3 (commit `b3c1044a`, 2026-09-06)
 - geck-mcp-nv's first `windows/` server was a modified copy of it. That folder was removed on 2026-11-15
-  (commit `0e2f999`); the credit and the note in `LICENSE` stay, and its licence text is in the git history.
+  (commit `c180969`); the credit and the note in `LICENSE` stay, and its licence text is in the git history.
 
 ## kNVSE (animation route)
 - `fnv_anim` plays a KF file on an actor along the route kNVSE's `PlayAnimationPath` takes in the engine (see the
