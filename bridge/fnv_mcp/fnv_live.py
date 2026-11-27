@@ -2019,6 +2019,27 @@ def _undo_writes(live, entry, undo):
     return {'changeSeen': True} if seen else None     # U4, as _undo_write
 
 
+@undo_op('shader_effect_remove')
+def _undo_shader_effect_remove(live, entry, undo):
+    """Undo of fnv_shader effect_add: free the effect's slot (fnv_shader.py)."""
+    from .fnv_shader import ShaderTools
+    return ShaderTools.of(live).undo_add(undo['name'])
+
+
+@undo_op('shader_effect_add')
+def _undo_shader_effect_add(live, entry, undo):
+    """Undo of fnv_shader effect_remove: add the effect back from its manifest entry `id`."""
+    from .fnv_shader import ShaderTools
+    return ShaderTools.of(live).undo_remove(undo['id'])
+
+
+@undo_op('shader_effect_params', repeatable=True)    # puts back absolute values
+def _undo_shader_effect_params(live, entry, undo):
+    """Undo of fnv_shader effect_set: the old params, order and enabled flag."""
+    from .fnv_shader import ShaderTools
+    return ShaderTools.of(live).undo_params(undo['name'], undo['params'], undo['order'], undo['enabled'])
+
+
 @undo_op('probe_remove', repeatable=True)
 def _undo_probe_remove(live, entry, undo):
     """Disarm (the companion puts every patched entry and site back) and mark the session file not armed (N5). The
