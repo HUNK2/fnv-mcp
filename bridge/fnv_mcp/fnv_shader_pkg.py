@@ -286,7 +286,7 @@ sampler2D scene : register(s0);
 sampler2D hdrScene : register(s1);
 float4 timeInfo : register(c0);
 float4 pixelInfo : register(c1);
-float4 tint : register(c2);   // example param: scales the scene colour, (1,1,1,1) = unchanged
+float4 tint : register(c2) = float4(1, 1, 1, 1);   // example param: scales the scene colour, (1,1,1,1) = unchanged
 
 float4 main(float2 uv : TEXCOORD0) : COLOR0
 {

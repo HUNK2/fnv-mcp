@@ -6,7 +6,7 @@ import ctypes
 import re
 import struct
 from ctypes import POINTER, byref, c_char_p, c_size_t, c_uint, c_void_p
-from typing import NamedTuple
+from typing import NamedTuple, Optional, Tuple
 
 from .fnv_conv import ConvError
 
@@ -24,6 +24,7 @@ class Constant(NamedTuple):
     regset: str
     index: int
     count: int
+    default: Optional[Tuple[float, ...]] = None    # the CTAB DefaultValue of a float4 constant (count * 4 floats)
 
 
 def _dll():
@@ -103,9 +104,12 @@ def parse_ctab(bytecode):
     _size, _creator, _ver, nconst, cinfo, _flags, _target = struct.unpack_from('<7I', c, 0)
     out = []
     for k in range(nconst):
-        nm, rs, ri, rc, _res, _ti, _dv = struct.unpack_from('<IHHHHII', c, cinfo + k * 20)
+        nm, rs, ri, rc, _res, _ti, dv = struct.unpack_from('<IHHHHII', c, cinfo + k * 20)
         name = c[nm:c.index(b'\0', nm)].decode('latin-1')
-        out.append(Constant(name, _REGSETS.get(rs, str(rs)), ri, rc))
+        default = None
+        if rs == 2 and dv and dv + rc * 16 <= len(c):
+            default = struct.unpack_from('<%df' % (rc * 4), c, dv)
+        out.append(Constant(name, _REGSETS.get(rs, str(rs)), ri, rc, default))
     return out
 
 

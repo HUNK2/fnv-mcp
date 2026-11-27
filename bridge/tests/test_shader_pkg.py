@@ -248,6 +248,8 @@ class TemplateTests(unittest.TestCase):
         got = {(c.regset, c.index) for c in r['constants']}
         self.assertIn(('sampler', 0), got)
         self.assertIn(('float4', 2), got)
+        (tint,) = [c for c in r['constants'] if c.name == 'tint']
+        self.assertEqual(tint.default, (1.0, 1.0, 1.0, 1.0))
         for decl in ('register(s0)', 'register(s1)', 'register(c0)', 'register(c1)', 'register(c2)'):
             self.assertIn(decl, text)
 

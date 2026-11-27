@@ -114,23 +114,23 @@ class ShaderTools:
     # ------------------------------------------------------------------ params
     @staticmethod
     def _constants(compiled):
-        return [[c.name, c.index, c.count] for c in compiled['constants']
+        return [[c.name, c.index, c.count, list(c.default) if c.default else None] for c in compiled['constants']
                 if c.regset == 'float4' and c.index >= FIRST_PARAM_REG]
 
     @staticmethod
     def _valid(constants):
-        return ', '.join('%s (c%d%s)' % (n, r, '-c%d' % (r + k - 1) if k > 1 else '') for n, r, k in constants) \
+        return ', '.join('%s (c%d%s)' % (n, r, '-c%d' % (r + k - 1) if k > 1 else '') for n, r, k, _d in constants) \
             or 'none (the shader declares no float4 constants at c2 or above)'
 
     def _check_params(self, constants, params):
         """{name: flat list of 4 * count floats}, or BAD_PARAM naming the valid names and registers. Nothing has been
         sent to the game yet."""
         out = {}
-        by_name = {n: (r, k) for n, r, k in constants}
+        by_name = {n: (r, k) for n, r, k, _d in constants}
         for name, value in (params or {}).items():
             if name not in by_name:
                 raise ConvError('BAD_PARAM', 'Unknown param %r. Valid params: %s.' % (name, self._valid(constants)),
-                                {'valid': [{'name': n, 'register': 'c%d' % r, 'count': k} for n, r, k in constants]})
+                                {'valid': [{'name': n, 'register': 'c%d' % r, 'count': k} for n, r, k, _d in constants]})
             reg, count = by_name[name]
             nums = value if isinstance(value, (list, tuple)) else [value]
             if any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in nums):
@@ -142,11 +142,14 @@ class ShaderTools:
             out[name] = flat + [0.0] * (4 * count - len(flat))
         return out
 
-    def _send_params(self, slot, constants, params):
-        regs = {n: r for n, r, _ in constants}
-        for name, flat in params.items():
-            for i in range(len(flat) // 4):
-                self._c('sfx_effect_param', slot, regs[name] + i, *flat[4 * i:4 * i + 4])
+    def _send_params(self, slot, constants, params, only=None):
+        """Every float4 param: the stored value, else the shader's CTAB default, else zeros."""
+        for name, reg, count, default in constants:
+            if only is not None and name not in only:
+                continue
+            flat = params.get(name) or default or [0.0] * (4 * count)
+            for i in range(count):
+                self._c('sfx_effect_param', slot, reg + i, *[float(x) for x in flat[4 * i:4 * i + 4]])
 
     # ------------------------------------------------------------------ module and pushing an effect
     def _module(self):
@@ -270,7 +273,7 @@ class ShaderTools:
         self._write(m)
         self._journal('add', name, {'op': 'shader_effect_remove', 'name': name}, slot=slot)
         after, note2 = self._look(photo and before is not None, before['path'] if before else None)
-        unset = [n for n, _, _ in constants if n not in values]
+        unset = [n for n, _, _, d in constants if n not in values and not d]
         out = verdict('Effect %s added in slot %d' % (name, slot),
                       'Compiled, uploaded and saved; effect_set changes its params live.',
                       effect=name, slot=slot, order=entry['order'], costUs=self._c('sfx_cost_us'),
@@ -281,7 +284,7 @@ class ShaderTools:
         out.setdefault('changedPercent', None)
         out['note'] = note or note2
         if unset and not out['note']:
-            out['note'] = 'params not set start at zero: %s' % ', '.join(unset)
+            out['note'] = 'params with no default start at zero: %s' % ', '.join(unset)
         return out
 
     def effect_set(self, name, params=None, order=None, enabled=None, photo=True):
@@ -304,7 +307,7 @@ class ShaderTools:
         if reorder:
             self._push(entry)                 # the order is set with the shader: a replace, then every param again
         else:
-            self._send_params(entry['slot'], entry['constants'], new)
+            self._send_params(entry['slot'], entry['constants'], entry['params'], only=new)
             if enabled is not None:
                 self._c('sfx_effect_enable', entry['slot'], 1 if entry['enabled'] else 0)
         self._write(m)
@@ -329,7 +332,7 @@ class ShaderTools:
                 continue
             effects.append({'name': name, 'slot': e['slot'], 'order': e['order'], 'enabled': bool(bits & 2),
                             'failed': bool(bits & 4), 'usesHdrScene': bool(bits & 8), 'params': e['params'],
-                            'paramNames': [n for n, _, _ in e['constants']], 'source': e['source_file']})
+                            'paramNames': [c[0] for c in e['constants']], 'source': e['source_file']})
         saved = sorted({n for n in m['saved'] if n not in m['effects']} | set(gone))
         out = verdict('%d live effects' % len(effects), None, effects=effects, savedSources=saved,
                       moduleLoaded=bool(loaded), costUs=self._c('sfx_cost_us') if loaded and effects else 0)

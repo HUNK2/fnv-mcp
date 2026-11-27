@@ -17,6 +17,16 @@ class ShaderHlslTests(unittest.TestCase):
         self.assertIn(H.Constant('s', 'sampler', 0, 1), r['constants'])
         self.assertIsInstance(r['slots'], int)
 
+    def test_ctab_default_values(self):
+        src = ('sampler2D s : register(s0);\nfloat4 tint : register(c2) = float4(1, 0.5, 0, 1);\n'
+               'float4 plain : register(c3);\n'
+               'float4 main(float2 uv:TEXCOORD0):COLOR0{return tex2D(s,uv)*tint*plain;}')
+        by = {c.name: c for c in H.compile_hlsl(src)['constants']}
+        self.assertEqual(by['tint'].default, (1.0, 0.5, 0.0, 1.0))
+        self.assertIsNone(by['plain'].default)
+        self.assertIsNone(by['s'].default)
+        self.assertIsNone(H.Constant('x', 'float4', 2, 1).default)
+
     def test_errors_have_line_col_code_and_no_path(self):
         r = H.compile_hlsl('float4 main():COLOR0{return oops;}')
         self.assertFalse(r['ok'])

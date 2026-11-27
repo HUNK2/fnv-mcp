@@ -17,8 +17,7 @@ from fnv_mcp.fnv_shader import ShaderTools, MODULE  # noqa: E402
 INVERT = '''sampler2D scene : register(s0);
 float4 main(float2 uv : TEXCOORD0) : COLOR0 { float4 c = tex2D(scene, uv); return float4(1 - c.rgb, c.a); }
 '''
-TINTED = '''sampler2D scene : register(s0);
-float4 tint : register(c2);
+TINTED = '''sampler2D scene : register(s0);\nfloat4 tint : register(c2);
 float4 main(float2 uv : TEXCOORD0) : COLOR0 { return tex2D(scene, uv) * tint; }
 '''
 GAME = {'pid': 4242, 'started': '1000'}
@@ -151,6 +150,19 @@ class EffectTests(Harness):
         self.tools.effect_set('x', params={'tint': [1, 0.5, 0]}, photo=False)
         self.assertEqual(self.native.calls[0], ('sfx_effect_param', [0, 2, 1.0, 0.5, 0.0, 0.0]))
         self.assertEqual(self.manifest()['effects']['x']['params']['tint'], [1.0, 0.5, 0.0, 0.0])
+
+    def test_unset_param_uses_ctab_default_else_zero(self):
+        src = ('sampler2D scene : register(s0);\nfloat4 tint : register(c2) = float4(1, 0.5, 0, 1);\n'
+               'float4 bare : register(c3);\n'
+               'float4 main(float2 uv : TEXCOORD0) : COLOR0 { return tex2D(scene, uv) * tint * bare; }')
+        out = self.tools.effect_add('d', src, photo=False)
+        self.assertIn(('sfx_effect_param', [0, 2, 1.0, 0.5, 0.0, 1.0]), self.native.calls)
+        self.assertIn(('sfx_effect_param', [0, 3, 0.0, 0.0, 0.0, 0.0]), self.native.calls)
+        self.assertEqual(out['paramsNotSet'], ['bare'])
+        self.native.calls.clear()
+        self.tools.effect_set('d', params={'bare': 1}, photo=False)        # only the named param is sent
+        self.assertEqual(self.native.calls[0], ('sfx_effect_param', [0, 3, 1.0, 0.0, 0.0, 0.0]))
+        self.assertEqual([c for c in self.native.calls if c[0] == 'sfx_effect_param'], [self.native.calls[0]])
 
     def test_scalar_param_becomes_x(self):
         self.tools.effect_add('x', TINTED, params={'tint': 2}, photo=False)
