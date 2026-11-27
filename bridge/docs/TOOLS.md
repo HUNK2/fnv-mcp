@@ -2328,7 +2328,7 @@ Example:
 
 **Kind:** act · **Toolset:** game
 
-Why does this NPC see (or not see) the target? The detection records the game keeps on the observer's process (lost/unseen/noticed/seen, score, line of sight in the view cone), the reverse direction, light, sneak, distance and the detection settings. With recompute (NPC observers) the game's own CalculateDetectionLevel runs now and the 25 inputs it gives the detection formula are captured: perception, sneak, line of sight, view cone, distance, light, invisibility, movement, levels, armor penalty; it hooks the formula for the call, so it needs fnv.engine_control full.
+Why does this NPC see (or not see) the target? The detection records the game keeps on the observer's process (lost/unseen/noticed/seen, score, line of sight in the view cone), the reverse direction, light, sneak, distance and the detection settings. With recompute (NPC observers) the game's own CalculateDetectionLevel runs now and the 25 inputs it gives the detection formula are captured: perception, sneak, line of sight, view cone, distance, light, invisibility, movement, levels, armor penalty.
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |

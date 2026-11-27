@@ -1543,8 +1543,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         process (lost/unseen/noticed/seen, score, line of sight in the view cone), the reverse direction, light,
         sneak, distance and the detection settings. With recompute (NPC observers) the game's own
         CalculateDetectionLevel runs now and the 25 inputs it gives the detection formula are captured: perception,
-        sneak, line of sight, view cone, distance, light, invisibility, movement, levels, armor penalty; it hooks the
-        formula for the call, so it needs fnv.engine_control full."""
+        sneak, line of sight, view cone, distance, light, invisibility, movement, levels, armor penalty."""
         # recompute installs a hook and calls the engine: act (Y3); without it the call stays a read
         return await invoke('fnv_detection', lambda: engine_ai.detection(observer, target, recompute),
                             action='recompute' if recompute else 'read')
