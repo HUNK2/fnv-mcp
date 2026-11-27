@@ -64,6 +64,8 @@ MUTATING_ACTIONS = {
     'fnv_replay': {'record', 'stop', 'play'},
     # start hooks ApplyPerkModifiers and ApplyFunction until stop; evaluate hooks, calls the dispatcher, unhooks (round 4 M1)
     'fnv_perk_entries': {'start', 'stop', 'evaluate'},
+    # recompute hooks the detection formula and calls CalculateDetectionLevel for the call (Y3); without it a read
+    'fnv_detection': {'recompute'},
     # calendar_set: set_hour, advance_hours or timescale given (calendar alone reads it)
     'fnv_time': {'calendar_set', 'pause', 'resume', 'force_resume', 'hold', 'release', 'step', 'fixed', 'speed'},
     'fnv_undo': '*',
@@ -90,6 +92,8 @@ FULL_ONLY_ACTIONS = {
     'fnv_install': '*',                         # a plugin file of the caller's choice into the dev profile
     'fnv_profile_set': {'apply'},               # which mods and plugins load (dry_run stays a read)
     'fnv_asset': {'make_nif', 'make_kf', 'make_dds'},   # files of the caller's making into a mod folder (gaps 3)
+    'fnv_window': {'persist'},                  # status with persist writes the dev profile's Fallout.ini (Y6)
+    'fnv_warnings': {'enable'},                 # writes nvse_config.ini in a mod folder or the overwrite (Y6)
 }
 
 # Every control tool that neither table covers in full, and why it may run under "read".
@@ -104,8 +108,10 @@ READ_LEVEL_CONTROL = {
     'fnv_author': 'export, check, scaffold and package write only into the bridge state folder',
     'fnv_plugin_build': 'scaffold and log only: a starting source in the state folder, or the plugin log',
     'fnv_profile_set': 'dry_run only: shows the changes without writing',
-    'fnv_window': 'status only; the actions that write game memory are in MUTATING_ACTIONS',
-    'fnv_warnings': 'reading the captured warnings; capture is in MUTATING_ACTIONS',
+    'fnv_window': 'status only; the actions that write game memory are in MUTATING_ACTIONS, persist (Fallout.ini) '
+                  'in FULL_ONLY_ACTIONS',
+    'fnv_warnings': 'reading the captured warnings; capture is in MUTATING_ACTIONS, enable (xNVSE config) in '
+                    'FULL_ONLY_ACTIONS',
     'fnv_session': 'status only; start and end are in MUTATING_ACTIONS',
     'fnv_replay': 'list only; record, stop and play are in MUTATING_ACTIONS',
 }
@@ -190,7 +196,7 @@ FNV_LIVE_TOOLS = {
     'fnv_time': ('act', 'the calendar: read it, jump to an hour, advance hours, change the timescale; the game clock and frames: pause and resume the clock (only its own pause), hold and release the frame gate, step N frames at a fixed rate, set a fixed frame step, set the time multiplier, status'),
     'fnv_leveled_roll': ('act', "roll a leveled list many times with the game's own code: chances per form"),
     # engine AI wave (decomp-built)
-    'fnv_detection': ('read', 'why an NPC sees (or does not see) someone: detection records and the formula inputs'),
+    'fnv_detection': ('act', 'why an NPC sees (or does not see) someone: detection records and the formula inputs'),
     'fnv_reaction': ('read', 'how two actors relate: hostile or not, fight reaction, faction pair, disposition, the rule'),
     'fnv_combat': ('read', "an actor's combat controller: target, procedure, action, weapon, group targets, style"),
     'fnv_perk_entries': ('act', 'record perk entry-point checks: value before, perk entries applied, value after'),
@@ -1531,14 +1537,17 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                             action='seed' if seed is not None else 'roll')
 
     # ------------------------------------------------------------------ engine AI wave
-    @server.tool(annotations=read)
-    async def fnv_detection(observer: Ref, target: Ref = 'player', recompute: bool = True) -> result_type:
+    @server.tool(annotations=act)
+    async def fnv_detection(observer: Ref, target: Ref = 'player', recompute: bool = False) -> result_type:
         """Why does this NPC see (or not see) the target? The detection records the game keeps on the observer's
         process (lost/unseen/noticed/seen, score, line of sight in the view cone), the reverse direction, light,
         sneak, distance and the detection settings. With recompute (NPC observers) the game's own
         CalculateDetectionLevel runs now and the 25 inputs it gives the detection formula are captured: perception,
-        sneak, line of sight, view cone, distance, light, invisibility, movement, levels, armor penalty."""
-        return await invoke('fnv_detection', lambda: engine_ai.detection(observer, target, recompute))
+        sneak, line of sight, view cone, distance, light, invisibility, movement, levels, armor penalty; it hooks the
+        formula for the call, so it needs fnv.engine_control full."""
+        # recompute installs a hook and calls the engine: act (Y3); without it the call stays a read
+        return await invoke('fnv_detection', lambda: engine_ai.detection(observer, target, recompute),
+                            action='recompute' if recompute else 'read')
 
     @server.tool(annotations=read)
     async def fnv_reaction(actor: Ref, other: Ref = 'player') -> result_type:
@@ -1755,7 +1764,9 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         mode); capture_mouse undoes it; unpause closes the pause menu (it opens on focus loss); background: focus loss
         no longer opens it (until foreground or the game ends). persist=true writes bBackground Mouse=1 to the dev
         profile's Fallout.ini (false undoes it); it works without the game."""
-        return await invoke('fnv_window', lambda: world.window(action, persist), 'control', action=action)
+        # persist writes Fallout.ini in the dev profile: FULL_ONLY_ACTIONS 'persist' (Y6); other actions are act anyway
+        return await invoke('fnv_window', lambda: world.window(action, persist), 'control',
+                            action='persist' if action == 'status' and persist is not None else action)
 
     # ------------------------------------------------------------------ naming from the running game
     @server.tool(annotations=act)
@@ -2384,7 +2395,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         as needing a restart. changes: what this session created, edited and placed. bytes form: the live form as
         record bytes from the engine's own writer (SaveForm), decoded field by field (runtime form ids). delete
         form: remove a form this session created (flagged deleted and temporary)."""
-        is_read = action in ('changes', 'bytes')
+        # bytes writes the engine's record buffer global and calls SaveForm for the call: act (Y3)
+        is_read = action == 'changes'
         args = {'type': type, 'clone': clone, 'name': name, 'plugin': plugin, 'records': records, 'since': since,
                 'form': form}
 

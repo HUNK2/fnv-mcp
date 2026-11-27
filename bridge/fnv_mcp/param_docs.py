@@ -215,8 +215,9 @@ PARAM_DOCS: dict[str, dict[str, str]] = {'fnv_actor_control': {'action': 'What t
                'mode': 'For action=step: instruction, into, over, out or line, choosing how far to advance before '
                        'stopping again.',
                'file': 'For action=dump: file name for the minidump, written in the bridge state folder.'},
- 'fnv_detection': {'recompute': "If true (default) and the observer is an NPC, run the game's detection calculation "
-                                'now and capture its 25 inputs. False only reads the stored detection records.'},
+ 'fnv_detection': {'recompute': "If true and the observer is an NPC, run the game's detection calculation now and "
+                                'capture its 25 inputs (a hook for the call: needs fnv.engine_control full). False '
+                                '(default) only reads the stored detection records.'},
  'fnv_dialogue': {'action': 'now (default) reads the conversation on screen; tree evaluates every response a speaker '
                             'could give for a topic.',
                   'scope': 'For action=tree: speaker (default) keeps responses written for this speaker or available '

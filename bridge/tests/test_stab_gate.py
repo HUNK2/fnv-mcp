@@ -92,6 +92,8 @@ MUTATING_CASES = {
     ('fnv_perk_entries', 'start'): {'action': 'start'},
     ('fnv_perk_entries', 'stop'): {'action': 'stop'},
     ('fnv_perk_entries', 'evaluate'): {'action': 'evaluate', 'entry_point': 9, 'value': 100},
+    # hooks the detection formula and calls CalculateDetectionLevel for the call (round 4 Y3)
+    ('fnv_detection', 'recompute'): {'observer': 'player', 'recompute': True},
 }
 READ_CASES = {
     'fnv_probe': {'action': 'status'},
@@ -113,6 +115,7 @@ READ_CASES = {
     'fnv_window': {'action': 'status'},
     'fnv_perk_entries': {'action': 'read'},
     'fnv_engine_get': {'function': 'Actor::GetLevel', 'this': 'player'},   # pure getters only (round 4 H1)
+    'fnv_detection': {'observer': 'player'},                               # stored records only (Y3)
 }
 
 # Release plan Task 1.2 (audit B2): calls that put agent-chosen code or files into the game or its mod profile need
@@ -125,6 +128,8 @@ FULL_ONLY_CASES = {
     ('fnv_asset', 'make_nif'): {'action': 'make_nif', 'path': 'C:/nope/x.glb', 'out': 'meshes/x.nif'},
     ('fnv_asset', 'make_kf'): {'action': 'make_kf', 'path': 'C:/nope/x.json', 'out': 'meshes/x.kf'},
     ('fnv_asset', 'make_dds'): {'action': 'make_dds', 'path': 'C:/nope/x.png', 'out': 'textures/x.dds'},
+    ('fnv_window', 'persist'): {'action': 'status', 'persist': True},     # the dev profile's Fallout.ini (Y6)
+    ('fnv_warnings', 'enable'): {'action': 'enable'},                     # xNVSE's nvse_config.ini (Y6)
 }
 # control calls that stay allowed under read
 READ_LEVEL_CASES = {

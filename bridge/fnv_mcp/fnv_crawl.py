@@ -119,7 +119,16 @@ class CrawlTools:
             world = self._edid('%08X' % cell['world'])
             if not world:
                 raise ConvError('NO_WORLD', 'Cannot name the worldspace of exterior cell %08X.' % cell['formId'])
-            out = self.live.console('cow %s %d %d' % (world, cell['grid'][0], cell['grid'][1]))
+            line = 'cow %s %d %d' % (world, cell['grid'][0], cell['grid'][1])
+            # Journaled like agent.move, before the line runs, so fnv_undo moves the player back (W8).
+            player = self.live.resolve('player')
+            before = self.agent._place(player)
+            undo_lines = self.agent._undo_place(before)
+            self.live.changing('move player')
+            self.live.journal.add({'kind': 'move', 'ref': player['formId'], 'lines': [line], 'before': before,
+                                   'undo': {'op': 'console_ref', 'ref': player['formId'], 'lines': undo_lines}
+                                   if undo_lines else None})
+            out = self.live.console(line)
             self._wait_loaded()
             return out
         raise ConvError('CANNOT_VISIT', 'Cell %08X has no EditorID or grid.' % cell['formId'])

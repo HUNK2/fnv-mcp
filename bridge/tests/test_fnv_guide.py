@@ -168,7 +168,8 @@ class RegistrationTests(unittest.TestCase):
             (root / 'game').mkdir()
             project = Project.model_validate({
                 'project_id': 'regtest', 'game_root': str(root / 'game'), 'plugin': 'F.esp', 'state_dir': str(root / 'state'),
-                'fnv': {'mo2_root': str(root / 'mo2'), 'mo2_profile': 'Dev'}})
+                # enable writes xNVSE's config in the mod profile: it needs full (Y6)
+                'fnv': {'mo2_root': str(root / 'mo2'), 'mo2_profile': 'Dev', 'engine_control': 'full'}})
             tools = {}
 
             class FakeServer:

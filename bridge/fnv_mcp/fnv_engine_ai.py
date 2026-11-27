@@ -157,8 +157,10 @@ class EngineAITools:
         for h in self.agent.deep.hooks():
             if int(h['target'], 16) == address:
                 if h['label'] == label:
-                    self.agent.deep.remove(h['id'])
-                    break
+                    # Another call (another client or server) holds it: removing it would lose its records (Y5).
+                    raise HookError('BUSY', '0x%08X already carries the "%s" hook: another call is using it. Try again '
+                                    'when it ends; a hook left behind is removed with fnv_hooks remove hook_id=%s'
+                                    % (address, label, h['id']), {'hook': h['id']})
                 raise HookError('ALREADY_HOOKED', '0x%08X already carries the "%s" hook' % (address, h['label']))
         raw = self.live.reads([(address, 24)])[0]
         if raw is None:
@@ -251,7 +253,9 @@ class EngineAITools:
             since = self._seq(h)
             main = self.link.ping().get('mainThreadId')
             self.link.one('wr', word(buf), '0000000000000000')
-            level = struct.unpack('<i', struct.pack('<I', self._eax(CALC_DETECTION, o, 1, t, buf, 0, 0, 0, buf + 4)))[0]
+            # CalculateDetectionLevel is probable, not proven: the guarded call op (Y3)
+            eax = int(self._call(CALC_DETECTION, o, 1, t, buf, 0, 0, 0, buf + 4, ret='ig')['eax'], 16)
+            level = struct.unpack('<i', struct.pack('<I', eax))[0]
             flags = self.live.reads([(buf, 8)])[0] or b'\0' * 8
             seq, recs, _ = self.agent.deep.records(h, since, limit=64)
         finally:

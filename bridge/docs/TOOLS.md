@@ -2326,15 +2326,15 @@ Example:
 
 ### fnv_detection
 
-**Kind:** read · **Toolset:** game
+**Kind:** act · **Toolset:** game
 
-Why does this NPC see (or not see) the target? The detection records the game keeps on the observer's process (lost/unseen/noticed/seen, score, line of sight in the view cone), the reverse direction, light, sneak, distance and the detection settings. With recompute (NPC observers) the game's own CalculateDetectionLevel runs now and the 25 inputs it gives the detection formula are captured: perception, sneak, line of sight, view cone, distance, light, invisibility, movement, levels, armor penalty.
+Why does this NPC see (or not see) the target? The detection records the game keeps on the observer's process (lost/unseen/noticed/seen, score, line of sight in the view cone), the reverse direction, light, sneak, distance and the detection settings. With recompute (NPC observers) the game's own CalculateDetectionLevel runs now and the 25 inputs it gives the detection formula are captured: perception, sneak, line of sight, view cone, distance, light, invisibility, movement, levels, armor penalty; it hooks the formula for the call, so it needs fnv.engine_control full.
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
 | `observer` | string | up to 200 characters | required | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
 | `target` | string | up to 200 characters | `"player"` | player, crosshair, form id (0x14), Plugin.esp:LOCALID or EditorID |
-| `recompute` | boolean |  | `true` | If true (default) and the observer is an NPC, run the game's detection calculation now and capture its 25 inputs. False only reads the stored detection records. |
+| `recompute` | boolean |  | `false` | If true and the observer is an NPC, run the game's detection calculation now and capture its 25 inputs (a hook for the call: needs fnv.engine_control full). False (default) only reads the stored detection records. |
 
 Example:
 
