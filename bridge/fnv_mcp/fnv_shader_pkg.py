@@ -152,6 +152,12 @@ def _major(version):
     return (version >> 8) & 0xFF
 
 
+def _usage_key(entry):
+    """'v1 texcoord' -> 'texcoord0': the usage of an input entry with a missing index read as 0."""
+    usage = entry.split()[-1]
+    return usage if usage[-1].isdigit() else usage + '0'
+
+
 def check_replacement(original, replacement):
     """Problems that stop a replacement from being a drop-in for the original: a list of {code, text}.
 
@@ -192,6 +198,11 @@ def check_replacement(original, replacement):
         # ps_2_x text carries no usage: compare by register only.
         o_in = {s.split()[0] for s in o_in}
         r_in = [s.split()[0] for s in r_in]
+    else:
+        # Version 3 inputs link to the previous stage by semantic; the register number only reflects the
+        # shader's own input set, so compare the usage ('color' means color0).
+        o_in = {_usage_key(s) for s in o_in}
+        r_in = [_usage_key(s) for s in r_in]
     for s in r_in:
         if s not in o_in:
             problem = {'code': 'INPUT', 'text': 'The replacement reads input %s, which the original does not '
@@ -279,6 +290,6 @@ float4 tint : register(c2);   // example param: scales the scene colour, (1,1,1,
 
 float4 main(float2 uv : TEXCOORD0) : COLOR0
 {
-    return tex2D(scene, uv);
+    return tex2D(scene, uv) * tint;
 }
 '''

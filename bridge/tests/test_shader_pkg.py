@@ -155,6 +155,18 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(self.codes(problems), ['INPUT'])
         self.assertNotIn('warning', problems[0])
 
+    def test_check_accepts_subset_of_inputs_in_ps_3_0(self):
+        # The register numbers shift when the input set shrinks; the semantics are what link.
+        orig = build('float4 main(float4 c:COLOR0, float2 uv:TEXCOORD0):COLOR0{return c+uv.xyxy;}')
+        repl = build('float4 main(float2 uv:TEXCOORD0):COLOR0{return uv.xyxy;}')
+        self.assertEqual(P.check_replacement(orig, repl), [])
+
+    def test_check_accepts_subset_of_inputs_in_vs_3_0(self):
+        out = 'struct O{float4 p:POSITION;}; '
+        orig = build(out + 'O main(float4 p:POSITION, float4 n:NORMAL){O o; o.p=p+n; return o;}', 'vs_3_0')
+        repl = build(out + 'O main(float4 n:NORMAL){O o; o.p=n; return o;}', 'vs_3_0')
+        self.assertEqual(P.check_replacement(orig, repl), [])
+
     def test_check_warns_new_input_in_ps_2_x(self):
         orig = build(ORIG_SRC, 'ps_2_a')
         repl = build('float4 main(float2 uv:TEXCOORD0, float4 c:COLOR0):COLOR0{return c+uv.xyxy;}', 'ps_2_a')
@@ -232,8 +244,10 @@ class TemplateTests(unittest.TestCase):
         text = P.effect_template()
         r = H.compile_hlsl(text, 'ps_3_0')
         self.assertTrue(r['ok'], (r['errors'], text))
-        # The compiler drops constants the body does not read, so only s0 shows in the table.
-        self.assertIn(('sampler', 0), {(c.regset, c.index) for c in r['constants']})
+        # The compiler drops constants the body does not read: s0 and the c2 param are read, c0/c1 are not.
+        got = {(c.regset, c.index) for c in r['constants']}
+        self.assertIn(('sampler', 0), got)
+        self.assertIn(('float4', 2), got)
         for decl in ('register(s0)', 'register(s1)', 'register(c0)', 'register(c1)', 'register(c2)'):
             self.assertIn(decl, text)
 
