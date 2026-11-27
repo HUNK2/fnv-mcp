@@ -171,6 +171,7 @@ class FlowTools:
         # armed: a refusal after arming left a FLAG_ONCE breakpoint that parked the next caller (R5).
         prepared = self._prepare_call(fn, call) if call is not None else None
         pred_slot = None
+        seen = ()
         try:
             # One lock with fnv_debug: two calls must not pick the same bp id or predicate slot.
             with self.dbg.lock:
@@ -178,7 +179,8 @@ class FlowTools:
                 if when:   # breakpoints take a predicate slot (wire 2): store the program first
                     pred_slot = self.dbg._store_pred(when)
                     pred = word(pred_slot)
-                self._seen_stops = {s.get('seq') for s in self.dbg._stops()}   # parked before this arm (K4)
+                # parked before this arm (K4); a local, not on the shared FlowTools: two traces at once (Q4)
+                seen = {s.get('seq') for s in self.dbg._stops()}
                 bp_id = self.dbg._free_bp_id()
                 mechanism = 'hw' if self._hw_used() < HW_SLOTS else 'int3'
                 try:
@@ -188,18 +190,18 @@ class FlowTools:
                         raise
                     armed = self.dbg._set_bp(bp_id, fn['addr'], 'int3', pred, FLAG_ONCE, None)
             return self._trace_armed(db, fn, bp_id, end, when, depth, steps_limit, arm_wait, prepared, locals_,
-                                     skipped, log_hex)
+                                     skipped, log_hex, seen)
         finally:
             if pred_slot is not None:
                 self.dbg.release_pred_slot(pred_slot)
 
     def _trace_armed(self, db, fn, bp_id, end, when, depth, steps_limit, arm_wait, prepared, locals_, skipped,
-                     log_hex):
+                     log_hex, seen=()):
         slot = None
         try:
             callees = self._callee_ranges(db, fn) if depth == 1 else []
             slot = self._write_call(prepared) if prepared is not None else None
-            stop = self._await_bp(bp_id, arm_wait, addr=fn['addr'], seen=getattr(self, '_seen_stops', ()))
+            stop = self._await_bp(bp_id, arm_wait, addr=fn['addr'], seen=seen)
         except BaseException:
             # Nothing armed may outlive the call: the module's slot first (a call made later lands in whatever break
             # is there then), then the breakpoint; each on its own (R5, S6 review A M2).
@@ -210,7 +212,13 @@ class FlowTools:
                 pass
             raise
         if stop is None:
-            self.link.one('bp', 'clear', word(bp_id))
+            with self.dbg.lock:     # no other tool takes the bp id between the clear and the look below
+                self.link.one('bp', 'clear', word(bp_id))
+                # (K9) a hit between the last look and the clear has parked its thread already (bp clear does not
+                # release stops): let it go on, nothing waits on it
+                late = self._await_bp(bp_id, 0, addr=fn['addr'], seen=seen)
+            if late is not None:
+                self._release_quietly(late['seq'], None)
             if slot:                        # the module must not make the call later, into another tool's break
                 self.link.write(slot, struct.pack('<I', 0))
             raise ConvError('NOT_CALLED', '%s was not called within %d s, so nothing was traced; the breakpoint is '
@@ -226,7 +234,7 @@ class FlowTools:
             if not result.get('ok'):
                 raise ConvError('COMPANION_REFUSED', 'The companion refused the trace (%s).' % result.get('error'),
                                 result)
-            entries, reason, done = self._read_trace(stop['seq'], ended)
+            entries, reason, done = self._read_trace(stop['seq'], ended, thread=stop.get('thread'))
         except BaseException:
             # Nothing may stay parked: the bp stop when the trace was refused, the stop the trace ended in when its
             # entries could not be read. (A stop that is already gone answers no_stop; that is ignored.) The call
@@ -385,14 +393,16 @@ class FlowTools:
                 return None
             self.sleep(0.05)
 
-    def _read_trace(self, start_seq, ended=None):
+    def _read_trace(self, start_seq, ended=None, thread=None):
         """The trace is filed under the step stop that ends it (the thread parks again when it leaves the
         function or reaches max): wait for that stop, then read the entries with its seq (seen live: reading with the
         breakpoint's seq gives no_trace)."""
         deadline = self.clock() + RUN_WAIT
         end = None
         while end is None:
-            parked = [s for s in self.dbg._stops() if s.get('kind') == 'step' and int(s.get('seq', 0)) > start_seq]
+            # (K10) only a step stop of the traced thread: another thread's (fnv_debug stepping) is not this trace's end
+            parked = [s for s in self.dbg._stops() if s.get('kind') == 'step' and int(s.get('seq', 0)) > start_seq
+                      and (thread is None or s.get('thread') == thread)]
             if parked:
                 end = min(parked, key=lambda s: int(s['seq']))
                 if ended is not None:

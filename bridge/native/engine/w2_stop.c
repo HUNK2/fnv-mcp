@@ -46,6 +46,8 @@ static unsigned char *stop_stubs;
 static volatile LONG stop_stub_next;
 static volatile LONG stop_seq, main_stops, fault_hold;
 static bool stop_closed_gate; /* the main thread's stop closed the gate (it was open before), so it opens it again */
+/* hold on / hold off while a main-thread stop is parked: the user now owns the gate, the release leaves it be (K13) */
+static void stop_forget_gate(void) { stop_closed_gate = false; }
 
 static bool in_served_call(void) { return serving_request && main_thread && GetCurrentThreadId() == main_thread; }
 static bool stop_main_parked(void) { return main_stops > 0; }
@@ -247,6 +249,9 @@ static LONG stop_fault(EXCEPTION_POINTERS *e) {
                          (uint32_t)(uintptr_t)e->ExceptionRecord, 0, false, &out);
     if (slot < 0) return EXCEPTION_CONTINUE_SEARCH;
     stop_free(slot);
+    /* (K8) breakpoints and watchpoints set or cleared while parked: Windows restores the debug registers from this
+     * CONTEXT, so the change dbg_worker made to the thread would be lost (bp_park does the same) */
+    dbg_fill(c, GetCurrentThreadId());
     if (out.mode == RESUME_STEP || out.mode == RESUME_TO || out.mode == RESUME_TRACE) return bp_fault_resume(c, &out);
     if (out.mode == RESUME_EIP) {
         c->Eip = out.arg;

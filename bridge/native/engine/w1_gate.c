@@ -14,6 +14,7 @@ static void serve_request(char *line);
 static void inp_release_all(void);
 static unsigned stop_release_all(bool deadman); /* w2_stop.c */
 static bool stop_main_parked(void);         /* w2_stop.c */
+static void stop_forget_gate(void);         /* w2_stop.c */
 
 static volatile LONG gate_held, step_left, suspend_kind;
 /* The dead-man clock: set when the main thread serves a request, and by a ping while no request was dropped unserved
@@ -189,6 +190,7 @@ static void op_hold(int argc, char **argv) {
     uint32_t timeout = GATE_TIMEOUT;
     if (argc == 2 && !strcmp(argv[1], "off")) {
         gate_want_hold = false;
+        stop_forget_gate(); /* (K13) */
         gate_open();
         emit("{\"held\":false}");
         return;
@@ -196,6 +198,7 @@ static void op_hold(int argc, char **argv) {
     if (argc < 2 || argc > 3 || strcmp(argv[1], "on")) return fail("bad_arguments");
     if (argc == 3 && (!parse_u32(argv[2], &timeout) || !timeout)) return fail("bad_arguments");
     gate_timeout = timeout;
+    stop_forget_gate(); /* (K13) a stop's release must not open the gate this hold asked for */
     if (!gate_held) gate_want_hold = true;
     emit("{\"held\":true,\"timeout\":%u}", timeout);
 }
