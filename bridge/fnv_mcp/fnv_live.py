@@ -2040,6 +2040,20 @@ def _undo_shader_effect_params(live, entry, undo):
     return ShaderTools.of(live).undo_params(undo['name'], undo['params'], undo['order'], undo['enabled'])
 
 
+@undo_op('shader_restore')
+def _undo_shader_restore(live, entry, undo):
+    """Undo of fnv_shader replace: the engine's own code again (or the replacement it had replaced)."""
+    from .fnv_shader import ShaderTools
+    return ShaderTools.of(live).undo_replace(undo['name'], undo.get('prior'))
+
+
+@undo_op('shader_replace')
+def _undo_shader_replace(live, entry, undo):
+    """Undo of fnv_shader restore: swap the saved replacement `id` back in."""
+    from .fnv_shader import ShaderTools
+    return ShaderTools.of(live).undo_restore(undo['id'])
+
+
 @undo_op('probe_remove', repeatable=True)
 def _undo_probe_remove(live, entry, undo):
     """Disarm (the companion puts every patched entry and site back) and mark the session file not armed (N5). The

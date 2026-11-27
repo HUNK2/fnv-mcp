@@ -11,11 +11,17 @@ by name or entry id, never carrying the source inline.
 """
 import re
 import json
+import struct
+import difflib
+import fnmatch
 from pathlib import Path
 
 from .fnv_conv import ConvError, verdict
 from .fnv_live import LiveError
-from .fnv_shader_hlsl import compile_hlsl, version_of
+from .fnv_layout import ini_value
+from .fnv_shader_hlsl import compile_hlsl, disassemble, parse_ctab, version_of
+from .fnv_shader_pkg import (Package, check_replacement, effect_template, package_index, profile_for,
+                             replacement_template)
 from .fnv_state import GameIdentity, locked, read_json, write_json
 
 MODULE = 'fnvmcp_shaderfx'
@@ -24,6 +30,11 @@ FIRST_PARAM_REG = 2
 CALL_SITE = '00B55AD6'
 NAME_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]{0,39}$')
 PS_3_0 = 0xFFFF0300
+FLAG_ADDRESSES = [0x011F91C0, 0x011F94A4, 0x011F941E, 0x011F941F]   # gpu class, then three package flags
+ROW = struct.Struct('<5I')                                          # obj, kind (0 ps, 1 vs), d3d, size, hash
+MIN_FOUND = 0.95
+LIST_LIMIT = 300
+REG_LETTER = {'float4': 'c', 'int4': 'i', 'bool': 'b', 'sampler': 's'}
 MENU_NOTE = 'pictures need the game out of menus (effects do not draw in menus)'
 
 
@@ -41,6 +52,8 @@ class ShaderTools:
         self.live = live
         self.native = native
         self._verified = None       # the game key whose manifest effects were checked against the module
+        self._pkg = None            # (key, mtime, Package): the package in use for one game session
+        self._scanned = None        # (game key, rows): the engine shader objects of one game session
 
     @classmethod
     def of(cls, live):
@@ -66,7 +79,7 @@ class ShaderTools:
 
     def _read(self):
         m = read_json(self.manifest_path, {})
-        for key, empty in (('effects', {}), ('removed', {}), ('saved', {}), ('replacements', {})):
+        for key, empty in (('effects', {}), ('removed', {}), ('saved', {}), ('replacements', {}), ('restored', {})):
             if not isinstance(m.get(key), dict):
                 m[key] = empty
         m.setdefault('game', None)
@@ -97,11 +110,15 @@ class ShaderTools:
             changed = False
             if not same:
                 m['saved'].update(m['effects'])
-                changed = bool(m['effects']) or m['game'] != here.as_dict()
+                changed = bool(m['effects']) or bool(m['replacements']) or m['game'] != here.as_dict()
                 m['effects'] = {}
+                m['replacements'] = {}           # the swaps died with that game
                 m['game'] = here.as_dict()
-            elif m['effects'] and self._verified != here.key():
+            elif (m['effects'] or m['replacements']) and self._verified != here.key():
                 loaded = self.native.is_loaded(MODULE)
+                if m['replacements'] and not loaded:
+                    m['replacements'] = {}
+                    changed = True
                 for name in list(m['effects']):
                     if not loaded or not self._c('sfx_effect_state', m['effects'][name]['slot']) & 1:
                         m['saved'][name] = m['effects'].pop(name)
@@ -426,5 +443,377 @@ class ShaderTools:
         else:
             self._send_params(e['slot'], e['constants'], e['params'])
             self._c('sfx_effect_enable', e['slot'], 1 if e['enabled'] else 0)
+        self._write(m)
+        return None
+
+    # ================================================================== engine shaders (SHADER-PLAN Task 5)
+    # The engine's own D3D shaders, named by the package (shaderpackageNNN.sdp) the game loaded. The module's scan
+    # lists the live shader objects by the hash of their code; a replacement is swapped into every object holding the
+    # hash of the named original. The original bytecode is read from the package only for checks and answers: it is
+    # never written anywhere. The AI's own source and compiled bytecode are saved in the live folder.
+    def _running(self):
+        try:
+            return self._identity()
+        except Exception:  # noqa: BLE001 - no link, no game: the package is then a guess
+            return None
+
+    def _layout(self):
+        return self.live.game.layout()
+
+    def _where(self, path, layout):
+        """A file as text for the answer: relative to the MO2 folder or the game folder, else just its name."""
+        for root in (layout.mo2_root, layout.game_root):
+            if root:
+                try:
+                    return Path(path).relative_to(root).as_posix()
+                except ValueError:
+                    pass
+        return Path(path).name
+
+    def _index(self, layout, ident):
+        """(package index, guessed). The game's own flags when it runs, else a guess from FalloutPrefs."""
+        if ident is not None:
+            try:
+                flags = self.live.u32s(FLAG_ADDRESSES)
+            except Exception:  # noqa: BLE001
+                flags = None
+            if flags and all(f is not None for f in flags):
+                gpu, f94a4, f941e, f941f = flags
+                index = package_index(gpu & 0xFF, f94a4 & 0xFF, f941e & 0xFF, f941f & 0xFF)
+                if index:
+                    return index, False
+        try:
+            hdr = ini_value(layout.prefs_ini, 'Display', 'bDoHighDynamicRange') == '1'
+        except Exception:  # noqa: BLE001 - an MO2 install with no instance named has no prefs file to read
+            hdr = False
+        return package_index(5, 0, 1 if hdr else 0, 0), True      # gpu class unknown: the most common one
+
+    @staticmethod
+    def _holder(layout, index):
+        """The Shaders folder of the highest-priority place that holds the package, or None."""
+        for root in layout.loose_roots():
+            if (root / 'Shaders' / ('shaderpackage%03d.sdp' % index)).exists():
+                return root / 'Shaders'
+        return None
+
+    def data_shaders_dir(self):
+        layout = self._layout()
+        index, _ = self._index(layout, self._running())
+        return self._holder(layout, index) or layout.data_dir / 'Shaders'
+
+    def package(self):
+        """The Package in use (cached per game session), with `.index`, `.guessed` and `.file` set on it."""
+        ident = self._running()
+        layout = self._layout()
+        index, guessed = self._index(layout, ident)
+        folder = self._holder(layout, index)
+        path = (folder or layout.data_dir / 'Shaders') / ('shaderpackage%03d.sdp' % index)
+        if guessed and not path.exists():
+            shaders = layout.data_dir / 'Shaders'
+            pool = sorted(shaders.glob('shaderpackage*.sdp'), key=lambda p: p.stat().st_size) if shaders.is_dir() else []
+            if pool:
+                path = pool[-1]
+                index = int(re.sub(r'\D', '', path.stem) or 0)
+        if not path.exists():
+            raise ConvError('NO_PACKAGE', 'The shader package %s was not found (looked in the Shaders folder of every '
+                            'enabled mod and in Data).' % path.name, {'index': index, 'guessed': guessed})
+        key = (ident.key() if ident else None, str(path), path.stat().st_mtime_ns, guessed)
+        if self._pkg is None or self._pkg[0] != key:
+            pkg = Package(path)
+            pkg.index, pkg.guessed, pkg.file = index, guessed, self._where(path, layout)
+            self._pkg = (key, pkg)
+        return self._pkg[1]
+
+    def _scan(self, force=False):
+        """The engine's shader objects as rows (obj, kind, d3d, size, hash), scanned once per game session; the
+        package is confirmed by the share of hashes it holds."""
+        ident = self._identity()
+        pkg = self.package()
+        if self._scanned and self._scanned[0] == ident.key() and not force:
+            return self._scanned[1]
+        self._module()
+        count = self._c('sfx_scan')
+        rows = []
+        if count > 0:
+            raw = self.live.link.read(self._c('sfx_table') & 0xFFFFFFFF, count * ROW.size) or b''
+            rows = [ROW.unpack_from(raw, i * ROW.size) for i in range(len(raw) // ROW.size)]
+        known = {pkg.hash_of(n) for n in pkg.names()}
+        found = sum(1 for r in rows if r[4] in known)
+        if rows and found < MIN_FOUND * len(rows):
+            raise ConvError('PACKAGE_MISMATCH', 'Only %d of the %d shader objects in the game are in %s (at least %d%% '
+                            'is needed): the game loaded another shader package. Nothing was changed.'
+                            % (found, len(rows), pkg.file, MIN_FOUND * 100),
+                            {'objects': len(rows), 'found': found, 'package': pkg.file, 'index': pkg.index})
+        self._scanned = (ident.key(), rows)
+        return rows
+
+    def _resolve(self, pkg, name):
+        names = set(pkg.names())
+        if isinstance(name, str) and name in names:
+            return name
+        if isinstance(name, str):
+            lower = {n.lower(): n for n in names}
+            if name.lower() in lower:
+                return lower[name.lower()]
+        text = str(name or '')
+        near = [n for n in sorted(names) if text and text.lower() in n.lower()][:5]
+        near += [n for n in difflib.get_close_matches(text, sorted(names), n=5, cutoff=0.5) if n not in near]
+        raise ConvError('NO_SUCH_SHADER', 'No shader %r in %s. Closest names: %s.' % (
+            name, pkg.file, ', '.join(near[:5]) or 'none (action engine_list searches by name)'),
+            {'suggestions': near[:5]})
+
+    @staticmethod
+    def _reg_text(c):
+        letter = REG_LETTER.get(c.regset, '?')
+        last = '-%s%d' % (letter, c.index + c.count - 1) if c.count > 1 else ''
+        return '%s:%s%d%s' % (c.name, letter, c.index, last)
+
+    def _describe(self, pkg, name):
+        code = pkg.code(name)
+        try:
+            model = profile_for(code)
+        except ConvError:
+            model = 'unknown'
+        ctab = parse_ctab(code)
+        return {'name': name, 'kind': 'vs' if version_of(code) >> 16 == 0xFFFE else 'ps', 'model': model,
+                'constants': [self._reg_text(c) for c in ctab if c.regset != 'sampler'],
+                'samplers': [self._reg_text(c) for c in ctab if c.regset == 'sampler'],
+                'sharedWith': pkg.shared_with(name)}
+
+    def _live_scan(self):
+        """(rows, note): the live objects when the game runs; a failure of the scan other than a wrong package is
+        only a note (the listing itself needs no game)."""
+        if self._running() is None:
+            return None, None
+        try:
+            return self._scan(), None
+        except ConvError as e:
+            if e.code == 'PACKAGE_MISMATCH':
+                raise
+            return None, 'live objects not scanned: %s' % e
+
+    def engine_list(self, filter=None):
+        pkg = self.package()
+        rows, note = self._live_scan()
+        counts = {}
+        for r in rows or []:
+            counts[r[4]] = counts.get(r[4], 0) + 1
+        names = sorted(set(pkg.names()))
+        if filter:
+            pat = str(filter).lower()
+            if any(c in pat for c in '*?['):
+                names = [n for n in names if fnmatch.fnmatchcase(n.lower(), pat)]
+            else:
+                names = [n for n in names if pat in n.lower()]
+        shown = names[:LIST_LIMIT]
+        out_rows = []
+        for n in shown:
+            row = self._describe(pkg, n)
+            if rows is not None:
+                row['liveObjects'] = counts.get(pkg.hash_of(n), 0)
+            out_rows.append(row)
+        known = {pkg.hash_of(n) for n in pkg.names()}
+        out = verdict('%d engine shaders' % len(names), None, rows=out_rows, total=len(names), package=pkg.file,
+                      guessed=bool(pkg.guessed))
+        out['unknownObjects'] = sum(1 for r in rows if r[4] not in known) if rows is not None else None
+        if len(names) > len(shown):
+            out['truncated'] = 'only the first %d of %d are shown: narrow it with filter' % (len(shown), len(names))
+        out['note'] = note or ('the package is a guess from FalloutPrefs (the game is not running)' if pkg.guessed
+                               else None)
+        return out
+
+    def engine_show(self, name, disasm=False):
+        pkg = self.package()
+        name = self._resolve(pkg, name)
+        rows, note = self._live_scan()
+        out = verdict('Engine shader %s' % name, None, **self._describe(pkg, name))
+        out['package'] = pkg.file
+        out['guessed'] = bool(pkg.guessed)
+        out['liveObjects'] = sum(1 for r in rows if r[4] == pkg.hash_of(name)) if rows is not None else None
+        out['replaced'] = any(name in e['names'] for e in self._read()['replacements'].values())
+        out['note'] = note
+        if disasm:
+            out['disassembly'] = disassemble(pkg.code(name))
+            out['gameContent'] = True       # the engine's own code: shown here only, never saved or committed
+        return out
+
+    def template(self, name=None):
+        if not name:
+            return {'name': None, 'profile': 'ps_3_0', 'source': effect_template()}
+        pkg = self.package()
+        name = self._resolve(pkg, name)
+        code = pkg.code(name)
+        return {'name': name, 'profile': profile_for(code), 'source': replacement_template(name, code)}
+
+    # ------------------------------------------------------------------ replace and restore
+    def _frame_ms(self):
+        try:
+            return self.live.world.frame_profile(1.0).get('msPerFrame')
+        except Exception:  # noqa: BLE001 - a menu, or a profiler that cannot hook: the swap is still worth doing
+            return None
+
+    def _swap(self, h, data):
+        """Upload the bytecode and swap it into every object with the code hash `h`; the object count."""
+        addr = self._c('sfx_buffer', len(data))
+        if not addr:
+            raise ConvError('NO_BUFFER', 'The shader module could not make an upload buffer of %d bytes.' % len(data))
+        self.live.link.write(addr & 0xFFFFFFFF, data)
+        n = self._c('sfx_swap', h, addr, len(data))
+        if n >= 0x80000000:
+            n -= 1 << 32
+        if n < 0:
+            raise ConvError('SWAP_FAILED', 'The game refused the replacement (module result %d). Check that it is a '
+                            'drop-in for the original (action template).' % n)
+        return n
+
+    @staticmethod
+    def _find(m, name):
+        return next(((k, e) for k, e in m['replacements'].items() if name in e['names']), (None, None))
+
+    def replace(self, name, source, photo=True):
+        if not isinstance(source, str) or not source.strip():
+            raise ConvError('NO_SOURCE', 'source is the HLSL text of the replacement (action template gives a '
+                            'starting point that matches the original).')
+        self.live.ready()
+        pkg = self.package()
+        name = self._resolve(pkg, name)
+        original = pkg.code(name)
+        profile = profile_for(original)
+        compiled = compile_hlsl(source, profile)
+        if not compiled['ok']:
+            first = compiled['errors'][0]
+            raise ConvError('COMPILE_FAILED', 'The shader did not compile as %s: line %s: %s %s (%d errors).' % (
+                profile, first.get('line'), first.get('code'), first.get('text'), len(compiled['errors'])),
+                {'errors': compiled['errors'], 'warnings': compiled['warnings']})
+        problems = check_replacement(original, compiled['bytecode'])
+        hard = [p for p in problems if not p.get('warning')]
+        if hard:
+            raise ConvError('INCOMPATIBLE', 'The replacement is not a drop-in for %s: %s' % (
+                name, ' '.join(p['text'] for p in hard)), {'problems': problems})
+        h = pkg.hash_of(name)
+        rows = self._scan()
+        if not any(r[4] == h for r in rows):
+            rows = self._scan(force=True)             # shaders made since the scan (a new cell) show up on a second look
+            if not any(r[4] == h for r in rows):
+                raise ConvError('NO_LIVE_OBJECTS', 'No shader object in the running game has the code of %s: the '
+                                'game has not made one yet (it makes them as cells and effects need them). Nothing '
+                                'was changed.' % name)
+        names = [name] + pkg.shared_with(name)
+        warnings = [p['text'] for p in problems if p.get('warning')]
+        warnings += [w['text'] for w in compiled['warnings'] if isinstance(w, dict) and w.get('text')]
+        if len(names) > 1:
+            warnings.append('%s share the same code: %s also change too.' % (
+                ', '.join(names), ', '.join(n for n in names if n != name)))
+        m, _ = self.state()
+        key = '%08X' % h
+        prior = m['replacements'].get(key)
+        m['counter'] += 1
+        stem = 'engine-%s-%d' % (key, m['counter'])
+        entry = {'hash': h, 'names': names, 'source_file': stem + '.hlsl', 'bytecode_file': stem + '.ps',
+                 'profile': profile, 'game': m['game']}
+        before, note = self._look(photo)
+        frame_before = self._frame_ms()
+        self.folder.mkdir(parents=True, exist_ok=True)
+        (self.folder / entry['source_file']).write_text(source, encoding='utf-8')
+        (self.folder / entry['bytecode_file']).write_bytes(compiled['bytecode'])
+        n = self._swap(h, compiled['bytecode'])
+        if n == 0:
+            raise ConvError('NO_LIVE_OBJECTS', 'The shader objects of %s are gone from the game: nothing was changed.'
+                            % name)
+        entry['objects'] = n
+        prior_id = None
+        if prior is not None:
+            prior_id = '%s#%d' % (key, m['counter'])
+            m['restored'][prior_id] = prior
+        m['replacements'][key] = entry
+        self._write(m)
+        self._journal('replace', name, {'op': 'shader_restore', 'name': name, 'prior': prior_id}, objects=n)
+        frame_after = self._frame_ms()
+        after, note2 = self._look(photo and before is not None, before['path'] if before else None)
+        out = verdict('%s replaced in %d shader objects' % (name, n), 'Undo restores the engine code.', names=names,
+                      objects=n, warnings=warnings or None, frameMs={'before': frame_before, 'after': frame_after},
+                      source=entry['source_file'], **self._pictures(before, after))
+        out.setdefault('before', None)
+        out.setdefault('after', None)
+        out.setdefault('changedPercent', None)
+        out['note'] = note or note2
+        return out
+
+    def restore(self, name):
+        self.live.ready()
+        m, _ = self.state()
+        if name == 'all':
+            keys = list(m['replacements'])
+        else:
+            key, _e = self._find(m, name)
+            if key is None:
+                replaced = sorted({n for e in m['replacements'].values() for n in e['names']})
+                raise ConvError('NOT_REPLACED', 'No replacement of %r is in the running game. Replaced: %s.' % (
+                    name, ', '.join(replaced) or 'none'))
+            keys = [key]
+        loaded = self.native.is_loaded(MODULE)
+        if name == 'all' and loaded:
+            self._c('sfx_restore_all')
+        names = []
+        for key in keys:
+            e = m['replacements'].pop(key)
+            if name != 'all' and loaded:
+                self._c('sfx_restore', e['hash'])
+            m['counter'] += 1
+            rid = '%s#%d' % (key, m['counter'])
+            m['restored'][rid] = {**e, 'game': m['game']}
+            self._write(m)
+            self._journal('restore', e['names'][0], {'op': 'shader_replace', 'id': rid})
+            names += e['names']
+        self._write(m)
+        return verdict('%d engine shader replacement(s) restored' % len(keys), 'Undo puts the replacement back.',
+                       restored=names)
+
+    # ------------------------------------------------------------------ undo (called by the ops in fnv_live)
+    def undo_replace(self, name, prior):
+        """Undo of a replace: back to the engine code, or to the replacement it had replaced (`prior`)."""
+        m, known = self.state()
+        key, e = self._find(m, name)
+        if e is None:
+            return {'undone': False, 'reason': 'the replacement of %r is not in the running game (it was restored, or '
+                    'the game restarted)' % name}
+        old = m['restored'].get(prior) if prior else None
+        if prior and old is None:
+            return {'undone': False, 'reason': 'the earlier replacement %s is gone from the manifest' % prior}
+        if old is not None:
+            if not (self.folder / old['bytecode_file']).exists():
+                return {'undone': False, 'reason': 'the saved bytecode of the earlier replacement is gone'}
+            self._swap(old['hash'], (self.folder / old['bytecode_file']).read_bytes())
+            m['replacements'][key] = old
+            del m['restored'][prior]
+        else:
+            if self.native.is_loaded(MODULE):
+                self._c('sfx_restore', e['hash'])
+            del m['replacements'][key]
+        self._write(m)
+        return None
+
+    def undo_restore(self, rid):
+        """Undo of a restore: swap the saved replacement back in."""
+        m, known = self.state()
+        e = m['restored'].get(rid)
+        if e is None:
+            return {'undone': False, 'reason': 'the saved replacement %s is gone from the manifest' % rid}
+        if not known:
+            return {'undone': False, 'reason': 'no running game'}
+        game = GameIdentity.parse(e.get('game'))
+        if game is None or not game.same_game(self._identity()):
+            return {'undone': False, 'reason': 'the game restarted since: replace the shader again'}
+        key = '%08X' % e['hash']
+        if key in m['replacements']:
+            return {'undone': False, 'reason': 'the shader is replaced again by another call'}
+        if not (self.folder / e['bytecode_file']).exists():
+            return {'undone': False, 'reason': 'the saved bytecode is gone'}
+        self._module()
+        n = self._swap(e['hash'], (self.folder / e['bytecode_file']).read_bytes())
+        if n == 0:
+            return {'undone': False, 'reason': 'no shader object in the game has that code any more'}
+        m['replacements'][key] = {**e, 'objects': n}
+        del m['restored'][rid]
         self._write(m)
         return None
