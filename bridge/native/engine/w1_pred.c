@@ -249,7 +249,7 @@ bool pred_eval(int id, const PredContext *ctx, uint32_t *top, bool *is_float) {
     if (is_float) *is_float = false;
     if (id < 0 || id >= (int)PRED_SLOTS || !preds[id].used) return false;
     p = &preds[id];
-    p->evals++;
+    InterlockedIncrement((volatile LONG *)&p->evals); /* (BUG-017) several threads evaluate at once */
     depth = pred_run_values(p->code, p->length, ctx, values, floats, (int)PRED_STACK);
     if (depth == PRED_FAULT || depth == PRED_MALFORMED) p->errors++;
     if (depth <= 0) return false;
@@ -283,10 +283,13 @@ static void op_pred(int argc, char **argv) {
         error = pred_check((const unsigned char *)argv[3], (size_t)length, &ops);
         if (error) return fail(error);
         Pred *p = &preds[id];
+        p->used = false; /* (BUG-017) a thread trapping meanwhile sees no predicate, not half old and half new code */
+        MemoryBarrier();
         memcpy(p->code, argv[3], (size_t)length);
         p->length = (uint16_t)length;
         p->ops = (uint8_t)ops;
         p->evals = p->errors = 0;
+        MemoryBarrier();
         p->used = true;
         emit("{\"ok\":true,\"id\":%u,\"ops\":%u}", id, ops);
     } else if (argc == 3 && !strcmp(argv[1], "clear")) {

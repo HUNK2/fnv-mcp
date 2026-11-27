@@ -23,7 +23,7 @@ typedef struct {
     uint32_t mode, arg, arg2;
     CONTEXT snapshot; /* the CONTEXT when parked: a release that changed it recovers the fault */
 } Stop;
-typedef struct { uint32_t mode, arg, arg2; bool edited; } StopOutcome;
+typedef struct { uint32_t mode, arg, arg2; bool edited; volatile uint32_t *publish; } StopOutcome; /* publish: seq out before the park */
 /* Trap stops (w2_bp.c): the step, to and trace resumes. */
 static LONG bp_fault_resume(CONTEXT *c, const StopOutcome *out);
 static const char *bp_resume_prepare(const Stop *s, uint32_t mode, uint32_t arg, int argc, char **argv);
@@ -72,7 +72,7 @@ static void stop_free(int slot) {
 }
 /* Milliseconds since the stop parked or the last request or ping, whichever is later (the dead-man clock). */
 static ULONGLONG stop_idle(const Stop *s) {
-    ULONGLONG since = last_contact > s->parked ? last_contact : s->parked, now = GetTickCount64();
+    ULONGLONG contact = TICK_GET(last_contact), since = contact > s->parked ? contact : s->parked, now = GetTickCount64();
     return now > since ? now - since : 0;
 }
 /* Releases one stop with a mode. Only the first release counts; the parked thread reads mode and arg after resumed. */
@@ -155,6 +155,7 @@ static int stop_park(uint32_t kind, uint32_t id, uint32_t eip, uint32_t regs, ui
     s->pop = pop;
     s->frame = frame;
     s->seq = (uint32_t)InterlockedIncrement(&stop_seq);
+    if (out->publish) *out->publish = s->seq; /* (BUG-015) the real seq is known while the thread is parked */
     s->parked = GetTickCount64();
     if (context) memcpy(&s->snapshot, (const void *)(uintptr_t)context, sizeof(CONTEXT));
     MemoryBarrier();
@@ -229,7 +230,7 @@ static uint32_t hook_stop(Hook *h, uint32_t *fr) {
             if (!pred_eval((int)h->act_value, &ctx, NULL, NULL)) return 0;
         }
     }
-    StopOutcome out = {0, 0, 0, false};
+    StopOutcome out = {0, 0, 0, false, NULL};
     int slot = stop_park(STOP_HOOK, h->id, h->target, (uint32_t)(uintptr_t)fr, 0, 0, h->act_aux, true, &out);
     if (slot < 0) return 0;
     uint32_t stub = 0;
@@ -243,7 +244,7 @@ static uint32_t hook_stop(Hook *h, uint32_t *fr) {
  * for stack overflows (never reached here). Returns what the handler returns to Windows. */
 static LONG stop_fault(EXCEPTION_POINTERS *e) {
     CONTEXT *c = e->ContextRecord;
-    StopOutcome out = {0, 0, 0, false};
+    StopOutcome out = {0, 0, 0, false, NULL};
     if (!fault_hold || exiting || in_served_call()) return EXCEPTION_CONTINUE_SEARCH;
     int slot = stop_park(STOP_FAULT, 0, (uint32_t)c->Eip, 0, (uint32_t)(uintptr_t)c,
                          (uint32_t)(uintptr_t)e->ExceptionRecord, 0, false, &out);
