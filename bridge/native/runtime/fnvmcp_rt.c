@@ -99,7 +99,7 @@ static const RtPlan *rt_plan(uint32_t target) {
 }
 static int rt_hook(uint32_t target, FnvHookFn handler, void *user, uint32_t pop) {
     const RtPlan *plan = rt_plan(target);
-    if (!plan || !plan->stolen) {
+    if (!plan || !plan->stolen || plan->stolen > 16 || plan->nrelocs > 4) { /* (BUG-021) a hand-edited plan */
         rt_log("hook 0x%08X refused: no prologue plan (list the function in hooks= when building)", target);
         return -1;
     }
@@ -176,7 +176,8 @@ __declspec(dllexport) bool NVSEPlugin_Query(const NVSEInterface *nvse, PluginInf
     info->infoVersion = 1;
     info->name = FNVMCP_PLUGIN_NAME;
     info->version = 1;
-    return !nvse->isEditor;
+    /* (BUG-021) the plans hold addresses of FalloutNV.exe 1.4.0.525 (runtime 0x040020D0): as the engine companion does */
+    return !nvse->isEditor && nvse->runtimeVersion == 0x040020D0;
 }
 __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
     HMODULE self = NULL;
@@ -185,6 +186,7 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
                        (LPCSTR)(void *)NVSEPlugin_Load, &self);
     DWORD n = GetModuleFileNameA(self, rt_log_path, sizeof(rt_log_path) - 8);
     if (n > 4 && n < sizeof(rt_log_path) - 8) strcpy(rt_log_path + n - 4, ".log");
+    else rt_log_path[0] = 0; /* (BUG-021) truncated: no log rather than a log at a prefix of the path */
     rt_nvse = nvse;
     rt_console = nvse->QueryInterface(1);
     Messaging *messages = nvse->QueryInterface(2);

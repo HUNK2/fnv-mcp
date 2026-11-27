@@ -128,12 +128,14 @@ static int isite_add(uint32_t addr, int bp, DWORD owner, uint32_t purpose) {
     if (!shared && cov_in_flight(addr, 1)) return -2; /* a coverage hit there would erase the new 0xCC: busy */
     if (!shared) cov_release_range(addr, 1); /* an armed coverage byte is put back first, never saved as orig */
     if (!shared && !read_bytes(addr, &orig, 1)) return -1;
-    isites[slot].live = true;
     isites[slot].addr = addr;
     isites[slot].orig = orig;
     isites[slot].bp = bp;
     isites[slot].owner = owner;
     isites[slot].purpose = purpose;
+    MemoryBarrier();
+    isites[slot].live = true; /* (BUG-007) published after its fields, and before the 0xCC a trap would find it by */
+    MemoryBarrier();
     byte_set(addr, 0xCC);
     return slot;
 }
@@ -168,8 +170,8 @@ static bool bp_passes(Bp *b, const CONTEXT *c) {
         trap_context(&ctx, c);
         if (!pred_eval((int)b->pred, &ctx, NULL, NULL)) return false;
     }
-    b->passed++;
-    return !b->after || b->passed >= b->after; /* bp after: the Nth passing hit and every later one */
+    uint32_t passed = (uint32_t)InterlockedIncrement((volatile LONG *)&b->passed); /* (BUG-017) atomic */
+    return !b->after || passed >= b->after; /* bp after: the Nth passing hit and every later one */
 }
 /* Appends one entry to the shared log ring (4096 entries; an overwritten entry counts as dropped for its bp). */
 static void bp_log_push(uint32_t id, const CONTEXT *c, Bp *b) {
@@ -192,8 +194,14 @@ static void bp_log_push(uint32_t id, const CONTEXT *c, Bp *b) {
     e.eip = (uint32_t)c->Eip;
     e.bp = id;
     BpEntry *slot = &bp_log[(e.seq - 1) % BP_LOG];
-    if (slot->seq && slot->bp < BPS) bps[slot->bp].dropped++;
-    *slot = e;
+    if (slot->seq && slot->bp < BPS) InterlockedIncrement((volatile LONG *)&bps[slot->bp].dropped);
+    /* (BUG-017) seq goes in last, after the rest, so a reader checking e->seq never sees a half-written entry */
+    uint32_t seq = e.seq;
+    slot->seq = 0;
+    MemoryBarrier();
+    memcpy((char *)slot + sizeof(uint32_t), (const char *)&e + sizeof(uint32_t), sizeof(e) - sizeof(uint32_t));
+    MemoryBarrier();
+    slot->seq = seq;
 }
 
 /* The trap flag: set while the thread single-steps (a user step, a trace step, or a pending reinstall). */
@@ -236,9 +244,12 @@ static void bp_after(CONTEXT *c, const StopOutcome *out, uint32_t id, DWORD tid)
 /* Steps over a live int3 at addr: the original byte goes back, eip stays at addr, and the next single step writes CC
  * again (reinstall). The trap flag is set by tf_fix. */
 static void bp_pass(CONTEXT *c, DWORD tid, uint32_t addr, unsigned char orig) {
+    ThreadBp *t = tb_get(tid);
+    if (t->reinstall && t->reinstall != addr && isite_live(t->reinstall))
+        byte_set(t->reinstall, 0xCC); /* (BUG-005) the thread left that site by a resume: put its int3 back now */
     byte_set(addr, orig);
     c->Eip = addr;
-    tb_get(tid)->reinstall = addr;
+    t->reinstall = addr;
 }
 /* A thread that goes on at addr steps over the int3 there, if a site is still live at addr (one may have been cleared
  * or set while it was parked). */
@@ -254,8 +265,9 @@ static void bp_pass_live(CONTEXT *c, DWORD tid, uint32_t addr) {
 /* Parks the thread as a stop and applies its resume. Returns the stop's seq (0 when the stop was not taken).
  * pass: the address of the int3 the thread trapped on, left in place while it is parked so other threads reaching it
  * stop too; the thread steps over it when it goes on there (0 for a stop that is not on an int3). */
-static uint32_t bp_park(CONTEXT *c, EXCEPTION_RECORD *rec, uint32_t kind, uint32_t id, DWORD tid, uint32_t pass) {
-    StopOutcome out = {0, 0, 0, false};
+static uint32_t bp_park_pub(CONTEXT *c, EXCEPTION_RECORD *rec, uint32_t kind, uint32_t id, DWORD tid, uint32_t pass,
+                            volatile uint32_t *publish) {
+    StopOutcome out = {0, 0, 0, false, publish};
     int slot = exiting || in_served_call() ? -1
              : stop_park(kind, id, (uint32_t)c->Eip, 0, (uint32_t)(uintptr_t)c, rec ? (uint32_t)(uintptr_t)rec : 0, 0,
                          true, &out);
@@ -269,6 +281,9 @@ static uint32_t bp_park(CONTEXT *c, EXCEPTION_RECORD *rec, uint32_t kind, uint32
     bp_pass_live(c, tid, pass); /* before the resume: a step or trace starts on the original instruction */
     bp_after(c, &out, id, tid);
     return seq;
+}
+static uint32_t bp_park(CONTEXT *c, EXCEPTION_RECORD *rec, uint32_t kind, uint32_t id, DWORD tid, uint32_t pass) {
+    return bp_park_pub(c, rec, kind, id, tid, pass, NULL);
 }
 
 /* ---------------------------------------------------------------------------------------------- trace */
@@ -314,8 +329,8 @@ static void tr_end(CONTEXT *c, DWORD tid, uint32_t reason) {
     for (int i = 0; i < (int)ISITES; i++)
         if (isites[i].live && isites[i].purpose == SITE_TRACE && isites[i].owner == tid) isite_remove(i);
     /* trace read takes the seq while the thread is parked, so it is set before the park: the seq the stop will get */
-    tr.stop_seq = (uint32_t)stop_seq + 1;
-    seq = bp_park(c, NULL, STOP_STEP, BP_STEP_ID, tid, 0);
+    tr.stop_seq = (uint32_t)stop_seq + 1; /* a guess; stop_park overwrites it with the real seq before parking */
+    seq = bp_park_pub(c, NULL, STOP_STEP, BP_STEP_ID, tid, 0, &tr.stop_seq);
     if (seq) tr.stop_seq = seq;
 }
 /* Starts the trace prepared by resume trace, from the stop's context. */
@@ -437,6 +452,9 @@ static bool bp_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result) {
     if (bp >= 0) {
         bp_hit(c, e->ExceptionRecord, bp, tid);
         if (to >= 0 && isites[to].live) isite_remove(to); /* a breakpoint hit ends a pending to at this address */
+        /* (BUG-014) the trace's return site shares the address: the trace goes on too */
+        if (ret_site >= 0 && isites[ret_site].live && tr.active && tr.tid == tid && tr.phase == 1)
+            tr_return(c, tid, ret_site);
     } else if (to >= 0) {
         isite_remove(to);
         bp_park(c, NULL, STOP_STEP, BP_STEP_ID, tid, 0);
@@ -630,14 +648,10 @@ static void op_bp_set(int argc, char **argv) {
             if (dr) dbg_apply();
             return fail("no_debug_register");
         }
-    } else {
-        probe_suspend();
-        site = isite_add(addr, (int)id, 0, SITE_BP);
-        probe_resume();
-        if (site < 0) return fail(site == -2 ? "busy" : site == -3 ? "in_use" : "unreadable");
     }
     Bp *b = &bps[id];
-    b->used = true;
+    /* (BUG-002) the record is complete before the 0xCC goes in: a thread trapping at once reads a real breakpoint */
+    memset(b, 0, sizeof(*b));
     b->hw = hw;
     b->addr = addr;
     b->pred = pred;
@@ -645,8 +659,20 @@ static void op_bp_set(int argc, char **argv) {
     b->log_len = log_len;
     b->passed = 0;
     b->after = bp_pending_after[id]; /* armed with its count: a hit right after the set cannot stop early */
-    bp_pending_after[id] = 0;
     memcpy(b->log_code, log_code, sizeof(log_code));
+    MemoryBarrier();
+    b->used = true;
+    if (!hw) {
+        probe_suspend();
+        site = isite_add(addr, (int)id, 0, SITE_BP);
+        probe_resume();
+        if (site < 0) {
+            b->used = false;
+            if (dr) dbg_apply(); /* (BUG-016) the dropped hardware breakpoint's register goes out too */
+            return fail(site == -2 ? "busy" : site == -3 ? "in_use" : "unreadable");
+        }
+    }
+    bp_pending_after[id] = 0;
     if (hw) {
         uint32_t bit = 1u << k;
         dbg_addr[k] = addr;
@@ -713,7 +739,7 @@ static void op_bp_log(int argc, char **argv) {
         return fail("bad_arguments");
     if (argc == 5 && (!parse_u32(argv[4], &max) || max == 0 || max > BP_LOG)) return fail("bad_arguments");
     last = (uint32_t)bp_log_seq;
-    first = since + 1;
+    first = since >= last ? last + 1 : since + 1; /* (BUG-022) since = 0xFFFFFFFF must not wrap to 0 */
     if (last >= BP_LOG && first < last - BP_LOG + 1) first = last - BP_LOG + 1;
     upto = last;
     emit("{\"ok\":true,\"entries\":[");
@@ -785,7 +811,7 @@ static void op_trace(int argc, char **argv) {
     if (argc == 5 && (!parse_u32(argv[4], &max) || max == 0 || max > TRACE_ENTRIES)) return fail("bad_arguments");
     if (!tr.stop_seq || seq != tr.stop_seq) return fail("no_trace");
     last = tr.count;
-    first = since + 1;
+    first = since >= last ? last + 1 : since + 1; /* (BUG-022) since = 0xFFFFFFFF must not wrap to 0 */
     if (last > TRACE_ENTRIES && first < last - TRACE_ENTRIES + 1) first = last - TRACE_ENTRIES + 1;
     upto = last;
     emit("{\"ok\":true,\"entries\":[");

@@ -80,9 +80,11 @@ static int mod_api_write(uint32_t address, const void *bytes, uint32_t length) {
     if (m && length <= MOD_WRITE_MAX && m->nwrites < (int)MOD_WRITES) {
         ModWrite *w = &m->writes[m->nwrites];
         if (!read_bytes(address, w->old, length)) return 0;
+        if (!code_write(address, bytes, length)) return 0; /* (BUG-019) a restore record only for bytes that changed */
         w->address = address;
         w->length = length;
         m->nwrites++;
+        return 1;
     } else if (m) {
         return 0; /* only writes that can be put back */
     }
@@ -147,6 +149,7 @@ static bool hook_remove(Hook *h) {
     h->active = 0;
     h->act_mode = ACT_NONE;
     h->native = NULL; /* the module goes either way: its handler must not run again */
+    MemoryBarrier();  /* (BUG-008) before the caller reads the module's busy count */
     if (!h->stolen) return true;
     unsigned char restore[16];
     uint32_t chained = 0, length = 0;
@@ -162,6 +165,7 @@ static bool hook_remove(Hook *h) {
     }
     probe_unchained(chained);
     h->stolen = 0;
+    h->removed_at = GetTickCount64(); /* (BUG-009) as the unhook op does: the hook can be reused once idle */
     return true;
 }
 /* hooknative <hook> <mod> <request> */
@@ -173,6 +177,7 @@ static void op_hooknative(int argc, char **argv) {
     Mod *m = mod_find(mod_id);
     if (!h || !h->stolen) return fail("unknown_hook");
     if (!m || index >= (uint32_t)m->nhooks) return fail("bad_id");
+    if (h->native) return fail("already_native"); /* (BUG-008) a second attach would race the running handler */
     ModHook *req = &m->hooks[index];
     if (req->target != h->target) return fail("wrong_target");
     if (!h->native_skip) {
@@ -230,12 +235,13 @@ static void emit_exports(uint32_t base) {
             uint32_t name_rva = 0, fn_rva = 0;
             uint16_t ordinal = 0;
             char name[96];
+            size_t name_len = 0;
             if (!read_u32(base + names + 4 * i, &name_rva) ||
                 !read_bytes(base + ordinals + 2 * i, &ordinal, 2) ||
                 !read_u32(base + functions + 4 * ordinal, &fn_rva) ||
-                !read_bytes(base + name_rva, name, sizeof(name) - 1))
+                !read_cstring(base + name_rva, name, sizeof(name) - 1, &name_len)) /* (BUG-019) short reads at the end of the image */
                 continue;
-            name[sizeof(name) - 1] = 0;
+            name[name_len < sizeof(name) - 1 ? name_len : sizeof(name) - 1] = 0;
             emit("%s{\"name\":", comma ? "," : "");
             emit_text(name, strnlen(name, sizeof(name) - 1));
             emit(",\"address\":\"0x%08x\"}", base + fn_rva);

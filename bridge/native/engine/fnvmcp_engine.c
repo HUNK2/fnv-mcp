@@ -134,6 +134,9 @@ static uint32_t nvse_version, runtime_version;
 
 static volatile LONG frame, pending, loaded, deferred_init, script_errors, last_message = -1;
 static volatile ULONGLONG last_frame_tick;
+/* (BUG-010) a 64-bit tick is two 32-bit accesses on x86: read and write it whole */
+#define TICK_GET(v) __atomic_load_n(&(v), __ATOMIC_SEQ_CST)
+#define TICK_SET(v, x) __atomic_store_n(&(v), (ULONGLONG)(x), __ATOMIC_SEQ_CST)
 static HANDLE done_event;
 static char *request, *response;
 static size_t response_len;
@@ -370,18 +373,22 @@ static void read_console_since(LONGLONG offset) {
 }
 
 /* ------------------------------------------------------------------------------------ scripts */
-typedef struct { char *text; void *script; } Compiled;
+typedef struct { char *text; void *script; bool expression; } Compiled;
 static Compiled compiled[EVAL_CACHE];
 static unsigned compiled_count;
 /* xNVSE allocates a script per compile; cache by text so repeated expressions do not grow memory. */
 static void *compile(const char *text, bool expression, const char **failure) {
     for (unsigned i = 0; i < compiled_count; i++)
-        if (!strcmp(compiled[i].text, text)) return compiled[i].script;
+        if (compiled[i].expression == expression && !strcmp(compiled[i].text, text)) return compiled[i].script;
     void *script = expression ? scripts->CompileExpression(text) : scripts->CompileScript(text);
     if (!script) { *failure = "compile_failed"; return NULL; }
     if (compiled_count < EVAL_CACHE) {
-        compiled[compiled_count].text = _strdup(text);
-        compiled[compiled_count++].script = script;
+        char *copy = _strdup(text);
+        if (copy) { /* (BUG-020) on out of memory the script is just not cached */
+            compiled[compiled_count].text = copy;
+            compiled[compiled_count].expression = expression;
+            compiled[compiled_count++].script = script;
+        }
     }
     return script;
 }
@@ -593,6 +600,14 @@ static Shadow *shadow_get(void) {
     }
     return s;
 }
+/* (BUG-001) A new frame at ret_slot means every frame at or below that slot belongs to a call an unwind abandoned
+ * (the stack grows down): drop them, so the exit pop never lands on a stale frame. */
+static void shadow_prune(Shadow *s, uint32_t ret_slot) {
+    while (s && s->count && s->frames[s->count - 1].ret_slot <= ret_slot) {
+        ShadowFrame *old = &s->frames[--s->count];
+        if (old->hook) InterlockedDecrement(&old->hook->inflight);
+    }
+}
 static uint32_t hook_select(const uint32_t *fr, int selector) {
     if (selector == 1) return fr[7];                 /* ecx */
     if (selector >= 2 && selector <= 9) return fr[11 + selector - 2]; /* stack argument 0..7 */
@@ -658,22 +673,32 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
             return stub;
         }
     }
-    uint32_t act = h->act_mode == ACT_HOLD ? ACT_NONE : h->act_mode, original_arg = 0;
+    uint32_t mode_seen = h->act_mode;
+    uint32_t act = mode_seen == ACT_HOLD ? ACT_NONE : mode_seen, original_arg = 0;
+    uint32_t act_aux = h->act_aux, act_value = h->act_value; /* (BUG-004) latched beside act: hookact rewrites them live */
+    MemoryBarrier();
+    if (h->act_mode != mode_seen) act = ACT_NONE; /* hookact ran meanwhile: the pair may be half old, half new */
     unsigned char *skip_stub = h->skip_stub; /* read once: hookact may publish a fresh one meanwhile (K7) */
+    bool act_counted = false;
     if (act) {
         LONG hit = InterlockedIncrement(&h->act_hits);
         if (h->act_limit && (uint32_t)hit > h->act_limit) act = ACT_NONE;
+        else act_counted = true;
     }
     if (act == ACT_ARG) {
-        uint32_t *slot = h->act_aux == 100 ? &fr[7] : h->act_aux == 101 ? &fr[6] : &fr[11 + (h->act_aux & 31)];
+        uint32_t *slot = act_aux == 100 ? &fr[7] : act_aux == 101 ? &fr[6] : &fr[11 + (act_aux & 31)];
         original_arg = *slot;
-        *slot = h->act_value;
+        *slot = act_value;
     }
     bool skip = (act == ACT_SKIP || act == ACT_SKIP_FLOAT) && skip_stub;
     Shadow *s = (h->flags & HF_EXIT) && !skip ? shadow_get() : NULL;
+    shadow_prune(s, (uint32_t)(uintptr_t)&fr[10]);
     /* (K11) a result replacement needs its exit frame: with the shadow stack full (or none) the caller gets the real
      * result, so the call is neither counted as applied nor recorded with the action */
-    if (act == ACT_RESULT && !(s && s->count < SHADOW)) act = ACT_NONE;
+    if (act == ACT_RESULT && !(s && s->count < SHADOW)) {
+        act = ACT_NONE;
+        if (act_counted) InterlockedDecrement(&h->act_hits); /* (BUG-020) the demoted call spends no budget */
+    }
     if (act) {
         InterlockedIncrement(&h->act_applied);
         if (h->script[0]) InterlockedIncrement(&h->script_pending);
@@ -703,7 +728,7 @@ uint32_t fnvmcp_on_enter(uint32_t *fr) {
         if (h->flags & HF_STACK) stack_scan(fr, &r[24], 24);
         else if (h->snap_sel && h->snap_len) read_bytes(hook_select(fr, h->snap_sel), &r[24], h->snap_len);
         if (act == ACT_ARG) r[9] = original_arg; /* edx slot is unused at entry: the value the caller passed */
-        if (skip) { r[8] = h->act_value; r[1] = 3; }
+        if (skip) { r[8] = act_value; r[1] = 3; }
         MemoryBarrier();
         r[0] = (uint32_t)seq;
         if (r[2] == main_thread) { main_rec_hook = h->id; main_rec_seq = (uint32_t)seq; }
@@ -1094,7 +1119,16 @@ static void op_hookact(int argc, char **argv) {
         if (!hook_skip_stubs)
             hook_skip_stubs = VirtualAlloc(NULL, 16u * HOOK_SKIP_STUBS, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
         if (!hook_skip_stubs) return fail("out_of_memory");
-        unsigned char *fresh = hook_skip_stubs + 16u * ((unsigned)InterlockedIncrement(&hook_skip_next) % HOOK_SKIP_STUBS);
+        /* (BUG-003) never take a slot a live skip action still points at: that would rewrite its stub */
+        unsigned char *fresh = NULL;
+        for (unsigned tries = 0; tries < HOOK_SKIP_STUBS && !fresh; tries++) {
+            unsigned char *cand = hook_skip_stubs + 16u * ((unsigned)InterlockedIncrement(&hook_skip_next) % HOOK_SKIP_STUBS);
+            bool used = false;
+            for (int i = 0; i < hook_count && !used; i++)
+                used = hooks[i]->skip_stub == cand && hooks[i]->stolen;
+            if (!used) fresh = cand;
+        }
+        if (!fresh) return fail("out_of_memory");
         unsigned char stub[16] = {0}, *q = stub;
         if (mode == ACT_SKIP) { *q++ = 0xB8; memcpy(q, &value, 4); q += 4; } /* mov eax, value */
         else { /* fld dword [fresh + 12] */
@@ -1306,6 +1340,7 @@ uint32_t fnvmcp_probe_enter(uint32_t *fr) {
         s[17] = (uint32_t)frame;
         s[19] = (uint32_t)n;
         Shadow *sh = (uint32_t)n <= probe_exit_samples ? shadow_get() : NULL;
+        shadow_prune(sh, (uint32_t)(uintptr_t)&fr[10]);
         if (sh && sh->count < SHADOW) {
             LARGE_INTEGER now;
             QueryPerformanceCounter(&now);
@@ -1831,7 +1866,13 @@ static void op_probe(int argc, char **argv) {
             probe_callers = probe_alloc((size_t)v[0] * PROBE_CALLERS * 8, PAGE_READWRITE);
             if (!probe_sites) probe_sites = probe_alloc((size_t)PROBE_SITES * sizeof(ProbeSite), PAGE_READWRITE);
             if (!probes || !probe_counts || !probe_meta || !probe_samples || !probe_callers || !probe_sites) {
-                probes = NULL;
+                /* (BUG-022) the part that was allocated goes back; nothing is armed, so nothing runs from it */
+                if (probes) VirtualFree(probes, 0, MEM_RELEASE);
+                if (probe_counts) VirtualFree((void *)probe_counts, 0, MEM_RELEASE);
+                if (probe_meta) VirtualFree((void *)probe_meta, 0, MEM_RELEASE);
+                if (probe_samples) VirtualFree(probe_samples, 0, MEM_RELEASE);
+                if (probe_callers) VirtualFree((void *)probe_callers, 0, MEM_RELEASE);
+                probes = NULL; probe_counts = NULL; probe_meta = NULL; probe_samples = NULL; probe_callers = NULL;
                 return fail("out_of_memory");
             }
             probe_capacity = v[0];
@@ -2212,8 +2253,15 @@ static void op_write(int argc, char **argv) {
         return fail("in_use");
     unsigned char *old = malloc((size_t)length);
     if (!old) return fail("out_of_memory");
+    /* (BUG-011) code goes the way `code patch` does: coverage bytes released first, threads frozen, none inside */
+    if (code) {
+        cov_release_range(address, (uint32_t)length);
+        InterlockedIncrement(&fnvmcp_slow_writes); /* tests: code never takes the fast data path */
+    }
+    int written = 0;
     if (!read_bytes(address, old, (size_t)length)) fail("unreadable");
-    else if (!write_bytes(address, argv[2], (size_t)length)) fail("unwritable");
+    else if (code && (written = code_write_frozen(address, argv[2], (size_t)length)) == 1) fail("busy");
+    else if (code ? written != 0 : !write_bytes(address, argv[2], (size_t)length)) fail("unwritable");
     else {
         if (code) code_site_note(address, (uint32_t)length, old, (const unsigned char *)argv[2]);
         emit("{\"ok\":true,\"old\":"); emit_hex(old, (size_t)length); emit("}");
@@ -2529,12 +2577,14 @@ static void serve_ops(char *ops, bool first) {
         gate_close();
     }
     InterlockedExchange(&serving_request, 0);
-    InterlockedExchange(&pending, 0);
+    /* (BUG-006) the event first: a pipe thread that sees pending clear resets it, so a late SetEvent could answer
+     * the next request with this one's response */
     SetEvent(done_event);
+    InterlockedExchange(&pending, 0);
 }
 /* Starts serving one request line; the pipe thread waits for done_event. */
 static void serve_request(char *line) {
-    last_contact = GetTickCount64(); /* a served request is contact (K2) */
+    TICK_SET(last_contact, GetTickCount64()); /* a served request is contact (K2) */
     InterlockedExchange(&request_dropped, 0);
     request_marked = line[0] == 'r'; /* a read: more are likely to follow at once (serve_more) */
     char *ops = strchr(line, '\t');
@@ -2608,7 +2658,7 @@ static void ping(HANDLE pipe, char *id) {
         if (hooks[i] && hooks[i]->stolen) live_hooks++;
     for (char *c = id; *c; c++)
         if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '-')) *c = '_';
-    ULONGLONG now = GetTickCount64(), last = last_frame_tick;
+    ULONGLONG now = GetTickCount64(), last = TICK_GET(last_frame_tick);
     snprintf(text, sizeof(text),
              "{\"id\":\"%.64s\",\"pong\":true,\"pid\":%lu,\"started\":\"%llu\",\"companion\":%d,\"wire\":%d,\"frame\":%ld,"
              "\"msSinceFrame\":%lld,\"loaded\":%s,\"deferredInit\":%s,\"lastMessage\":\"%s\",\"busy\":%s,"
@@ -2640,7 +2690,7 @@ static void serve_client(HANDLE pipe) {
         if (line_length && buffer[line_length - 1] == '\r') buffer[line_length - 1] = 0;
         char *tab = strchr(buffer, '\t');
         if (tab && !strcmp(tab + 1, "ping")) {
-            if (!request_dropped) last_contact = GetTickCount64(); /* not while the main thread is stuck (K2) */
+            if (!request_dropped) TICK_SET(last_contact, GetTickCount64()); /* not while the main thread is stuck (K2) */
             *tab = 0;
             ping(pipe, buffer);
         } else {
@@ -2753,7 +2803,7 @@ static void serve_more(LONGLONG started) {
 static void main_loop(void) {
     if (!main_thread) main_thread = GetCurrentThreadId();
     InterlockedIncrement(&frame);
-    last_frame_tick = GetTickCount64();
+    TICK_SET(last_frame_tick, GetTickCount64());
     if (deferred_init) route_console(); /* script errors reach the log even between requests */
     samp_tick();
     mod_frame_tick();
@@ -2827,10 +2877,11 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface *nvse) {
     char value[96];
     DWORD n = GetEnvironmentVariableA("FNVMCP_PIPE", value, sizeof(value));
     if (n && n < sizeof(value)) snprintf(pipe_name, sizeof(pipe_name), "\\\\.\\pipe\\%s", value);
-    n = GetEnvironmentVariableA("LOCALAPPDATA", value, sizeof(value));
+    char appdata[MAX_PATH - 8]; /* (BUG-022) a full-size path: the 96-byte pipe-name buffer silently dropped long ones */
+    n = GetEnvironmentVariableA("LOCALAPPDATA", appdata, sizeof(appdata));
     char folder[MAX_PATH];
-    if (n && n < sizeof(value)) {
-        snprintf(folder, sizeof(folder), "%s\\fnvmcp", value);
+    if (n && n < sizeof(appdata)) {
+        snprintf(folder, sizeof(folder), "%s\\fnvmcp", appdata);
         CreateDirectoryA(folder, NULL);
         n = GetEnvironmentVariableA("FNVMCP_CONSOLE_LOG", console_log, sizeof(console_log));
         if (!n || n >= sizeof(console_log)) snprintf(console_log, sizeof(console_log), "%s\\console.log", folder);
