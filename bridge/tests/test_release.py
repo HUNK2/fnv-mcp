@@ -67,7 +67,9 @@ class RepositoryLeakTests(unittest.TestCase):
             values |= {home, home.replace('\\', '/')}
         parent = REPO.parent
         if len(parent.parts) > 1:           # the folder the clone sits in, unless it is a drive root
-            values |= {str(parent), str(parent).replace('\\', '/'), parent.name}
+            values |= {str(parent), str(parent).replace('\\', '/')}
+            if parent.name.lower() != REPO.name.lower():    # CI clones into <name>/<name>: the project's own name
+                values.add(parent.name)
         try:
             email = subprocess.check_output(['git', '-C', str(REPO), 'config', 'user.email'],
                                             stderr=subprocess.DEVNULL).decode().strip()

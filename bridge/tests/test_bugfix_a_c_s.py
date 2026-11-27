@@ -340,11 +340,11 @@ class SmallDataTests(unittest.TestCase):
             dst = Path(tmp) / 'p.json'
             dst.write_bytes(b'\xef\xbb\xbf' + text.encode('utf-8'))
             shutil.copy(src, Path(tmp) / 'plain.json')
-            try:
-                Project.load(Path(tmp) / 'plain.json')
-            except Exception as exc:  # the example itself does not load here: nothing to compare
-                self.skipTest('example project does not load in a temp folder: %s' % exc)
-            self.assertEqual(Project.load(dst).project_id, Project.load(Path(tmp) / 'plain.json').project_id)
+            from unittest import mock
+            from fnv_mcp import locate
+            # game_root is "auto": a machine with no game (CI) still loads the file
+            with mock.patch.object(locate, 'find_game_root', return_value=Path(tmp)):
+                self.assertEqual(Project.load(dst).project_id, Project.load(Path(tmp) / 'plain.json').project_id)
 
 
 class ExitNoteTests(unittest.TestCase):

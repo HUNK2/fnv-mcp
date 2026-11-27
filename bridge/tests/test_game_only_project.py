@@ -61,7 +61,8 @@ class ReadmeCountTests(unittest.TestCase):
         text = (BRIDGE.parent / 'README.md').read_text(encoding='utf-8')
         block = re.search(r'<!-- counts -->(.*?)<!-- /counts -->', text, re.S).group(1)
         numbers = [int(n) for n in re.findall(r'\d+', block)]
-        caps = server_capabilities(make_server(Project.load(EXAMPLE)))
+        from fakes import load_example      # game_root "auto": loads with no game too (CI)
+        caps = server_capabilities(make_server(load_example(EXAMPLE.name)))
         self.assertEqual(numbers, [caps['toolCount']])
 
 
