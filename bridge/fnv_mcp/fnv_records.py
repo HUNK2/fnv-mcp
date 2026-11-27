@@ -23,6 +23,7 @@ from .esp import assets
 from .esp.codec import inflate
 from .fnv_data import DataError, NOT_FORMS, STRING_TAGS, load_order, read_record
 from .fnv_state import locked
+from .safe_paths import no_unc
 from .fnv_state import atomic_write, write_txn
 
 REFS_VERSION = 4  # 3: text-or-form tags (RNAM...) are scanned when they are not text; 4: or when the 4 bytes name a record (R9)
@@ -426,7 +427,10 @@ class RecordsTools:
         entries = load_order(project, self.data._live_plugins())
         target = next((e for e in entries if e['name'].lower() == plugin.lower()), None)
         if target is None:
-            path = Path(plugin)
+            try:
+                path = no_unc(plugin, 'plugin')       # text only, before resolve() touches the path (BUG-029)
+            except ValueError as e:
+                raise DataError('BAD_PATH', str(e)) from None
             # a file outside the load order: only under the game Data folder or the dev profile's mods (T7); checked
             # before the file is looked at, so a refusal does not tell whether a path exists (X2)
             allowed = [Path(project.game_root) / 'Data']

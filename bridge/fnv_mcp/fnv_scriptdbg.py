@@ -604,6 +604,11 @@ class ScriptDebugger:
     def eval_(self, expression):
         if not expression:
             raise ConvError('BAD_EXPRESSION', 'An expression is needed, such as GetStage QuestName.')
+        from .fnv_live import LiveService       # the commands fnv_console and fnv_run_script refuse (BUG-027)
+        refused = LiveService.console_refused(expression) or LiveService.script_refused(expression)
+        if refused:
+            raise ConvError('CONSOLE_REFUSED', '%s is not run from script_debug eval. Next: use %s.'
+                            % (refused, LiveService.CONSOLE_INSTEAD[refused]), {'command': refused})
         stop = self._current()
         st = self._state(stop)
         reply = self.link.eval(expression, st['reference'] or 0)

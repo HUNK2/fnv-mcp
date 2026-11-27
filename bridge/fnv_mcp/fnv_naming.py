@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .fnv_probe import CALLER_SLOTS, WORDS, ProbeError, call_kind, decode_sample, vtable_class
 from .fnv_state import atomic_write
+from .safe_paths import no_unc
 
 
 class ProofFolderError(Exception):
@@ -467,7 +468,10 @@ class NamingTools:
         map). An existing file is replaced only when it is an earlier fnv-mcp export."""
         if not path:
             return fnvsym_root() / 'traces' / ('fnvmcp-%s.json' % time.strftime('%Y%m%d'))
-        target = Path(path).resolve()
+        try:
+            target = no_unc(path, 'path').resolve()       # a network path is refused before it is touched (BUG-029)
+        except ValueError as e:
+            raise ProbeError('BAD_PATH', str(e)) from None
         fnvsym = fnvsym_root(required=False)
         roots = [(fnvsym / 'traces').resolve()] if fnvsym else []
         state = getattr(self.live.project, 'state_dir', None)

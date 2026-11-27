@@ -540,7 +540,10 @@ class ScenarioRunner:
         return report
 
     def run_all(self, folder=None, pattern='*.yaml'):
-        root = Path(folder or getattr(self.live.project.fnv, 'tests_dir', None) or '.')
+        try:
+            root = no_unc(folder or getattr(self.live.project.fnv, 'tests_dir', None) or '.', 'folder')    # BUG-029
+        except ValueError as e:
+            raise ScenarioError('BAD_PATH', str(e)) from None
         if not root.is_dir():
             from .safe_paths import EXAMPLES_DIR
             raise ScenarioError('NO_TESTS', 'The folder %s does not exist%s. Create it and put scenario files in it, or '

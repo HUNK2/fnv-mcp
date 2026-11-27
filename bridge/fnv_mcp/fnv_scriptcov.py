@@ -159,6 +159,8 @@ class ScriptCoverage:
         through xNVSE's own decompiler: its console command DecompileScript writes DecompiledScripts\\<plugin>\\
         <name>.<ext> under the game folder (or MO2's overwrite folder); the file is read and removed."""
         self.live.in_game()
+        # xNVSE writes the file into the game folder (on the direct install that is the real one; BUG-026)
+        self.live.game.guard_direct('decompile a script (xNVSE writes DecompiledScripts into the game folder)')
         f = self.live.resolve(form)
         roots = [Path(self.live.game.game_root) / 'DecompiledScripts']
         mo2 = getattr(self.live.project.fnv, 'mo2_root', None)
