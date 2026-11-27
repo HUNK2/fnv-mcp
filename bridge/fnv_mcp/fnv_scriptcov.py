@@ -29,6 +29,7 @@ class ScriptCoverage:
         self.data = data
         self.sleep = sleep
         self.seen = {}                    # script ptr -> set of statement numbers
+        self._lock = threading.Lock()     # the poll thread adds while report() reads
         self.lost = 0
         self.records = 0
         self.plugin = None
@@ -65,8 +66,9 @@ class ScriptCoverage:
         self._since = seq
         self.lost += lost
         self.records += len(recs)
-        for r in recs:
-            self.seen.setdefault(r[12], set()).add(r[18])
+        with self._lock:
+            for r in recs:
+                self.seen.setdefault(r[12], set()).add(r[18])
 
     def stop(self):
         if self._thread:
@@ -84,7 +86,9 @@ class ScriptCoverage:
         return self.report()
 
     def report(self, limit=60):
-        ptrs = sorted(self.seen)
+        with self._lock:
+            seen = {k: set(v) for k, v in self.seen.items()}
+        ptrs = sorted(seen)
         heads = dict(zip(ptrs, self.live.form_ids(ptrs))) if ptrs else {}
         wanted = self._plugin_scripts(self.plugin) if self.plugin else None
         rows = []
@@ -101,7 +105,7 @@ class ScriptCoverage:
                     ptr = self.live.resolve(fid)['ptr']
                 except Exception:  # noqa: BLE001
                     ptr = None
-            ran = self.seen.get(ptr, set()) if ptr else set()
+            ran = seen.get(ptr, set()) if ptr else set()
             source = self.sd._source(int(fid, 16), ptr)
             if not source:
                 rows.append({'script': fid, 'statementsRun': len(ran), 'source': None,
@@ -141,7 +145,7 @@ class ScriptCoverage:
             raise ConvError('PLUGIN_NOT_FOUND', '%s is not in the active load order.' % plugin)
         rows = self.data.index.db.execute("select owner, local from records where type = 'SCPT' and owner = ?",
                                           (target['name'].lower(),)).fetchall()
-        return [str(self.data._global(entries, owner, local)) for owner, local in rows]
+        return list(dict.fromkeys(str(self.data._global(entries, owner, local)) for owner, local in rows))
 
     def run(self, folder, plugin=None):
         if self.runner is None:
@@ -149,9 +153,14 @@ class ScriptCoverage:
         self.start(plugin)
         try:
             suite = self.runner().run_all(folder)
-        finally:
-            out = self.stop()
-        out['suite'] = {k: suite.get(k) for k in ('passed', 'failed', 'total', 'summary') if k in suite}
+        except BaseException:
+            try:
+                self.stop()             # stop the recording; a NOT_RECORDING here must not replace the suite's error
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        out = self.stop()
+        out['suite'] = {k: suite.get(k) for k in ('passed', 'failed', 'total', 'summary', 'summaries') if k in suite}
         return out
 
     def decompile(self, form, timeout=5.0):
