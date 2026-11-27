@@ -143,14 +143,23 @@ static bool hook_remove(Hook *h) {
     unsigned char now[5], expected[5] = {0xE9};
     uint32_t value = (uint32_t)(uintptr_t)h->entry - (h->target + 5);
     memcpy(expected + 1, &value, 4);
+    uint32_t was_active = h->active, was_mode = h->act_mode;
     h->active = 0;
     h->act_mode = ACT_NONE;
-    h->native = NULL;
+    h->native = NULL; /* the module goes either way: its handler must not run again */
     if (!h->stolen) return true;
-    if (!read_bytes(h->target, now, 5) || memcmp(now, expected, 5)) return false;
     unsigned char restore[16];
-    uint32_t chained, length = hook_restore_bytes(h, restore, &chained);
-    if (code_write_frozen(h->target, restore, length)) return false;
+    uint32_t chained = 0, length = 0;
+    bool ok = read_bytes(h->target, now, 5) && !memcmp(now, expected, 5);
+    if (ok) {
+        length = hook_restore_bytes(h, restore, &chained);
+        ok = !code_write_frozen(h->target, restore, length);
+    }
+    if (!ok) {
+        h->act_mode = was_mode; /* still hooked: its action goes on until a later unhook succeeds (K6) */
+        h->active = was_active;
+        return false;
+    }
     probe_unchained(chained);
     h->stolen = 0;
     return true;
