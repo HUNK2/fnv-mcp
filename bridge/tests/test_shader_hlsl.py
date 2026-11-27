@@ -40,6 +40,16 @@ class ShaderHlslTests(unittest.TestCase):
         for e in errors:
             self.assertNotIn(':\\', e['text'])
 
+    def test_clean_strips_paths_with_spaces(self):
+        raw = ('error X3501: cannot open C:\\Users\\First Last\\dir\\x.fx for reading\n'
+               'C:\\Users\\First Last\\dir\\effect.hlsl(2,1): error X3004: bad C:\\Users\\First Last\\dir\\y.fx\n')
+        out = H._clean(raw)
+        errors, _ = H._messages(raw)
+        for s in [out] + [e['text'] for e in errors]:
+            for bad in ('First', 'Last', ':\\'):
+                self.assertNotIn(bad, s)
+        self.assertEqual([(e['line'], e['code']) for e in errors], [(0, 'X3501'), (2, 'X3004')])
+
     def test_entrypoint_not_found(self):
         r = H.compile_hlsl('float4 f():COLOR0{return 0;}')
         self.assertFalse(r['ok'])
