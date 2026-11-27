@@ -9,6 +9,7 @@
 - `compact(live)` runs at server start: entries of other game processes go to `journal-archive-YYYYMMDD.jsonl`
   (entries without a pid, from before the identity stamp, to `journal-archive-legacy.jsonl`).
 """
+import contextlib
 import json
 import os
 import threading
@@ -284,19 +285,34 @@ class Journal:
             archived = len(dated) + len(legacy)
             if not archived:
                 return {'kept': len(keep), 'archived': 0}
+            archives = []      # (path, size before we appended): a failed journal rewrite truncates them back
             if dated or events_archive:
-                name = 'journal-archive-%s.jsonl' % time.strftime('%Y%m%d')
-                with open(self.path.with_name(name), 'ab') as f:
-                    f.write(''.join(json.dumps(r) + '\n' for r in dated + events_archive).encode('utf-8'))
+                archives.append((self.path.with_name('journal-archive-%s.jsonl' % time.strftime('%Y%m%d')),
+                                 ''.join(json.dumps(r) + '\n' for r in dated + events_archive)))
             if legacy:
-                with open(self.path.with_name('journal-archive-legacy.jsonl'), 'ab') as f:
-                    f.write(''.join(json.dumps(r) + '\n' for r in legacy).encode('utf-8'))
+                archives.append((self.path.with_name('journal-archive-legacy.jsonl'),
+                                 ''.join(json.dumps(r) + '\n' for r in legacy)))
+            before = []
+            for path, text in archives:
+                try:
+                    before.append(os.path.getsize(path))
+                except OSError:
+                    before.append(0)
+                with open(path, 'ab') as f:
+                    f.write(text.encode('utf-8'))
             # entries in file order, then the undo records that still name kept entries
             body = [r for r in records if r.get('kind') not in EVENTS and r.get('id') in kept_ids]
             # never in place: a reader in another process keeps its byte offset, and a crash mid-write would empty
             # the file. Compaction is best effort: a failed replace leaves the old journal (U6)
-            atomic_write(self.path, ''.join(json.dumps(r) + '\n' for r in body + events_keep),
-                         in_place_fallback=False)
+            try:
+                atomic_write(self.path, ''.join(json.dumps(r) + '\n' for r in body + events_keep),
+                             in_place_fallback=False)
+            except BaseException:   # the journal still holds these records: take them back out of the archives
+                for (path, _), size in zip(archives, before):
+                    with contextlib.suppress(OSError):
+                        with open(path, 'r+b') as f:
+                            f.truncate(size)
+                raise
             atomic_write(self.seq_path, str(last))
             with self._mutex:
                 self._records, self._offset, self._fold = [], 0, None

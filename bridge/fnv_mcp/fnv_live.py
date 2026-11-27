@@ -1462,14 +1462,17 @@ class LiveService:
         undo_value = old if string else repr(float(old))
         undo = put.replace(str(value) if string else str(float(value)), str(undo_value)) if not string else \
             'SetGS %s "%s"' % (name, old)
-        entry = self.journal.add({'kind': 'setting', 'name': name, 'old': old, 'new': new, 'undo': {'op': 'console', 'line': undo}})
+        # an old string with a double quote cannot be written back through SetGS "...": no undo rather than a broken line
+        quoted = string and '"' in str(old)
+        entry = self.journal.add({'kind': 'setting', 'name': name, 'old': old, 'new': new,
+                                  'undo': None if quoted else {'op': 'console', 'line': undo}})
         info = None
         try:
             info = self.engine().statics_find(name.split(':')[0], 'Setting', 1)
         except Exception:
             pass
         return {'name': name, 'old': old, 'new': new, 'accepted': result['accepted'], 'journalId': entry['id'],
-                'engineMap': info, 'changed': old != new}
+                'engineMap': info, 'changed': old != new, **({'undoable': False} if quoted else {})}
 
     def script_set(self, target, kind, value, name=None, index=None):
         """kind: stage | objective_completed | objective_displayed | variable | global."""
@@ -1619,6 +1622,9 @@ class LiveService:
                 raise ValueError('set_position needs value=[x, y, z]: three numbers (got %r)' % (value,)) from None
             value = [x, y, z]
             old = self.values(['GetPos X', 'GetPos Y', 'GetPos Z'], r['ptr'])
+            if any(not isinstance(o, (int, float)) or isinstance(o, bool) for o in old):
+                raise LiveError('POSITION_UNREADABLE', 'Could not read the position of %s (%s), so the move could not '
+                                'be undone; nothing was changed' % (r['formId'], old))
             self.changing('actor_control')
             # Journaled before the moves: if a later axis fails, the axes already moved can still be undone.
             entry = self.journal.add({'kind': 'actor', 'ref': r['formId'], 'action': action, 'old': old, 'new': value,
@@ -1934,6 +1940,8 @@ class _OpenTargets:
                 continue
             now = self.live.journal.get(i)
             if now and now.get('undo') and not now['undone']:
+                if self.live._outcome_unknown(now):
+                    continue    # its change may never have happened: it must not block an older entry (BUG-105)
                 out.append(i)
             else:
                 gone.append(i)                      # undone elsewhere since it was read
@@ -1998,9 +2006,12 @@ def _undo_console_ref(live, entry, undo):
 
 @undo_op('unhook', repeatable=True)
 def _undo_unhook(live, entry, undo):
+    seen = False
     for h in live.link.one('hooks').get('hooks') or []:
         if h.get('label') == undo['label'] and h.get('stolen'):
             live.link.one('unhook', word(h['id']))
+            seen = True
+    return {'changeSeen': True} if seen else None
 
 
 @undo_op('probe_disarm', repeatable=True)
@@ -2025,10 +2036,12 @@ def _undo_probe_remove(live, entry, undo):
     stub code stays in the companion's heap, unreachable; the next install starts a new code area."""
     from .fnv_probe import ProbeTools
     info = live.link.one('probe', 'info')
+    seen = False
     if info.get('ok') and info.get('armed'):
         r = live.link.one('probe', 'disarm')
         if not r.get('ok'):
             return {'undone': False, 'reason': 'probe disarm failed: %s' % r.get('error')}
+        seen = True
     from .fnv_state import locked, read_json, write_json
     here = GameIdentity.parse(live.game_identity())
     path = ProbeTools(live)._path('probe_session.json')
@@ -2037,7 +2050,7 @@ def _undo_probe_remove(live, entry, undo):
         if isinstance(session, dict) and session.get('armed') and here and here.same_game(GameIdentity.parse(session)):
             session['armed'] = False
             write_json(path, session)
-    return None
+    return {'changeSeen': True} if seen else None
 
 
 @undo_op('dbg_clear', repeatable=True)
@@ -2115,7 +2128,7 @@ def _undo_ref_enabled(live, entry, undo):
         return _undo_unreadable('GetDisabled')
     if bool(disabled) != bool(undo['on']):
         return None
-    return _console_undo(live, 'Enable' if undo['on'] else 'Disable', ref['ptr'])
+    return _console_undo(live, 'Enable' if undo['on'] else 'Disable', ref['ptr']) or {'changeSeen': True}
 
 
 ACTOR_FLAGS = {'unconscious': ('GetUnconscious', 'SetUnconscious %d'),
@@ -2133,7 +2146,7 @@ def _undo_actor_flag(live, entry, undo):
         return _undo_unreadable(getter)
     if bool(now) == bool(undo['on']):
         return None
-    return _console_undo(live, setter % int(bool(undo['on'])), ref['ptr'])
+    return _console_undo(live, setter % int(bool(undo['on'])), ref['ptr']) or {'changeSeen': True}
 
 
 @undo_op('item_count', repeatable=True)
@@ -2148,7 +2161,7 @@ def _undo_item_count(live, entry, undo):
     if not diff:
         return None
     return _console_undo(live, '%s %s %d' % ('AddItem' if diff > 0 else 'RemoveItem', undo['item'], abs(diff)),
-                         ref['ptr'])
+                         ref['ptr']) or {'changeSeen': True}
 
 
 @undo_op('time_restore', repeatable=True)
