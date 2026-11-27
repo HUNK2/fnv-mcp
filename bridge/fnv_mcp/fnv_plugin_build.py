@@ -59,6 +59,9 @@ class PluginTools:
         self.zig = zig
 
     def _folder(self, name):
+        if not c_name(name):           # '---' or '..' would put the files in the plugins folder itself (BUG-029c)
+            raise ConvError('BAD_NAME', 'The module name %r has no letter or digit to name the C file after. Next: '
+                            'use a name such as my_hooks.' % (name,))
         return Path(self.live.project.state_dir) / 'fnv' / 'plugins' / c_name(name)
 
     def _zig(self):

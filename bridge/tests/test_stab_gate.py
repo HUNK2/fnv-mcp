@@ -123,6 +123,7 @@ READ_CASES = {
 FULL_ONLY_CASES = {
     ('fnv_plugin_build', 'build'): {'action': 'build', 'name': 'x', 'source': 'int x;'},
     ('fnv_plugin_build', 'install'): {'action': 'install', 'name': 'x'},
+    ('fnv_author', 'package_build'): {'action': 'package', 'plugin': 'x.esp', 'module': 'm', 'build': True},
     ('fnv_install', '*'): {'plugin_path': 'C:/nope/Nope.esp'},
     ('fnv_profile_set', 'apply'): {'plugins': {'Nope.esp': True}},
     ('fnv_asset', 'make_nif'): {'action': 'make_nif', 'path': 'C:/nope/x.glb', 'out': 'meshes/x.nif'},

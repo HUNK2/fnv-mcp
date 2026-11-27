@@ -582,11 +582,13 @@ class WaitFor:
         fps = snap.get('fixedFps') or snap.get('realFps') or ASSUMED_FPS
         clock = self.control.clock
         deadline = clock() + timeout
-        if limit <= UNTIL_MAX and limit <= max(1, int(timeout * fps)):
-            return self.until(text, limit, held, timeout)
-        self.check_readable(compile_predicate(text))
-        total, res = 0, None
+        total, res, reopened = 0, None, False
         try:
+            if limit <= UNTIL_MAX and limit <= max(1, int(timeout * fps)):
+                res = self.until(text, limit, held, timeout)
+                reopened = True     # the request itself reopened the gate; a failure leaves it to the finally (BUG-025)
+                return res
+            self.check_readable(compile_predicate(text))
             while True:
                 left = max(deadline - clock(), 1.0)
                 n = max(1, min(UNTIL_MAX, limit - total, int(left * fps)))
@@ -599,7 +601,7 @@ class WaitFor:
                 if elapsed > 0 and res['frames']:
                     fps = max(1.0, res['frames'] / elapsed)
         finally:
-            if not held:
+            if not held and not reopened:
                 try:
                     self.control.batch([('hold', 'off')])
                 except Exception:  # noqa: BLE001 - the dead-man switch opens the gate anyway

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .fnv_conv import ConvError, verdict
 from .fnv_link import word
+from .safe_paths import no_unc
 
 CHUNK = 3000
 
@@ -151,7 +152,10 @@ class CoverageTools:
 
     def diff(self, a, b):
         def load(ref):
-            p = Path(ref)
+            try:
+                p = no_unc(ref, 'coverage')      # BUG-029: no network path
+            except ValueError as e:
+                raise ConvError('BAD_PATH', str(e)) from None
             if not p.is_file():
                 p = self.folder / (ref if str(ref).endswith('.json') else '%s.json' % ref)
             if not p.is_file():

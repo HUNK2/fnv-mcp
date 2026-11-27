@@ -741,7 +741,7 @@ class AssetTools:
             return layout.data_dir, None, []
         plugin = getattr(project, 'plugin', None)
         mod = options.get('mod') or (Path(plugin).stem if plugin else 'fnvmcp assets')
-        if not isinstance(mod, str) or not SAFE_NAME.match(mod) or '..' in mod or not mod.strip(' .'):
+        if not isinstance(mod, str) or not SAFE_NAME.fullmatch(mod) or '..' in mod or not mod.strip(' .'):
             raise ValueError("options.mod is a mod folder name: letters, digits, space and _ . ' - only")
         notes = []
         if mod not in layout.enabled_mods():

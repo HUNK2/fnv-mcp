@@ -96,15 +96,16 @@ def write_roots(project):
 
 
 # '%:' is the C digraph for '#' (bug hunt 2026-11-18: "%:include" slipped past the check)
-_DIRECTIVE = re.compile(r'[ \t]*(?:#|%:)[ \t]*(include_next|include|import|embed)\b(.*)', re.DOTALL)
-_TARGET = re.compile(r'[ \t]*(?:"([^"\n]+)"|<([^>\n]+)>)[ \t]*\Z')
+_DIRECTIVE = re.compile(r'[ \t\f\v]*(?:#|%:)[ \t\f\v]*(include_next|include|import|embed)\b(.*)', re.DOTALL)
+_TARGET = re.compile(r'[ \t\f\v]*(?:"([^"\n]+)"|<([^>\n]+)>)[ \t\f\v]*\Z')
 
 
 def _code_only(source):
     """The C text as the preprocessor sees directives: trigraphs ??= and ??/ replaced, backslash-newlines spliced,
     comments turned into a space, string and character literals kept as they are."""
     text = source.replace('??=', '#').replace('??/', '\\')
-    text = re.sub(r'\\\r?\n', '', text)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')       # a lone CR ends a line for the compiler (BUG-028)
+    text = re.sub(r'\\[ \t\f\v]*\n', '', text)                   # a backslash, blanks, newline still splices
     out, i, n = [], 0, len(text)
     while i < n:
         c = text[i]

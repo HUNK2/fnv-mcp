@@ -543,7 +543,7 @@ class LiveService:
         Accepts: player | crosshair | form id hex (0x00000014, 14, 000A3E7C) | Plugin.esp:LOCALID |
         an EditorID from the record index (looked up, never evaluated: W2)."""
         ref = (ref or '').strip()
-        if ref.startswith('@') and EDITOR_ID.match(ref[1:]):     # fnv_spec's "@EditorID" form (live check 2026-11-18)
+        if ref.startswith('@') and EDITOR_ID.fullmatch(ref[1:]):     # fnv_spec's "@EditorID" form (live check 2026-11-18)
             ref = ref[1:]
         if not ref:
             raise ValueError('ref is required')
@@ -557,7 +557,7 @@ class LiveService:
         elif is_form_id(ref):          # one parser with the record tools (T6)
             value = form_id(ref)
             expr = '(BuildRef %d %d)' % (value >> 24, value & 0xFFFFFF)
-        elif EDITOR_ID.match(ref):
+        elif EDITOR_ID.fullmatch(ref):
             # A bare name is looked up in the EditorID index, never evaluated: eval "QuitGame" ran QuitGame from a read
             # tool (W2), and plugin commands are not in the engine map to refuse them by name (review I4).
             found = self.editor_id(ref)
@@ -1055,10 +1055,22 @@ class LiveService:
 
     @classmethod
     def console_refused(cls, line):
-        """The refused command word of a console line, or None."""
-        first = (line or '').strip().split(None, 1)[0] if (line or '').strip() else ''
-        command = first.rsplit('.', 1)[-1].lower()
-        return command if command in cls.CONSOLE_REFUSED else None
+        """The refused command word of a console line, or None. Every command in the line counts: it is split on
+        `;` and line breaks, leading parentheses and quotes are dropped, and after `eval` / `runscript` / `call`
+        every word is looked at (BUG-027)."""
+        for segment in re.split(r'[;\r\n\x0b\x0c\x85\u2028\u2029]', line or ''):
+            words = re.findall(r'[A-Za-z_][A-Za-z0-9_.]*', segment)
+            if not words:
+                continue
+            first = words[0].rsplit('.', 1)[-1].lower()
+            if first in cls.CONSOLE_REFUSED:
+                return first
+            if first in ('eval', 'runscript', 'call'):
+                for word in words[1:]:
+                    word = word.rsplit('.', 1)[-1].lower()
+                    if word in cls.CONSOLE_REFUSED:
+                        return word
+        return None
 
     @classmethod
     def script_refused(cls, source):
@@ -1073,7 +1085,7 @@ class LiveService:
         return None
 
     def run_console(self, line, ref=None):
-        if '\n' in line or len(line) > 500:
+        if '\n' in line or '\r' in line or len(line) > 500:
             raise ValueError('One console line of at most 500 characters')
         refused = self.console_refused(line)
         if refused:
@@ -1481,7 +1493,7 @@ class LiveService:
         """kind: stage | objective_completed | objective_displayed | variable | global."""
         self.in_game()
         if kind == 'global':
-            if not EDITOR_ID.match(target):
+            if not EDITOR_ID.fullmatch(target):
                 raise ValueError('A global is given by its EditorID')
             old = fnv_link.value_of(self.link.eval('GetGlobalValue %s' % target))
             if old is None:     # bug hunt 2026-11-18: no such global: the undo line read "set X to None"
@@ -1505,14 +1517,14 @@ class LiveService:
             line = 'SetObjective%s %s %d %d' % (fn, q['formId'], int(index), 1 if flag else 0)
             undo = 'SetObjective%s %s %d %d' % (fn, q['formId'], int(index), 1 if old else 0)
         elif kind == 'variable':
-            if not name or not EDITOR_ID.match(name):
+            if not name or not EDITOR_ID.fullmatch(name):
                 raise ValueError('variable needs the variable name')
             r = self.resolve(target)
             current = {v['name'].lower(): v for v in self.variables(target)['variables'] if v['name']}
             if name.lower() not in current:
                 raise LiveError('NO_VARIABLE', '%s has no variable %s' % (target, name), {'variables': sorted(current)})
             old = current[name.lower()]['value']
-            if not EDITOR_ID.match(target):
+            if not EDITOR_ID.fullmatch(target):
                 raise LiveError('NEEDS_EDITOR_ID', 'Setting a variable needs the quest or reference EditorID (console '
                                 '"set X.var to")', {'formId': r['formId']})
             try:
@@ -1568,7 +1580,7 @@ class LiveService:
         elif action in self.TARGET_ACTIONS:
             if not target:
                 raise ValueError('%s needs a target' % action)
-            t = target if EDITOR_ID.match(target) and not FORM_ID.match(target) else self.resolve(target)['formId']
+            t = target if EDITOR_ID.fullmatch(target) and not FORM_ID.match(target) else self.resolve(target)['formId']
             command = self.TARGET_ACTIONS[action] % t
             count = 1
             if action in ('add_item', 'remove_item') and value is not None:

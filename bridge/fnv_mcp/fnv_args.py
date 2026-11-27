@@ -28,7 +28,7 @@ def is_form_id(text):
     (an EditorID starts with a letter or _); a word that is both (Beef, ABCD) is an EditorID unless it has the 0x
     prefix or all 8 digits."""
     text = str(text).strip()
-    return bool(HEX.match(text)) and (text.lower().startswith('0x') or len(text) == 8 or not EDITOR_ID.match(text))
+    return bool(HEX.match(text)) and (text.lower().startswith('0x') or len(text) == 8 or not EDITOR_ID.fullmatch(text))
 
 
 def form_id(text):
