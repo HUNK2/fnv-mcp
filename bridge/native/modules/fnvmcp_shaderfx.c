@@ -184,6 +184,9 @@ static uint32_t fnv1a(const unsigned char *b, UINT n) {
 /* ------------------------------------------------------------------------------------------------ the only writes */
 
 static void __fastcall eof_wrap(void *mgr, void *edx, uint32_t renderer, uint32_t *src, uint32_t *dst);
+#ifdef SFX_BAKED
+static void bake_load(void);
+#endif
 
 /* The one code patch: the call at 0x00B55AD6 goes to eof_wrap. Returns 0 when patched. */
 static int patch_call_site(void) {
@@ -406,6 +409,9 @@ static void __fastcall eof_wrap(void *mgr, void *edx, uint32_t renderer, uint32_
     ((EOF_t)ADDR_EOF)(mgr, renderer, src, dst);
     g_frame++;
     if (g_shutdown) return;
+#ifdef SFX_BAKED
+    bake_load();
+#endif
     g_hdr = src ? rd(rd(rd((uint32_t)(uintptr_t)src + 0x30) + 0x24) + 0x64) : 0;
     draw_effects();
 }
@@ -475,6 +481,29 @@ FNVMCP_EXPORT int sfx_effect_param(int slot, int reg, float x, float y, float z,
     LeaveCriticalSection(&g_cs);
     return 0;
 }
+
+#ifdef SFX_BAKED
+/* The exported plugin (fnv_shader export): the effects are in sfx_baked[] (the generated sfx_baked.h, put before this
+ * file with SFX_BAKED defined). A plugin's init runs before the D3D device exists, so the D3D shaders are made on the
+ * first frame that has a device, once. No new code patch: the same call site as the live module. */
+static int g_baked_done;
+static void bake_load(void) {
+    if (g_baked_done || !get_dev()) return;
+    g_baked_done = 1;
+    for (int i = 0; i < SFX_BAKED_COUNT && i < SLOTS; i++) {
+        const SfxBakedEffect *e = &sfx_baked[i];
+        int hr = sfx_effect_set(i, (int)(uintptr_t)e->code, e->size, e->order);
+        if (hr < 0) {
+            A->log("shaderfx: baked effect %d refused by the game (0x%08X)", i, (unsigned)hr);
+            continue;
+        }
+        for (int k = 0; k < e->nparams; k++)
+            sfx_effect_param(i, e->params[k].reg, e->params[k].v[0], e->params[k].v[1], e->params[k].v[2],
+                             e->params[k].v[3]);
+    }
+    A->log("shaderfx: %d baked effect(s) loaded", SFX_BAKED_COUNT);
+}
+#endif
 
 FNVMCP_EXPORT int sfx_effect_enable(int slot, int on) {
     if (slot < 0 || slot >= SLOTS || !g_slot[slot].exists) return -1;
