@@ -55,6 +55,8 @@ MUTATING_ACTIONS = {
     'fnv_warnings': {'capture'},                  # start/stop hooks the engine's Warning function (W3)
     # game memory and the pause menu (W3); background loads the bundled nopause module, foreground unloads it
     'fnv_window': {'release_mouse', 'capture_mouse', 'unpause', 'background', 'foreground'},
+    # screen effects and engine shader swaps change what the game draws; restore and remove undo them
+    'fnv_shader': {'effect_add', 'effect_set', 'effect_remove', 'replace', 'restore'},
     'fnv_systems': {'formula', 'sweep', 'barter'},
     'fnv_leveled_roll': {'seed'},
     'fnv_test': '*',
@@ -92,6 +94,7 @@ FULL_ONLY_ACTIONS = {
     'fnv_install': '*',                         # a plugin file of the caller's choice into the dev profile
     'fnv_profile_set': {'apply'},               # which mods and plugins load (dry_run stays a read)
     'fnv_asset': {'make_nif', 'make_kf', 'make_dds'},   # files of the caller's making into a mod folder (gaps 3)
+    'fnv_shader': {'effect_add', 'effect_set', 'replace', 'export'},   # agent HLSL into the game; files into the profile
     'fnv_window': {'persist'},                  # status with persist writes the dev profile's Fallout.ini (Y6)
     'fnv_warnings': {'enable'},                 # writes nvse_config.ini in a mod folder or the overwrite (Y6)
 }
@@ -108,6 +111,9 @@ READ_LEVEL_CONTROL = {
     'fnv_author': 'export, check, scaffold and package write only into the bridge state folder',
     'fnv_plugin_build': 'scaffold and log only: a starting source in the state folder, or the plugin log',
     'fnv_profile_set': 'dry_run only: shows the changes without writing',
+    'fnv_shader': 'compile, template, the engine listings, effect_list and status only read; effect_remove and restore '
+                  'are in MUTATING_ACTIONS (they take shaders out again); effect_add, effect_set, replace and '
+                  'export are in FULL_ONLY_ACTIONS',
     'fnv_window': 'status only; the actions that write game memory are in MUTATING_ACTIONS, persist (Fallout.ini) '
                   'in FULL_ONLY_ACTIONS',
     'fnv_warnings': 'reading the captured warnings; capture is in MUTATING_ACTIONS, enable (xNVSE config) in '
@@ -259,6 +265,7 @@ FNV_LIVE_TOOLS = {
     'fnv_systems': ('act', 'call game formulas (catalog or any function) and sweep an argument; level and XP progression; hardcore needs; can a perk be taken and why not; barter prices; encounter zone levels; karma'),
     'fnv_replay': ('control', 'record the input sent through the bridge frame by frame from a save, and play it again frame-exact under the frame gate'),
     'fnv_render': ('act', 'render toggles that still work in retail (wireframe, sky, grass, trees, LOD, menus, borders, trigger volumes, collision, test light...), image-space modifiers, shader reload, the scene lights'),
+    'fnv_shader': ('act', 'HLSL shaders in the running game: compile and check a ps_3_0 shader, whole-screen effects with tunable params, replace or restore an engine shader, list the engine shaders, export to a plugin and patched packages'),
     'fnv_overlay': ('act', 'text drawn on screen and visible markers placed in the world, for a person watching; clear removes them'),
     'fnv_script_coverage': ('act', 'script lines a play-through or a test folder ran: per script the share of lines run, lines never run, blocks never entered'),
     'fnv_script_decompile': ('read', 'source text of a compiled script that ships without it (also quest stage, topic info, package and terminal scripts), by xNVSE\'s decompiler'),
@@ -457,6 +464,8 @@ USE_WHEN = {
                     'progression: level and xp', 'perk: can this perk be taken'],
     'fnv_replay': ['record: record input to replay', 'play: replay recorded input'],
     'fnv_render': ['toggle: wireframe or collision display', 'shaders: reload shaders', 'lights: scene lights'],
+    'fnv_shader': ['compile: compile an hlsl pixel shader', 'effect_add: add a screen effect, post-process shader',
+                   'replace: replace an engine shader', 'export: ship my shaders as a plugin'],
     'fnv_overlay': ['text: draw text on the screen', 'marker: mark a spot in the world'],
     'fnv_script_coverage': ['which script lines never ran', 'script coverage of a test run'],
     'fnv_script_decompile': ['get the source of a compiled script', 'decompile a script'],
@@ -592,6 +601,8 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     overlay_tools = OverlayTools(live, place=place_tools)
     author_tools = AuthorTools(live, data=data, records=records, place=place_tools, forms=form_tools)
     native_tools = NativeTools(live)
+    from .fnv_shader import ShaderTools
+    shader_tools = live.shader_tools = ShaderTools(live, native_tools)
     flow_tools.native = native_tools
     world.native = native_tools
     code_tools = CodeTools(live)
@@ -2176,6 +2187,36 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         RefreshShaders. lights [ref]: the scene lights with their positions, nearest to ref first."""
         return await invoke('fnv_render', lambda: render_tools.run(action, name=name, arg=arg, remove=remove, ref=ref),
                             'read' if action == 'lights' else 'act')
+
+    @server.tool(annotations=act)
+    async def fnv_shader(action: Literal['compile', 'engine_list', 'engine_show', 'template', 'effect_add',
+                                         'effect_set', 'effect_list', 'effect_remove', 'replace', 'restore',
+                                         'status', 'export'],
+                         source: Annotated[str, Field(max_length=100000)] | None = None,
+                         profile: Literal['ps_3_0', 'ps_2_0', 'ps_2_a', 'ps_2_b', 'vs_3_0', 'vs_2_0'] | None = None,
+                         name: Annotated[str, Field(max_length=80)] | None = None,
+                         filter: Annotated[str, Field(max_length=80)] | None = None,
+                         order: Annotated[int, Field(ge=0, le=1000)] | None = None,
+                         enabled: bool | None = None,
+                         params: dict[str, float | list[float]] | None = None,
+                         disasm: bool = False,
+                         install: bool = False,
+                         set: Annotated[str, Field(max_length=40)] | None = None,
+                         photo: bool = True) -> result_type:
+        """HLSL shaders in the running game (fnv_guide topic shaders). compile source: errors, version, constants,
+        never the bytes. template [name]: a starting source. effect_add name source: a ps_3_0 screen effect drawn
+        under the HUD (s0 scene, s1 HDR scene, c0 time s, frame delta s, width, height, c1 1/width, 1/height, frame,
+        0, params at c2 up); effect_set, effect_list, effect_remove. At most 8 effects, no depth, no per-object
+        shaders, nothing in menus. engine_list, engine_show [disasm: game content, never save it], replace, restore
+        (all) work on the engine's own shaders. The module patches 0x00B55AD6: an installed exported plugin
+        (fnvmcp_shaders_<set>) makes effect_add fail with CALL_SITE_TAKEN. status; export [set] [install]. Changes
+        are journaled: fnv_undo."""
+        return await invoke('fnv_shader', lambda: shader_tools.run(
+            action, source=source, profile=profile, name=name, filter=filter, order=order, enabled=enabled,
+            params=params, disasm=disasm or None, install=install or None, set=set, photo=photo),
+            'control' if action == 'export' else 'read' if action in (
+                'compile', 'engine_list', 'engine_show', 'template', 'effect_list', 'status') else 'act',
+            action=action)
 
     @server.tool(annotations=act)
     async def fnv_overlay(action: Literal['text', 'marker', 'clear'],

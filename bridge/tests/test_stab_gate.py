@@ -56,6 +56,11 @@ MUTATING_CASES = {
     ('fnv_window', 'unpause'): {'action': 'unpause'},
     ('fnv_window', 'background'): {'action': 'background'},       # loads the bundled nopause module (gaps 7)
     ('fnv_window', 'foreground'): {'action': 'foreground'},
+    ('fnv_shader', 'effect_add'): {'action': 'effect_add', 'name': 'x', 'source': 'float4 main() : COLOR0 { return 0; }'},
+    ('fnv_shader', 'effect_set'): {'action': 'effect_set', 'name': 'x'},
+    ('fnv_shader', 'effect_remove'): {'action': 'effect_remove', 'name': 'x'},
+    ('fnv_shader', 'replace'): {'action': 'replace', 'name': 'x', 'source': 'float4 main() : COLOR0 { return 0; }'},
+    ('fnv_shader', 'restore'): {'action': 'restore', 'name': 'all'},
     ('fnv_snapshot', '*'): {'name': 'x', 'items': [{'console': 'player.kill'}]},
     ('fnv_systems', 'formula'): {'action': 'formula', 'name': 'x'},
     ('fnv_systems', 'sweep'): {'action': 'sweep', 'name': 'x'},
@@ -113,6 +118,7 @@ READ_CASES = {
     'fnv_replay': {'action': 'list'},
     'fnv_warnings': {'action': 'capture', 'mode': 'status'},
     'fnv_window': {'action': 'status'},
+    'fnv_shader': {'action': 'status'},
     'fnv_perk_entries': {'action': 'read'},
     'fnv_engine_get': {'function': 'Actor::GetLevel', 'this': 'player'},   # pure getters only (round 4 H1)
     'fnv_detection': {'observer': 'player'},                               # stored records only (Y3)
@@ -129,6 +135,10 @@ FULL_ONLY_CASES = {
     ('fnv_asset', 'make_kf'): {'action': 'make_kf', 'path': 'C:/nope/x.json', 'out': 'meshes/x.kf'},
     ('fnv_asset', 'make_dds'): {'action': 'make_dds', 'path': 'C:/nope/x.png', 'out': 'textures/x.dds'},
     ('fnv_window', 'persist'): {'action': 'status', 'persist': True},     # the dev profile's Fallout.ini (Y6)
+    ('fnv_shader', 'effect_add'): {'action': 'effect_add', 'name': 'x', 'source': 'float4 main() : COLOR0 { return 0; }'},
+    ('fnv_shader', 'effect_set'): {'action': 'effect_set', 'name': 'x'},
+    ('fnv_shader', 'replace'): {'action': 'replace', 'name': 'x', 'source': 'float4 main() : COLOR0 { return 0; }'},
+    ('fnv_shader', 'export'): {'action': 'export'},                       # files into the dev profile
     ('fnv_warnings', 'enable'): {'action': 'enable'},                     # xNVSE's nvse_config.ini (Y6)
 }
 # control calls that stay allowed under read

@@ -17,7 +17,7 @@ it is built on and keeps the full history of; see "Built on geck-mcp-nv" below.
 
 ## What it is
 
-One MCP server with <!-- counts -->**138 `fnv_*` tools**<!-- /counts --> for the game, its engine and plugins built
+One MCP server with <!-- counts -->**139 `fnv_*` tools**<!-- /counts --> for the game, its engine and plugins built
 from a JSON spec. The count is checked against the server's own tool list by the tests.
 
 - **Engine knowledge**: function and class lookup from the decompilation, a symbol database with source lines and

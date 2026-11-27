@@ -9,6 +9,20 @@ Entry: {'by': the parameter that picks the action (default 'action'), 'common': 
 'actions': {action: parameters it takes}}."""
 
 ACTION_PARAMS = {
+    'fnv_shader': {'actions': {
+        'compile': {'source', 'profile'},
+        'engine_list': {'filter'},
+        'engine_show': {'name', 'disasm'},
+        'template': {'name'},
+        'effect_add': {'name', 'source', 'order', 'params', 'photo'},
+        'effect_set': {'name', 'params', 'order', 'enabled', 'photo'},
+        'effect_list': set(),
+        'effect_remove': {'name', 'photo'},
+        'replace': {'name', 'source', 'photo'},
+        'restore': {'name'},
+        'status': set(),
+        'export': {'set', 'install'},
+    }},
     'fnv_spec': {'actions': {
         'validate': {'spec'},
         'build': set(),

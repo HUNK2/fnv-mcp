@@ -221,8 +221,11 @@ class ShaderTools:
     @staticmethod
     def _taken():
         return ConvError('CALL_SITE_TAKEN', 'The screen-effect call site 0x%s is not the expected call: another mod '
-                         'has patched it, so the shader module did not start. Nothing was changed. Disable that mod '
-                         '(an ENB or ReShade style injector, or another renderer hook) and try again.' % CALL_SITE)
+                         'has patched it, so the shader module did not start. Nothing was changed. Effects and the '
+                         'live module patch that same call, so an installed exported shader plugin '
+                         '(fnvmcp_shaders_<set>) holds it too: disable the mod of that plugin to edit live, or any other '
+                         'mod that hooks it (an ENB or ReShade style injector, another renderer hook), and try '
+                         'again.' % CALL_SITE)
 
     def _push(self, entry):
         """Create or replace the module slot from the saved bytecode, then resend the stored params (a replace zeroes
@@ -1038,3 +1041,90 @@ class ShaderTools:
                       folder=_rel(dest, self.base), installed=installed)
         out['note'] = '; '.join(notes) or None
         return out
+
+    # ------------------------------------------------------------------ status and the tool's dispatch
+    def _in_menu(self):
+        """True or False when the game answers about menus, else None."""
+        try:
+            menus = self.live.agent.menus()
+        except Exception:  # noqa: BLE001 - no game: unknown
+            return None
+        return bool(menus.get('inMenuMode') or menus.get('menuStack'))
+
+    def status(self):
+        m, known = self.state()
+        loaded = bool(known and self.native.is_loaded(MODULE))
+        renderer, warnings, cost = None, [], 0
+        if loaded:
+            bits = self._c('sfx_info')
+            renderer = {'nonSystemD3D9': bool(bits & 2), 'deviceLost': bool(bits & 4), 'hdrInput': not bits & 8,
+                        'drawing': bool(bits & 16)}
+            if not bits & 1:
+                warnings.append('The call site 0x%s is not patched: effects will not draw (CALL_SITE_TAKEN).'
+                                % CALL_SITE)
+            if renderer['nonSystemD3D9']:
+                warnings.append('A non-system d3d9.dll is loaded (ENB, NVR or ReShade?): it may interfere with '
+                                'effects and engine shader replacements.')
+            cost = self._c('sfx_cost_us') if m['effects'] else 0
+        try:
+            pkg = self.package()
+            package = {'file': pkg.file, 'guessed': bool(pkg.guessed)}
+        except Exception:  # noqa: BLE001 - no package found: status still answers
+            package = None
+        effects = len(m['effects'])
+        out = verdict('Shader module %s, %d live effect(s), %d replacement(s)'
+                      % ('loaded' if loaded else 'not loaded', effects, len(m['replacements'])), None,
+                      module=loaded, effects=effects, replacements=len(m['replacements']), package=package,
+                      renderer=renderer, inMenu=self._in_menu() if known else None, costUs=cost,
+                      warnings=warnings)
+        out['note'] = 'Effects do not draw in menus or the pause menu (inMenu says whether one is open).'
+        return out
+
+    @staticmethod
+    def _need(a, key, action):
+        if a.get(key) in (None, ''):
+            raise ConvError('MISSING_ARGUMENT', 'action %s needs %s.' % (action, key))
+        return a[key]
+
+    def _compile(self, source, profile):
+        c = compile_hlsl(source, profile or 'ps_3_0')
+        consts = [{'name': k.name, 'set': k.regset, 'register': k.index, 'count': k.count,
+                   'default': list(k.default) if k.default else None} for k in c['constants']]
+        out = verdict('Compiled' if c['ok'] else 'Compile failed', None, ok=c['ok'], errors=_scrub(c['errors']),
+                      warnings=_scrub(c['warnings']))
+        out.update(bytecodeSize=len(c['bytecode']) if c['bytecode'] else 0,
+                   version='0x%08X' % c['version'] if c['ok'] else None, slots=c['slots'], constants=consts,
+                   inputs=c['inputs'])
+        return out
+
+    def run(self, action, **a):
+        """The fnv_shader tool: one action; arguments of the tool by name (None when not given)."""
+        a = {k: v for k, v in a.items() if v is not None}
+        photo = a.get('photo', True)
+        if action == 'compile':
+            return self._compile(self._need(a, 'source', action), a.get('profile'))
+        if action == 'engine_list':
+            return self.engine_list(a.get('filter'))
+        if action == 'engine_show':
+            return self.engine_show(self._need(a, 'name', action), bool(a.get('disasm')))
+        if action == 'template':
+            return self.template(a.get('name'))
+        if action == 'effect_add':
+            return self.effect_add(self._need(a, 'name', action), self._need(a, 'source', action), a.get('order'),
+                                   a.get('params'), photo)
+        if action == 'effect_set':
+            return self.effect_set(self._need(a, 'name', action), a.get('params'), a.get('order'),
+                                   a.get('enabled'), photo)
+        if action == 'effect_list':
+            return self.effect_list()
+        if action == 'effect_remove':
+            return self.effect_remove(self._need(a, 'name', action), photo)
+        if action == 'replace':
+            return self.replace(self._need(a, 'name', action), self._need(a, 'source', action), photo)
+        if action == 'restore':
+            return self.restore(self._need(a, 'name', action))
+        if action == 'status':
+            return self.status()
+        if action == 'export':
+            return self.export(a.get('set'), bool(a.get('install')))
+        raise ConvError('BAD_ACTION', 'Unknown action %r.' % (action,))
