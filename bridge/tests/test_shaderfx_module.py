@@ -63,10 +63,9 @@ class ShaderfxModuleTests(unittest.TestCase):
         for token in ('0x00B55AD6', '0x00B97900', '0x00B55ADB'):
             self.assertIn(token, self.text)
         self.assertIn('shaderfx: call site 0x00B55AD6 is not the expected call', self.text)
-        self.assertEqual(self.text.count('->write('), 2)
+        self.assertEqual(self.text.count('->write('), 1)
         self.assertIn('->write(', function_body(self.text, 'static int patch_call_site(void)'))
-        self.assertIn('->write(', function_body(
-            self.text, 'static int swap_pointer(uint32_t obj, uint32_t off, uint32_t value)'))
+        self.assertIn('sfx_restore_all()', function_body(self.text, 'void fnvmcp_module_exit(void)'))
 
     def test_releases_on_device_lost(self):
         self.assertIn('0x0086BA10', self.text)

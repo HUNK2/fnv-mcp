@@ -24,9 +24,10 @@
  *    0x010EF87C) its IDirect3DVertexShader9 at +0x34. One pass over read-write memory finds them (about 960 objects);
  *    a D3D object is told from junk by its vtable QueryInterface lying inside d3d9.dll (resource vtables live in the
  *    heap). The table lists the FNV-1a 32 of each bytecode; a swap acts on every object with that hash.
- *  - A swap stores a new D3D shader pointer into the object. The first store per object goes through api write, which
- *    the companion logs and puts back at unload (a module has only 64 logged writes, so later stores to the same
- *    object, and restores, are plain stores). The module also restores everything in its exit.
+ *  - A swap stores a new D3D shader pointer straight into the object (heap data). The module keeps its own table of
+ *    every swapped object with its first (vanilla) pointer; sfx_restore, sfx_restore_all and fnvmcp_module_exit put
+ *    the originals back from it. The companion's write log (api write) is not used for this: it holds only 64 entries
+ *    per module and a swap can touch hundreds of objects. api write is used once, for the call site (code).
  */
 #include <windows.h>
 #include <string.h>
@@ -48,8 +49,7 @@
 #define LAST_PARAM_REG 223
 #define MAX_BYTES (1u << 20)
 #define MAX_ROWS 16384
-#define MAX_SWAPS 2048
-#define MAX_LOGGED 64
+#define MAX_SWAPS MAX_ROWS
 #define E_INVALID ((int)0x80070057)
 #define E_NODEVICE ((int)0x8876086C)
 
@@ -91,8 +91,6 @@ static uint32_t g_row_ver[MAX_ROWS];
 static int g_nrow;
 static Swap g_swap[MAX_SWAPS];
 static int g_nswap;
-static uint32_t g_logged[MAX_LOGGED];
-static int g_nlogged;
 static unsigned char g_scan_buf[262144];
 
 /* The vs_3_0 pass-through the effects draw with: HLSL below, compiled once with d3dcompiler_47 (zig cc cannot compile
@@ -206,19 +204,12 @@ static int patch_call_site(void) {
     return 0;
 }
 
-/* Stores a D3D shader pointer into an engine shader object. The first store to an address goes through api write
- * (logged, put back at unload; the log holds 64 entries); later stores to it are plain stores, since the logged
- * original is what unload restores. Returns 1 on success. */
+/* Stores a D3D shader pointer into an engine shader object (plain heap data). Callers keep the vanilla pointer in
+ * g_swap, which is what restore uses. Returns 1 on success. */
 static int swap_pointer(uint32_t obj, uint32_t off, uint32_t value) {
-    uint32_t at = obj + off;
-    for (int i = 0; i < g_nlogged; i++) {
-        if (g_logged[i] == at) {
-            *(volatile uint32_t *)(uintptr_t)at = value;
-            return 1;
-        }
-    }
-    if (g_nlogged >= MAX_LOGGED || !A->write(at, &value, 4)) return 0;
-    g_logged[g_nlogged++] = at;
+    uint32_t cur;
+    if (!A->read(obj + off, &cur, 4)) return 0;
+    *(volatile uint32_t *)(uintptr_t)(obj + off) = value;
     return 1;
 }
 
@@ -592,7 +583,7 @@ static void row_set_d3d(uint32_t obj, uint32_t kind, uint32_t d3d) {
 
 /* Replaces the D3D shader of every object whose original bytecode hash is `hash` with the shader at addr (same
  * shader model as the original). Returns the number of objects changed, or negative: -1 no such objects (scan first),
- * -2 bad bytecode or another shader model, -3 no device, -4 the logged writes ran out, else a CreateShader HRESULT. */
+ * -2 bad bytecode or another shader model, -3 no device, -4 an object could not be written or the swap table is full, else a CreateShader HRESULT. */
 FNVMCP_EXPORT int sfx_swap(int hash, int addr, int size) {
     if (size < 8 || size > (int)MAX_BYTES || (size & 3)) return -2;
     int first = -1;
@@ -718,7 +709,7 @@ FNVMCP_EXPORT int fnvmcp_module_init(const FnvmcpApi *api) {
 
 FNVMCP_EXPORT void fnvmcp_module_exit(void) {
     g_shutdown = 1;
-    restore_hash(0, 1);
+    sfx_restore_all();
     EnterCriticalSection(&g_cs);
     for (int i = 0; i < SLOTS; i++) {
         void *ps = g_slot[i].ps;
