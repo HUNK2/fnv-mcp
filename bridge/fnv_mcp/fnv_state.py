@@ -120,16 +120,25 @@ def atomic_write(path, data, in_place_fallback=True):
         data = data.encode('utf-8')
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name('%s.%s.tmp' % (path.name, uuid.uuid4().hex))
-    with open(tmp, 'wb') as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
+    try:
+        with open(tmp, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:   # disk full etc.: do not leave the temp file behind
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
     for attempt in range(10):
         try:
             os.replace(tmp, path)
             return
         except PermissionError:   # a reader (antivirus, editor, another process) has the file open without delete share
             time.sleep(0.05)
+        except BaseException:   # any other failure of the replace: drop the temp file
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
     if not in_place_fallback:
         with contextlib.suppress(OSError):
             tmp.unlink()
@@ -157,6 +166,10 @@ def read_json(path, default):
     except OSError as e:
         _warn(path, 'cannot be read (%s)' % e)
         return copy.deepcopy(default)
+    return _parse_json(path, text, default)
+
+
+def _parse_json(path, text, default):
     if not text.strip():
         return copy.deepcopy(default)
     try:
@@ -183,10 +196,9 @@ def _readable(path):
     deadline = time.monotonic() + READ_RETRY_SECONDS
     while True:
         try:
-            path.read_bytes()
-            return
+            return path.read_bytes()
         except FileNotFoundError:
-            return
+            return None
         except OSError as e:
             if time.monotonic() >= deadline:
                 raise StateError('STATE_UNREADABLE', 'Cannot read %s (%s); it was left as it is' % (path, e))
@@ -201,8 +213,8 @@ def update_json(path, fn, default, indent=None):
     """Read, change and write a JSON state file under its lock. `fn(value)` returns the new value, or None after
     changing `value` in place. Returns the new value."""
     with locked(path):
-        _readable(Path(path))
-        value = read_json(path, default)
+        raw = _readable(Path(path))   # parse these very bytes: a second read could fail and yield the default
+        value = copy.deepcopy(default) if raw is None else _parse_json(Path(path), raw.decode('utf-8'), default)
         new = fn(value)
         if new is None:
             new = value
