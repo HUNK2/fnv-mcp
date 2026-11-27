@@ -243,16 +243,23 @@ class EngineLink:
                     self._hold_timeout = r['timeout'] / 1000.0
 
     def close(self):
-        import _winapi
-        if self.handle is not None:
-            try:
-                _winapi.CloseHandle(self.handle)
-            except OSError:
-                pass
-        self.handle = None
-        self.hello = None  # a closed link no longer knows which game it talks to; the next ping says again
-        self.last_frame = None
-        self._holding = False
+        """Close the pipe. Takes the link lock (re-entrant, so _exchange's own calls are fine) so it never closes the
+        handle another thread's request is using; after 5 s of waiting it closes anyway (a quit must not hang)."""
+        got = self.lock.acquire(timeout=5.0)
+        try:
+            import _winapi
+            handle, self.handle = self.handle, None     # taken once: two closers cannot both close it
+            if handle is not None:
+                try:
+                    _winapi.CloseHandle(handle)
+                except OSError:
+                    pass
+            self.hello = None  # a closed link no longer knows which game it talks to; the next ping says again
+            self.last_frame = None
+            self._holding = False
+        finally:
+            if got:
+                self.lock.release()
 
     def _io(self, data, timeout):
         """Write one line and read one line back with a deadline (overlapped I/O, cancelled on timeout)."""
@@ -319,7 +326,11 @@ class EngineLink:
 
     # ------------------------------------------------------------------ requests
     def ping(self, timeout=3.0):
-        reply = self._exchange('%s\tping' % uuid.uuid4().hex[:12], timeout)
+        request_id = uuid.uuid4().hex[:12]
+        reply = self._exchange('%s\tping' % request_id, timeout)
+        if isinstance(reply, dict) and reply.get('id') not in (None, request_id):
+            self.close()
+            raise LinkError('COMPANION_PROTOCOL', 'Reply for another request (%s)' % reply.get('id'))
         self.hello = reply
         self._note([reply])
         return reply

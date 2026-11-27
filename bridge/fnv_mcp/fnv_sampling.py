@@ -9,6 +9,7 @@ SinkTools: subscribe to xNVSE events by name (onactivate, onhit, ondeath, onadd,
 record per event with the frame, the reference's form id and the first six words of the event's argument block.
 """
 import struct
+import threading
 import time
 
 from .fnv_args import hex_int
@@ -31,6 +32,9 @@ NVSE_EVENTS = ('onactivate', 'onadd', 'onactorequip', 'ondrop', 'onactorunequip'
                'onmagiceffecthit', 'onsell', 'onstartcombat', 'saytodone', 'ongrab', 'onopen', 'onclose', 'onfire',
                'ontrigger', 'ontriggerenter', 'ontriggerleave', 'onreset', 'ondropitem', 'exitgame',
                'exittomainmenu', 'loadgame', 'savegame', 'qqq', 'postloadgame', 'runtimescripterror', 'deletegame')
+
+
+_SLOT_LOCK = threading.Lock()    # picking a free slot and setting it is one step (the companion overwrites a used slot)
 
 
 class FrameSampler:
@@ -65,8 +69,9 @@ class FrameSampler:
         code, texts = self._program(items)
         frames, every = int(frames), max(1, int(every))
         ring = min(RING_MAX, frames // every + 8)
-        slot = self._free_slot()
-        out = self.live.link.one('samp', 'set', word(slot), word(every), code, 'ff', word(ring))
+        with _SLOT_LOCK:
+            slot = self._free_slot()
+            out = self.live.link.one('samp', 'set', word(slot), word(every), code, 'ff', word(ring))
         if not out.get('ok'):
             raise ConvError('SAMPLER_REFUSED', 'The companion refused the sampler (%s).' % out.get('error'), out)
         try:
@@ -90,7 +95,10 @@ class FrameSampler:
                     break
                 since = page['next']
         finally:
-            self.live.link.one('samp', 'clear', word(slot))
+            try:
+                self.live.link.one('samp', 'clear', word(slot))
+            except Exception:  # noqa: BLE001 - a dead pipe here must not replace the error of the run
+                pass
         samples = samples[:max(1, frames // every)]          # the run starts at the set, not at the first ping
         return self._summary(items, texts, samples, dropped, stalled, frames, every)
 

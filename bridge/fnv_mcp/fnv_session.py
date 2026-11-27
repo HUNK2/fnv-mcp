@@ -136,6 +136,7 @@ class SessionTools:
             raise
         self.live.session_state = {'start': start, 'since': time.time(), 'deterministic': deterministic_state,
                                    'baseline': baseline, 'journal': mark['journal'], 'mark': mark,
+                                   'captureStarted': bool(warnings_state.get('captureStarted')),
                                    'marks': [{'label': 'session start', **mark}]}
         return verdict('Session open: the game is ready (%s)' % ('launched' if prepared.get('launched') else 'already running'),
                        'Run the steps with fnv_test steps; fnv_health reports what is abnormal from the last mark; fnv_session end '
@@ -176,6 +177,12 @@ class SessionTools:
             reverted = {'reverted': out.get('reverted', 0)}
         except Exception as e:  # the game may be gone: the report says so
             reverted = {'error': str(e), 'code': getattr(e, 'code', None)}
+        if state.get('captureStarted'):
+            # The capture hook was journaled before the session mark, so revert_all leaves it: stop what start turned on.
+            try:
+                warnings_for_live(self.live).capture.stop()
+            except Exception:  # noqa: BLE001 - best effort at the end of a session
+                pass
         control, _ = shared_time(self.live)
         try:
             if state['deterministic']:

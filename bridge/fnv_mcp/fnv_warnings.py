@@ -38,6 +38,15 @@ SNAP_ARG, SNAP_LEN = 1, 96     # the bytes behind stack word 1 are copied at the
 SPEC = re.compile(r'%([-+ #0]*)(\*|\d+)?(?:\.(\*|\d+))?(hh|h|ll|l|I64|I32|L)?([diouxXcsSpfFeEgGn%])')
 
 
+PRINTF_FIELD_MAX = 512     # a width or precision read from the stack is cut to this (a wild word must not build a huge string)
+
+
+def _clamp(word):
+    """A stack word taken as a signed int, cut to -512..512."""
+    value = word - (1 << 32) if word >= 1 << 31 else word
+    return max(-PRINTF_FIELD_MAX, min(PRINTF_FIELD_MAX, value))
+
+
 def format_printf(fmt, words, read_str):
     """C printf over 32-bit stack words: (text, words used). read_str(pointer) -> str or None. Missing arguments
     print as <?>; a 64-bit integer or a double takes two words."""
@@ -61,10 +70,10 @@ def format_printf(fmt, words, read_str):
             continue
         if width == '*':
             w = take()
-            width = str(w[0]) if w else ''
+            width = str(_clamp(w[0])) if w else ''
         if prec == '*':
             pw = take()
-            prec = str(pw[0]) if pw else None
+            prec = str(max(0, _clamp(pw[0]))) if pw else None
         spec = '%' + (flags or '') + (width or '') + ('.' + prec if prec is not None else '')
         if conv in 'fFeEgG':
             got = take(2)
@@ -162,8 +171,7 @@ class WarningCapture:
             snapped = (args[SNAP_ARG], snap[0].decode('latin-1')) if len(snap) > 1 else None
             parsed.append((r, args[first], args[first + 1:], snapped))
         formats = self._read_strings([fmt for _, fmt, _, _ in parsed])
-        values = [v for _, fmt, vals, _ in parsed if '%s' in (formats.get(fmt) or '') or '%S' in (formats.get(fmt) or '')
-                  for v in vals]
+        values = [v for _, fmt, vals, _ in parsed if _has_string(formats.get(fmt) or '') for v in vals]
         self._read_strings(values, fresh=True)
         rows = []
         for r, fmt_ptr, vals, snapped in parsed:
@@ -181,12 +189,23 @@ class WarningCapture:
                          'caller': '0x%08X' % r[5], 'thread': r[2], 'live': True})
         try:
             engine = self.live.engine()
-            names = {c: (engine.summary(int(c, 16)) or {}).get('name') for c in sorted({r['caller'] for r in rows})[:60]}
+            names = {}
+            for c in sorted({r['caller'] for r in rows})[:60]:
+                try:                    # the caller is a return address inside a function, not its entry
+                    hit = engine.containing(int(c, 16))
+                    names[c] = engine.summary(hit[0]).get('name') if hit else None
+                except Exception:  # noqa: BLE001 - one unnamed caller does not hide the others
+                    names[c] = None
             for row in rows:
                 row['callerName'] = names.get(row['caller'])
         except Exception:  # noqa: BLE001 - names are extra
             pass
         return rows, lost
+
+
+def _has_string(fmt):
+    """True when the format has a %s or %S conversion, with any flags, width or precision (%-20s, %.32s)."""
+    return any(m.group(5) in 'sS' for m in SPEC.finditer(fmt))
 
 
 def category_of(text):
