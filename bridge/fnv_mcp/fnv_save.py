@@ -418,8 +418,9 @@ class Namer:
         self.data = data
         self._vars = {}
         self.ready = False
+        self._entries = []
         try:
-            data._active()  # make sure the active plugins are indexed
+            self._entries = data._active()[0]  # make sure the active plugins are indexed
             self.ready = True
         except Exception:
             pass
@@ -430,8 +431,8 @@ class Namer:
         high = form >> 24
         if high >= len(save.plugins):
             return None
-        row = self.data.index.db.execute('select edid from records where owner = ? and local = ? limit 1',
-                                         (save.plugins[high].lower(), form & 0xFFFFFF)).fetchone()
+        # the active plugins' winning version only: a disabled plugin's rows stay in the index (Z2)
+        row = self.data._winner_row(self._entries, 'edid', save.plugins[high].lower(), form & 0xFFFFFF)
         return row[0] if row else None
 
     def variables(self, save, form):

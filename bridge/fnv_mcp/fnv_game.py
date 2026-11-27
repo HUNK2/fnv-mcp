@@ -601,6 +601,10 @@ class Game:
             return out
         ping = self.ping()
         out['companion'] = ping
+        if not ping.get('error'):
+            restored = self.retry_audio_cache(proc[0])      # W6: a restore the start could not write
+            if restored is not None:
+                out['audioCache'] = {'restored': restored}
         phase, detail = self.phase(ping)
         out.update(phase=phase, **detail)
         if phase in ('in_game', 'in_menu', 'paused_menu', 'main_menu'):
@@ -997,17 +1001,59 @@ class Game:
             if not result.get('ok'):
                 raise GameError('START_FAILED', 'Could not queue "%s"' % line, result)
             ready = self.wait_in_game(deadline, pid, start='%s:%s' % (kind, value))
+        except GameError as e:
+            if cache_off:
+                restored = self._restore_audio_cache(cache_was, pid)
+                if e.evidence is None:
+                    e.evidence = {}
+                if isinstance(e.evidence, dict):     # the error says the flag is still off (W6)
+                    e.evidence['audioCache'] = {'offDuringLoad': True, 'restored': restored,
+                                                **({} if restored else {'retry': 'on the next fnv_status or live call'})}
+                cache_off = False
+            raise
         finally:
             if cache_off:
-                try:
-                    self.link.write(AUDIO_CACHE_FLAG, cache_was)
-                    restored = True
-                except LinkError:
-                    pass
+                restored = self._restore_audio_cache(cache_was, pid)
         if closer:
             ready['arrivalMessages'] = closer
         ready['audioCache'] = {'offDuringLoad': cache_off, 'restored': restored}
         return ready
+
+    def _restore_audio_cache(self, value, pid):
+        """Turn the audio cache flag back to `value`. When the write fails (the main loop is still busy loading), the
+        restore is kept in session.json and retried by retry_audio_cache on the next status or live call (W6)."""
+        try:
+            self.link.write(AUDIO_CACHE_FLAG, value)
+        except LinkError:
+            try:
+                self.save_session(audioCacheRestore={'pid': pid, 'value': bytes(value).hex()})
+            except Exception:       # noqa: BLE001 - the error envelope still says the flag is off
+                pass
+            return False
+        if self.session().get('audioCacheRestore'):
+            self.save_session(audioCacheRestore=None)
+        return True
+
+    def retry_audio_cache(self, pid):
+        """A restore start_from_menu could not write (W6): write it now if the game it was for still runs.
+        Returns None (nothing pending), True (restored) or False (still pending)."""
+        pending = self.session().get('audioCacheRestore')
+        if not pending:
+            return None
+        if pending.get('pid') is not None and pending.get('pid') != pid:
+            self.save_session(audioCacheRestore=None)       # that game is gone: a new one starts with its own flag
+            return None
+        try:
+            value = bytes.fromhex(pending['value'])
+        except (ValueError, KeyError, TypeError):
+            self.save_session(audioCacheRestore=None)        # unreadable entry: nothing to write
+            return None
+        try:
+            self.link.write(AUDIO_CACHE_FLAG, value)
+        except LinkError:
+            return False
+        self.save_session(audioCacheRestore=None)
+        return True
 
     def wait_in_game(self, deadline, pid=None, start=None, settle=1.5, dismiss_messages=True):
         """Wait for gameplay. Message boxes that pop up on arrival (a coc start makes a fresh character, and the

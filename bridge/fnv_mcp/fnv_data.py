@@ -243,7 +243,7 @@ def _direct_load_order(layout, live_plugins):
 def plugin_masters(path):
     with open(path, 'rb') as f:
         head = f.read(24)
-        if head[:4] != b'TES4':
+        if head[:4] != b'TES4' or len(head) < 24:     # a header cut short raised a raw struct.error (Z4)
             raise codec.FormatError('not a TES4 plugin', 0)
         size = struct.unpack_from('<I', head, 4)[0]
         data = f.read(size)
@@ -346,8 +346,9 @@ class RecordIndex:
                     return done
                 # This path's old build, and any other copy of the same plugin (the Data copy and the mod copy of
                 # one name): only one is loaded, and lookups by name must not see the other one's records (X3).
-                stale = [r[0] for r in db.execute('select id from files where lower(name) = ? and path != ?',
-                                                  (path.name.lower(), str(path)))]
+                # Compared in Python: SQLite's lower() folds A-Z only, so 'Ärger.esp' never matched (Z1).
+                stale = [r[0] for r in db.execute('select id, name from files where path != ?', (str(path),))
+                         if (r[1] or '').lower() == path.name.lower()]
                 for old in ([row[0]] if row else []) + stale:
                     db.execute('delete from records where file = ?', (old,))
                     db.execute('delete from files where id = ?', (old,))
@@ -408,7 +409,7 @@ def forget_plugin(state_dir, path):
 def scan_plugin(path):
     """(masters, [(raw form id, type, EditorID, FULL, offset, flags)]) from a flat walk over record headers."""
     data = Path(path).read_bytes()
-    if data[:4] != b'TES4':
+    if data[:4] != b'TES4' or len(data) < 24:     # Z4
         raise codec.FormatError('not a TES4 plugin', 0)
     header_size = struct.unpack_from('<I', data, 4)[0]
     masters = [codec.cstring(s.data) for s in codec.parse_subrecords(data[24:24 + header_size]) if s.tag == 'MAST']
@@ -498,13 +499,28 @@ class DataTools:
     def _active(self):
         entries = [e for e in load_order(self.project, self._live_plugins()) if e['active'] and e.get('path')]
         started = time.monotonic()
-        built = []
+        built, skipped, usable = [], [], []
         for e in entries:
+            # One unreadable plugin (0 bytes, a header cut short) is left out and named, not an error for every
+            # lookup (Z4); fnv_loadorder lists it under problems.
+            if e.get('error'):
+                skipped.append({'plugin': e['name'], 'error': e['error']})
+                continue
             before = self.index.db.total_changes
-            e['fileId'] = self.index.ensure(e['path'])
+            try:
+                e['fileId'] = self.index.ensure(e['path'])
+            except (OSError, codec.FormatError, struct.error) as err:
+                skipped.append({'plugin': e['name'], 'error': str(err)})
+                continue
+            usable.append(e)
             if self.index.db.total_changes != before:
                 built.append(e['name'])
-        return entries, {'indexed': built, 'seconds': round(time.monotonic() - started, 1)} if built else None
+        if not (built or skipped):
+            return usable, None
+        info = {'indexed': built, 'seconds': round(time.monotonic() - started, 1)}
+        if skipped:
+            info['skipped'] = skipped
+        return usable, info
 
     @staticmethod
     def _global(entries, owner, local):
@@ -621,6 +637,17 @@ class DataTools:
             result['earlierVersions'] = [{'plugin': v['plugin'], 'fields': v['subrecords']} for v in versions[:-1]]
         return result
 
+    def _winner_row(self, entries, columns, owner, local, where=''):
+        """The selected columns of the load-order winner's version of one record, among the active plugins only, or
+        None. A plugin that left the load order keeps its index rows, and they labelled lookups by owner (Z2)."""
+        order = {e['fileId']: e['index'] for e in entries if 'fileId' in e}
+        rows = self.index.db.execute('select file, %s from records where owner = ? and local = ?%s'
+                                     % (columns, where), (owner, local)).fetchall()
+        rows = [r for r in rows if r[0] in order]
+        if not rows:
+            return None
+        return max(rows, key=lambda r: order[r[0]])[1:]
+
     def _form(self, entries, plugin_entry, raw):
         """A raw form id inside a plugin -> its load-order form id and EditorID (when indexed)."""
         own = plugin_entry.get('masters', []) + [plugin_entry['name']]
@@ -630,8 +657,7 @@ class DataTools:
         # a top byte at or past the master count names the plugin itself: the same rule the record index uses when
         # it stores the records (S6 review B M7; P6 was not a bug)
         owner = own[min(high, len(own) - 1)].lower()
-        row = self.index.db.execute('select type, edid from records where owner = ? and local = ? limit 1',
-                                    (owner, raw & 0xFFFFFF)).fetchone()
+        row = self._winner_row(entries, 'type, edid', owner, raw & 0xFFFFFF)
         if not row:
             return None
         return {'formId': self._global(entries, owner, raw & 0xFFFFFF), 'type': row[0], 'editorId': row[1]}

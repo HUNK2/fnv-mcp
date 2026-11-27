@@ -202,7 +202,15 @@ class BusyReloadTests(unittest.TestCase):                    # R4
         self.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         self.send({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'long_act'}})
         self.old = self.sup.child
-        time.sleep(0.5)
+        # N23: wait for the child to answer initialize and to be running the call (its busy file names it) instead of
+        # a fixed 0.5 s: under heavy CPU load the child's start took longer, initialize (id 0) was still in in_flight
+        # and the check below failed. What is checked is unchanged.
+        end = time.monotonic() + 30
+        while time.monotonic() < end and ('0' in self.sup.in_flight
+                                          or not self.sup_mod.busy_calls(self.old.busy_file)):
+            time.sleep(0.05)
+        self.assertNotIn('0', self.sup.in_flight, 'the child never answered initialize')
+        self.assertTrue(self.sup_mod.busy_calls(self.old.busy_file), 'the child never started the call')
         self.send({'jsonrpc': '2.0', 'method': 'notifications/cancelled', 'params': {'requestId': 1}})
         self.assertEqual(self.sup.in_flight, {})
         time.sleep(0.5)
@@ -226,7 +234,13 @@ class BusyReloadTests(unittest.TestCase):                    # R4
         reloaded_at = self.wait_reload(15)
         done_at = float((self.dir / 'done.txt').read_text())
         self.assertGreaterEqual(reloaded_at, done_at - 0.05, 'reloaded while the call was still running')
-        self.assertLess(reloaded_at - done_at, 1.0, 'the reload did not follow the end of the call')
+        # N23: 1.0 s failed under heavy CPU load (2.2 s measured with every core busy: the child, the watch loop and
+        # this poll all ran late). The other path, the drain limit, takes 660 s here and kills the child, so 5 s and
+        # a clean exit still tell "followed the end of the call" from it.
+        self.assertLess(reloaded_at - done_at, 5.0, 'the reload did not follow the end of the call')
+        self.assertEqual(self.old.proc.wait(15), 0, 'the busy server was killed')
+        self.assertNotIn('killed a busy server', (self.dir / 'supervisor.log').read_text(encoding='utf-8')
+                         if (self.dir / 'supervisor.log').exists() else '')
 
     def test_old_busy_wait_does_not_count_against_a_later_one(self):
         # An edit made while a cancelled call ran, then reverted: the reload is no longer pending. A later busy wait
