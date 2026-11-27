@@ -32,6 +32,7 @@ NAME_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]{0,39}$')
 PS_3_0 = 0xFFFF0300
 FLAG_ADDRESSES = [0x011F91C0, 0x011F94A4, 0x011F941E, 0x011F941F]   # gpu class, then three package flags
 ROW = struct.Struct('<5I')                                          # obj, kind (0 ps, 1 vs), d3d, size, hash
+READ_CHUNK = 65536 // ROW.size * ROW.size                          # whole rows, at most the companion's read limit
 MIN_FOUND = 0.95
 LIST_LIMIT = 300
 REG_LETTER = {'float4': 'c', 'int4': 'i', 'bool': 'b', 'sampler': 's'}
@@ -535,7 +536,10 @@ class ShaderTools:
         count = self._c('sfx_scan')
         rows = []
         if count > 0:
-            raw = self.live.link.read(self._c('sfx_table') & 0xFFFFFFFF, count * ROW.size) or b''
+            table, total, parts = self._c('sfx_table') & 0xFFFFFFFF, count * ROW.size, []
+            for off in range(0, total, READ_CHUNK):       # the companion refuses a read over 65536 bytes
+                parts.append(self.live.link.read(table + off, min(READ_CHUNK, total - off)) or b'')
+            raw = b''.join(parts)
             rows = [ROW.unpack_from(raw, i * ROW.size) for i in range(len(raw) // ROW.size)]
         known = {pkg.hash_of(n) for n in pkg.names()}
         found = sum(1 for r in rows if r[4] in known)
@@ -587,8 +591,8 @@ class ShaderTools:
             return None, None
         try:
             return self._scan(), None
-        except ConvError as e:
-            if e.code == 'PACKAGE_MISMATCH':
+        except (ConvError, LiveError) as e:
+            if getattr(e, 'code', None) == 'PACKAGE_MISMATCH':
                 raise
             return None, 'live objects not scanned: %s' % e
 
@@ -691,13 +695,6 @@ class ShaderTools:
             raise ConvError('INCOMPATIBLE', 'The replacement is not a drop-in for %s: %s' % (
                 name, ' '.join(p['text'] for p in hard)), {'problems': problems})
         h = pkg.hash_of(name)
-        rows = self._scan()
-        if not any(r[4] == h for r in rows):
-            rows = self._scan(force=True)             # shaders made since the scan (a new cell) show up on a second look
-            if not any(r[4] == h for r in rows):
-                raise ConvError('NO_LIVE_OBJECTS', 'No shader object in the running game has the code of %s: the '
-                                'game has not made one yet (it makes them as cells and effects need them). Nothing '
-                                'was changed.' % name)
         names = [name] + pkg.shared_with(name)
         warnings = [p['text'] for p in problems if p.get('warning')]
         warnings += [w['text'] for w in compiled['warnings'] if isinstance(w, dict) and w.get('text')]
@@ -713,13 +710,20 @@ class ShaderTools:
                  'profile': profile, 'game': m['game']}
         before, note = self._look(photo)
         frame_before = self._frame_ms()
-        self.folder.mkdir(parents=True, exist_ok=True)
-        (self.folder / entry['source_file']).write_text(source, encoding='utf-8')
-        (self.folder / entry['bytecode_file']).write_bytes(compiled['bytecode'])
+        # Always a fresh scan right before the swap: sfx_swap only reaches the objects in the module's table, and a
+        # new cell makes new ones (the cached scan is for engine_list / engine_show).
+        rows = self._scan(force=True)
+        if not any(r[4] == h for r in rows):
+            raise ConvError('NO_LIVE_OBJECTS', 'No shader object in the running game has the code of %s: the game '
+                            'has not made one yet (it makes them as cells and effects need them). Nothing was '
+                            'changed.' % name)
         n = self._swap(h, compiled['bytecode'])
         if n == 0:
             raise ConvError('NO_LIVE_OBJECTS', 'The shader objects of %s are gone from the game: nothing was changed.'
                             % name)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        (self.folder / entry['source_file']).write_text(source, encoding='utf-8')
+        (self.folder / entry['bytecode_file']).write_bytes(compiled['bytecode'])
         entry['objects'] = n
         prior_id = None
         if prior is not None:

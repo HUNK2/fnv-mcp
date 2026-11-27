@@ -117,7 +117,14 @@ class Replace(unittest.TestCase):
 
     def set_objects(self, hashes):
         self.native = ScanNative(hashes)
-        self.live.link.read.side_effect = lambda addr, n: self.native.table()[:n] if addr == TABLE else b''
+        self.reads = []
+
+        def read(addr, n):
+            self.reads.append((addr, n))
+            if n > 65536:                                     # the companion's READ_MAX
+                raise AssertionError('read of %d bytes' % n)
+            return self.native.table()[addr - TABLE:addr - TABLE + n]
+        self.live.link.read.side_effect = read
         self.tools = ShaderTools(self.live, self.native)
         self.live.shader_tools = self.tools
 
@@ -219,6 +226,32 @@ class ReplaceTests(Replace):
         sent = self.live.link.write.call_args[0][1]
         self.assertEqual(sent[:4], struct.pack('<I', 0xFFFF0201))        # ps_2_a, not the ps_3_0 default
         self.assertEqual(self.tools.template('OLD.pso')['profile'], 'ps_2_a')
+
+    def test_large_scene_is_read_in_chunks(self):
+        filler = [fnv1a32(c) for _, c in self.other]
+        self.set_objects([self.h] * 3 + filler * 800)             # 4003 rows, 80060 bytes: over one read
+        out = self.tools.engine_list(filter='SKY')
+        self.assertEqual(out['unknownObjects'], 0)
+        self.assertGreater(len(self.reads), 1)
+        self.assertTrue(all(n <= 65536 and n % 20 == 0 for _, n in self.reads))
+        self.assertEqual(sum(n for _, n in self.reads), 4003 * 20)
+        self.assertEqual(next(r for r in out['rows'] if r['name'] == 'SKYTEST.pso')['liveObjects'], 3)
+
+    def test_replace_rescans_right_before_the_swap(self):
+        self.tools.engine_list()                                  # the cached scan: 3 objects hold the code
+        self.assertEqual(self.exports().count('sfx_scan'), 1)
+        self.native.objects += [self.h] * 2                       # a new cell made two more
+        out = self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.assertEqual(self.exports().count('sfx_scan'), 2)
+        self.assertLess(len(self.exports()) - 1 - self.exports()[::-1].index('sfx_scan'),
+                        self.exports().index('sfx_swap'))
+        self.assertEqual(out['objects'], 5)
+
+    def test_files_are_written_only_after_the_swap(self):
+        self.set_objects([fnv1a32(c) for _, c in self.other])
+        with self.assertRaises(ConvError):
+            self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.assertEqual(list((self.state / 'fnv/shaders/live').glob('engine-*')), [])
 
     def test_scan_cached_per_game(self):
         self.tools.engine_list()
