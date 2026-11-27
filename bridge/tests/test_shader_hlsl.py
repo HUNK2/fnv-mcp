@@ -50,6 +50,18 @@ class ShaderHlslTests(unittest.TestCase):
                 self.assertNotIn(bad, s)
         self.assertEqual([(e['line'], e['code']) for e in errors], [(0, 'X3501'), (2, 'X3004')])
 
+    def test_clean_strips_paths_with_quote_and_paren(self):
+        raw = ("error X3501: cannot open C:\\Users\\O'Brien Smith\\x.fx: denied\n"
+               "error X3501: cannot open C:\\Users\\Sam (Work) Lee\\x.fx: denied\n"
+               "C:\\Users\\Sam (Work) O'Lee\\effect.hlsl(4,7-9): error X3004: bad\n")
+        out = H._clean(raw)
+        errors, _ = H._messages(raw)
+        for s in [out] + [e['text'] for e in errors]:
+            for bad in ('Brien', 'Smith', 'Work', 'Sam', 'Lee', ':\\', "O'"):
+                self.assertNotIn(bad, s)
+        self.assertEqual([(e['line'], e['col'], e['code']) for e in errors],
+                         [(0, 0, 'X3501'), (0, 0, 'X3501'), (4, 7, 'X3004')])
+
     def test_entrypoint_not_found(self):
         r = H.compile_hlsl('float4 f():COLOR0{return 0;}')
         self.assertFalse(r['ok'])

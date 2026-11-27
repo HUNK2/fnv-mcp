@@ -15,7 +15,7 @@ SOURCE_NAME = b'effect.hlsl'
 _REGSETS = {0: 'bool', 1: 'int4', 2: 'float4', 3: 'sampler'}
 _INCLUDE_RE = re.compile(r'^\s*#\s*include\b', re.M)
 _ERR_RE = re.compile(r'(?:effect\.hlsl\((\d+)(?:,(\d+)(?:-\d+)?)?\):\s*)?(error|warning)\s+([A-Za-z]\d+):\s*(.*)')
-_PATH_RE = re.compile(r'''[A-Za-z]:[\\/][^"'<>|*?(\r\n]*?(?=:\s|["'(]|\s*$)''', re.M)
+_PATH_RE = re.compile(r'''[A-Za-z]:[\\/][^\r\n]*?(?=:\s|\s*$)''', re.M)
 _DLL = None
 
 
