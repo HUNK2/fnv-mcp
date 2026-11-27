@@ -293,3 +293,27 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     return tex2D(scene, uv) * tint;
 }
 '''
+
+
+def patch_sdp(src_bytes, replacements):
+    """A package's raw bytes with the code of the named entries replaced ({name: bytecode}). Every other byte is
+    copied as it is (the vanilla name fields carry non-zero padding after the NUL, which write_sdp would zero); a
+    replaced entry keeps its raw name field and gets the new size and code. The header's payload size is refreshed."""
+    version, count, _payload = struct.unpack_from('<III', src_bytes, 0)
+    if version != SDP_VERSION:
+        raise ConvError('BAD_PACKAGE', 'package has version %d, expected %d.' % (version, SDP_VERSION))
+    out, pos = [src_bytes[:12]], 12
+    for _ in range(count):
+        field = src_bytes[pos:pos + _NAME_LEN]
+        size = struct.unpack_from('<I', src_bytes, pos + _NAME_LEN)[0]
+        body = pos + _NAME_LEN + 4
+        name = field.split(b'\0', 1)[0].decode('latin-1')
+        if name in replacements:
+            code = bytes(replacements[name])
+            out.append(field + struct.pack('<I', len(code)) + code)
+        else:
+            out.append(src_bytes[pos:body + size])
+        pos = body + size
+    out.append(src_bytes[pos:])
+    raw = b''.join(out)
+    return raw[:8] + struct.pack('<I', len(raw) - 12) + raw[12:]

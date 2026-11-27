@@ -7,6 +7,7 @@ from unittest import mock
 import json
 import re
 import shutil
+import struct
 import sys
 import tempfile
 import unittest
@@ -71,6 +72,30 @@ class PackageExport(Export):
             for (name, a), (_n, b) in zip(src, dst):
                 self.assertEqual(b, new if name == 'SKYTEST.pso' else a, name)
         self.assertNotIn('C:', json.dumps(out))
+
+    def test_untouched_bytes_are_copied_raw_including_name_padding(self):
+        """Vanilla name fields hold non-zero bytes after the NUL: the patched package keeps every byte but the replaced
+        entry's size and code and the header's payload size."""
+        def raw(entries):
+            parts = []
+            for i, (name, code) in enumerate(entries):
+                field = name.encode('latin-1') + bytes(1) + bytes([(i * 7 + k) % 251 + 1 for k in range(255 - len(name))])
+                parts.append(field + struct.pack('<I', len(code)) + code)
+            payload = b''.join(parts)
+            return struct.pack('<III', 100, len(entries), len(payload)) + payload, parts
+        entries = [('SKYTEST.pso', self.code)] + self.other
+        data, parts = raw(entries)
+        folder = self.game / 'Data' / 'Shaders'
+        (folder / 'shaderpackage003.sdp').write_bytes(data)
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.tools.export()
+        got = (self.state / 'fnv/shaders/export/live/Shaders/shaderpackage003.sdp').read_bytes()
+        new = build('ps_3_0', OK_SRC)
+        first = parts[0][:256] + struct.pack('<I', len(new)) + new
+        want = b''.join(parts[1:])
+        self.assertEqual(got[12:], first + want)
+        self.assertEqual(struct.unpack_from('<III', got, 0), (100, len(entries), len(got) - 12))
+        self.assertEqual(got[12 + len(first):], want)
 
     def test_package_failing_check_is_skipped(self):
         self.second_package(build('ps_3_0', ORIG_2A + '// no tint\n'))     # no c0 there: the replacement needs it

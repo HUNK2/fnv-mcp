@@ -24,7 +24,7 @@ from .fnv_live import LiveError
 from .fnv_layout import ini_value
 from .fnv_shader_hlsl import _PATH_RE, compile_hlsl, disassemble, parse_ctab, version_of
 from .fnv_shader_pkg import (Package, check_replacement, effect_template, package_index, profile_for,
-                             read_sdp, replacement_template, write_sdp)
+                             patch_sdp, read_sdp, replacement_template)
 from .fnv_state import GameIdentity, locked, read_json, write_json
 
 MODULE = 'fnvmcp_shaderfx'
@@ -945,7 +945,7 @@ class ShaderTools:
             if not patched:
                 continue
             (dest / 'Shaders').mkdir(parents=True, exist_ok=True)
-            write_sdp(dest / 'Shaders' / file, [(n, patched.get(n, c)) for n, c in entries])
+            (dest / 'Shaders' / file).write_bytes(patch_sdp(path.read_bytes(), patched))
             packages.append({'file': _rel(dest / 'Shaders' / file, self.base), 'replaced': sorted(patched)})
         return packages, skipped
 
