@@ -103,6 +103,11 @@ class ReleasePackageTests(GateFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_build_rebuilds_the_module_with_the_hooks_of_its_last_build(self):
         folder = self.module(hooks=['0x00401000'])
+        # building runs zig cc: a full-control action since the Gemini audit (BUG-023); read refuses it
+        code, _out, err = await self.package(module='mymod', build=True)
+        self.assertEqual(code, 'CONTROL_DISABLED', err)
+        self.project = self.project.model_copy(update={'fnv': self.project.fnv.model_copy(
+            update={'engine_control': 'full'})})
         with mock.patch.object(PluginTools, 'build', autospec=True,
                                return_value={'dll': str(folder / 'mymod.dll')}) as build:
             code, out, err = await self.package(module='mymod', build=True)
