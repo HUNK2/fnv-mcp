@@ -85,6 +85,8 @@ def validate(data, index=None, assets=None, masters_expected=None):
         own[key] = rec
         if key >> 24 == self_byte:
             max_local = max(max_local, key & 0xFFFFFF)
+        elif key >> 24 > self_byte:
+            errors.append('%s %08X has a load-order byte past this plugin\'s own (%02X)' % (rec.type, key, self_byte))
         elif rec.type != 'TES4':
             warnings.append('%s %08X overrides a master record' % (rec.type, key))
         edid = rec.editor_id

@@ -367,6 +367,12 @@ def prune(state_dir, now, crash_dir=None):
         for files in groups.values():
             for p in _newest_first(files)[RETENTION['backups_per_target']:]:
                 out['backups'] += _unlink(p)
+    profile_backups = fnv / 'profile-backups'       # one folder per fnv_profile_set change (BUG-123)
+    if profile_backups.is_dir():
+        import shutil
+        for p in _newest_first([p for p in profile_backups.iterdir() if p.is_dir()])[RETENTION['backups_per_target']:]:
+            shutil.rmtree(p, ignore_errors=True)
+            out['backups'] += 1
     for folder in ('screens', 'screenshots'):
         d = fnv / folder
         if d.is_dir():

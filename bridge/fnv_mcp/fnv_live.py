@@ -667,14 +667,17 @@ class LiveService:
             try:
                 entries = data._active()[0]
                 files = ','.join(str(e['fileId']) for e in entries)
-                row = data.index.db.execute('select owner, local, type, full from records where edid = ? collate nocase '
-                                            'and file in (%s) limit 1' % files, (edid,)).fetchone()
+                found = data.index.db.execute('select owner, local, type, full, file from records where edid = ? '
+                                              'collate nocase and file in (%s)' % files, (edid,)).fetchall()
+                position = {e['fileId']: e['index'] for e in entries}
+                best = max(found, key=lambda r: position.get(r[4], -1)) if found else None   # the later plugin wins
+                row = best[:4] if best else None
+                cache[edid.lower()] = row       # cached only on success: a transient failure is not remembered
             except Exception:
                 row = None
             finally:
                 if data._index is not None:
                     data._index.db.close()  # never keep the SQLite file open between calls
-            cache[edid.lower()] = row
         if not row:
             return None
         owner, local, rtype, name = row

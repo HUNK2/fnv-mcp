@@ -64,6 +64,8 @@ def _bsa_extract(path, wanted):
                 skip = stream.read(1)[0]
                 stream.seek(skip, os.SEEK_CUR)
                 size -= skip + 1
+            if size < 0:        # a negative read would take the rest of the file
+                raise AssetError('%s is damaged: %s has an impossible size' % (path, full))
             raw = stream.read(size)
             if len(raw) != size:
                 raise AssetError('%s is truncated: %s ends %d bytes early' % (path, full, size - len(raw)))

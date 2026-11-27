@@ -137,10 +137,11 @@ class Authoring:
         """Loose files of Data and the mod roots, and the BSAs of both: a model a mod ships in its own BSA was
         "model missing" while fnv_asset_check found it (X8)."""
         roots = self.mod_roots()
-        bsas = sorted(self.data_dir.glob('*.bsa'))
+        bsas = []
         for root in roots:
             bsas.extend(sorted(root.glob('*.bsa')))
-        return AssetIndex(self.data_dir, roots, bsas)
+        bsas.extend(sorted(self.data_dir.glob('*.bsa')))      # mod roots are highest priority first, Data last
+        return AssetIndex(None, roots + [self.data_dir], bsas)
 
     # -- build ---------------------------------------------------------------------------
     def asset_manifest(self, data, assets):
@@ -159,7 +160,7 @@ class Authoring:
         if assets is None:
             return {'scope': 'asset checks unavailable', 'files': {}, 'archives': []}
         archived = {}
-        for bsa in assets.archive_paths:        # each archive from its own folder: Data or a mod's (X8)
+        for bsa in reversed(assets.archive_paths):        # lowest priority first, so the higher priority archive wins (X8)
             archived.update(bsa_extract(bsa, {m for m in models if (assets.find(m) or {}).get('where') == 'bsa'}))
         for model in sorted(models):
             hit = assets.find(model)
@@ -170,7 +171,7 @@ class Authoring:
                         wanted.update(nif_textures(payload))
                 except AssetError:
                     pass  # validate() records this as a failure; never used to authorize installation
-        for bsa in assets.archive_paths:
+        for bsa in reversed(assets.archive_paths):
             archived.update(bsa_extract(bsa, {m for m in wanted if (assets.find(m) or {}).get('where') == 'bsa'}))
         for relative in sorted(wanted):
             hit = assets.find(relative)

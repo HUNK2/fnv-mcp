@@ -88,7 +88,7 @@ class PluginTools:
         running game's bytes may already be a hook of a loaded module), else from the running game, refused when the
         companion has a hook there."""
         try:
-            return self._image_code(address, length), 'local game image'
+            return self._image_code(address, length)
         except ConvError as missing:
             no_image = missing
         try:

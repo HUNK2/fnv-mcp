@@ -251,7 +251,11 @@ def make(src, out, options=None, rel=None):
         m = g.world(i)
         lin = m[:3, :3]
         flip = np.linalg.det(lin) < 0
-        normal_m = np.linalg.inv(lin).T
+        try:
+            normal_m = np.linalg.inv(lin).T
+        except np.linalg.LinAlgError:
+            raise AssetMakeError('%s has a zero scale (a singular transform), so it cannot be converted'
+                                 % (node.get('name') or 'node %d' % i)) from None
         name = node.get('name') or 'mesh%d' % i
         for k, prim in enumerate(g.doc['meshes'][node['mesh']]['primitives']):
             pos, nrm, uv, tri = _primitive(g, prim)
