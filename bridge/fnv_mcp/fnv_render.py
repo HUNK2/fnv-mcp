@@ -186,7 +186,9 @@ class OverlayTools:
 
     def clear(self):
         self.live.in_game()
-        this = self._debug_text()
+        this = self._debug_text() if self.texts else None
+        if self.texts and (not this or int(this, 16) == 0):
+            self.texts.clear()      # stale after a restart: the layer is gone, nothing to blank
         cleared = 0
         for (x, y) in list(self.texts):
             args = [{'type': 'string', 'value': ''}, {'type': 'float', 'value': x}, {'type': 'float', 'value': y},

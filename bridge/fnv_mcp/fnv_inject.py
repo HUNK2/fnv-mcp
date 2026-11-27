@@ -154,11 +154,15 @@ class Injector:
             raise ConvError('INPUT_REFUSED', 'The engine companion refused the bound key of the %s job (%s). Next: '
                             'call fnv_status.' % (kind, results[1].get('error')), results[1])
         if not result.get('ok'):
+            if also and results[1].get('ok'):
+                self.batch([('inp', 'clear')])     # the key was bound but the control was refused: do not leave it held
             raise ConvError('INPUT_REFUSED', 'The engine companion refused the %s job (%s). Next: call fnv_status; if the '
                             'companion is old, call fnv_companion_install.' % (kind, result.get('error')), result)
         recorder = getattr(self.live, 'replay_recorder', None)
         if recorder is not None:            # fnv_replay record: the job and the frame it was queued at
             recorder(op, result.get('frame'))
+            if also:
+                recorder(also, results[1].get('frame', result.get('frame')))
         waited = self.wait_frames(int(frames)) if wait else None
         return verdict('%s for %d frames' % (detail, int(frames)),
                        'The job ends by itself after its frames; the engine input poll applies it each frame.'
