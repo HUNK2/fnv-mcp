@@ -24,8 +24,11 @@ from pathlib import Path
 from . import fnv_crash, fnv_link
 from .fnv_deep import HF_EXIT, HF_RECORD, RECORD_WORDS, RING, HookError, decode_prologue  # noqa: F401 (RECORD_WORDS for tests)
 from .fnv_link import hexs, word
-from .fnv_live import LiveError
+from .fnv_live import SIMPLE_TYPES, LiveError
 from .fnv_state import read_json, update_json
+
+_MEM_ALIASES = {'uint8': 'UInt8', 'int8': 'SInt8', 'uint16': 'UInt16', 'int16': 'SInt16', 'uint32': 'UInt32',
+                'int32': 'SInt32', 'uint': 'unsigned int'}
 
 TRACE_PREFIX = 'trace:'
 TEST_SAVE_PREFIX = 'fnvmcp_test_'
@@ -435,8 +438,7 @@ class AgentTools:
             elif 'mem' in item:
                 address, ftype, steps = self.live.locate(item['mem'], item.get('path'), item.get('class'))
                 kind = (item.get('as') or ftype or 'uint32').strip()
-                size = {'float': 4, 'double': 8, 'bool': 1, 'char': 1, 'unsigned char': 1, 'UInt8': 1, 'uint8': 1,
-                        'short': 2, 'unsigned short': 2, 'UInt16': 2, 'uint16': 2}.get(kind, 4)
+                size = (SIMPLE_TYPES.get(kind) or SIMPLE_TYPES.get(_MEM_ALIASES.get(kind, kind)) or (None, 4))[1]
                 prepared.append({'label': label or '%s %s' % (item['mem'], item.get('path') or ''),
                                  'op': ('rd', word(address), word(size)), 'kind': 'mem', 'type': kind, 'size': size,
                                  'address': '0x%08X' % address})
@@ -451,19 +453,17 @@ class AgentTools:
             return None
         raw = bytes.fromhex(result['hex'])
         kind = item['type']
-        if kind == 'float':
-            return round(struct.unpack('<f', raw)[0], 4)
-        if kind == 'double':
-            return round(struct.unpack('<d', raw)[0], 6)
-        if item['size'] == 1:
-            return raw[0]
-        if item['size'] == 2:
-            return struct.unpack('<H', raw)[0]
         if kind.endswith('*'):
             return '0x%08X' % struct.unpack('<I', raw)[0]
-        if kind in ('int', 'SInt32', 'int32', 'long'):
-            return struct.unpack('<i', raw)[0]
-        return struct.unpack('<I', raw)[0]
+        fmt, size = SIMPLE_TYPES.get(kind) or SIMPLE_TYPES.get(_MEM_ALIASES.get(kind, kind)) or ('<I', 4)
+        if len(raw) < size:
+            return None
+        value = struct.unpack_from(fmt, raw)[0]
+        if fmt == '<f':
+            return round(value, 4)
+        if fmt == '<d':
+            return round(value, 6)
+        return value
 
     def watch(self, items, seconds=5.0, interval_ms=100, until=None, keep_unpaused=True, max_samples=600):
         self.live.in_game()
@@ -777,11 +777,17 @@ class AgentTools:
                     result = self.link.schedule(0, line)
                 elif line.startswith('MoveTo'):   # the player's MoveTo / MoveToCell, after the reply
                     result = self.link.schedule(0, 'player.' + line)
+                elif line.startswith('SetAngle'):
+                    continue    # applied after the move: the destination's own heading would overwrite it
                 else:
                     result = {'ok': self.live.console(line, r['ptr'])['accepted']}
                 outputs.append({'line': line, 'ok': result.get('ok')})
             time.sleep(1.0)
             ready = self.game.wait_in_game(time.monotonic() + timeout, pid, start='move')
+            if ready:
+                for line in lines:
+                    if line.startswith('SetAngle'):
+                        outputs.append({'line': line, 'ok': self.live.console(line, r['ptr'])['accepted']})
         else:
             for line in lines:
                 result = self.live.console(line, r['ptr'])

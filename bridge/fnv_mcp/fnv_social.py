@@ -14,6 +14,7 @@ These tools do the same per item, calling the handler the running game has in it
 its own value. The final answer for a dialogue response is the engine's own TESTopicInfo::CheckCondition
 (0x0061E600, proven), which also applies say-once, quest conditions and the dummy-node rules.
 """
+import math
 import struct
 import time
 
@@ -227,7 +228,11 @@ class SocialTools:
                 if not handled or not read.get('ok'):
                     entry.update({'value': None, 'passed': False, 'why': 'the handler declined (wrong reference type?)'})
                     continue
-                value = float(struct.unpack('<f', struct.pack('<f', struct.unpack('<d', bytes.fromhex(read['hex']))[0]))[0])
+                double = struct.unpack('<d', bytes.fromhex(read['hex']))[0]
+                try:
+                    value = float(struct.unpack('<f', struct.pack('<f', double))[0])
+                except OverflowError:       # beyond float32: the engine's float would be infinite
+                    value = math.copysign(math.inf, double)
                 entry['value'] = round(value, 4)
                 entry['passed'] = _compare(entry['comparison'], value, compare)
         names = {}
@@ -331,7 +336,8 @@ class SocialTools:
             for info, result in zip(owners, self.evaluate_jobs(jobs, describe=False)):
                 passed = {it['ptr']: e.get('passed') for it, e in zip(info['identity'], result['conditions'])}
                 # Only a positive test (GetIsID X == 1) names a speaker; "== 0" tests exclude others.
-                named = any(passed[it['ptr']] and _positive(it) for it in info['identity'])
+                compared = {it['ptr']: e.get('compareTo') for it, e in zip(info['identity'], result['conditions'])}
+                named = any(passed[it['ptr']] and _positive(it, compared[it['ptr']]) for it in info['identity'])
                 info['forSpeaker'] = named and _speaker_match(info['items'], passed)
             chosen = [i for i in ranked if i['available'] or i.get('forSpeaker')]
         selected = chosen[:limit]
@@ -414,6 +420,8 @@ class SocialTools:
         if not menu:
             return {'open': False}
         raw = self.live.reads([(menu, 0x108)])[0]
+        if not raw or len(raw) < 0x108:      # the menu closed between the pointer read and this read
+            return {'open': False}
         state, goodbye = struct.unpack_from('<II', raw, 0x28)
         controller, = struct.unpack_from('<I', raw, 0x70)
         speaker, = struct.unpack_from('<I', raw, 0x80)
@@ -495,7 +503,14 @@ class SocialTools:
                 break
             menu = self._menu()
             time.sleep(0.6)  # HandleSelection ignores clicks within 500 ms of the list being filled
-            result = self.link.one('call', word(HANDLE_SELECTION), 'v', word(menu), '0', word(0xFFFFFFFF), option['tile'][2:])
+            # the dialog may have closed or changed during the sleep: never call into a freed menu
+            menu_after = self._menu()
+            state_after = self.menu_state() if menu_after else {'open': False}
+            if not menu or menu_after != menu or not state_after.get('open') or \
+                    not any(o.get('tile') == option['tile'] for o in state_after.get('options') or []):
+                steps.append({'choice': choice, 'error': 'the dialogue changed or closed before the choice was sent', 'state': state_after})
+                break
+            result = self.link.one('call', word(HANDLE_SELECTION), 'vg', word(menu), '0', word(0xFFFFFFFF), option['tile'][2:])
             self.live.journal.add({'kind': 'dialogue', 'action': 'choose', 'info': option['info'],
                                    'prompt': option['prompt'], 'undo': None})
             step = {'choice': choice, 'picked': option, 'options': state['options'], 'accepted': bool(result.get('ok'))}
@@ -693,8 +708,12 @@ def _speaker_match(items, passed):
     return ok
 
 
-def _positive(item):
-    value = item['value']
+def _positive(item, compare_to=None):
+    """compare_to: the resolved comparison value (the global's value when the item compares to a global; the raw
+    'value' bytes are then the global's pointer)."""
+    value = compare_to if compare_to is not None else (None if item.get('useGlobal') else item['value'])
+    if value is None:
+        return False
     return (item['comparison'] in ('==', '>=') and value >= 1) or (item['comparison'] == '!=' and value == 0) or         (item['comparison'] == '>' and value >= 0)
 
 

@@ -858,8 +858,10 @@ class EyesTools:
                 shots.append(shot['path'])
                 labels.append(tag)
         finally:
-            back()
-            restored = self.restore()
+            try:
+                back()
+            finally:
+                restored = self.restore()
         sheet = self._sheet(shots, labels, name or 'photo-sheet')
         return {'sheet': sheet, 'views': [{'angle': a, 'path': p} for a, p in zip(labels, shots)],
                 'restored': restored.get('restored'), 'worldPaused': True,
@@ -889,8 +891,10 @@ class EyesTools:
                 shots.append(self._shot('%s-%s-%s' % (name or 'cell', tag, token), size)['path'])
                 labels.append(tag)
         finally:
-            back()
-            self.restore()
+            try:
+                back()
+            finally:
+                self.restore()
         return {'sheet': self._sheet(shots, labels, name or 'cell-sheet'), 'views': dict(zip(labels, shots)),
                 'span': _r(span), 'note': 'Interiors: the views from above see the roof only when the cell has one.'}
 

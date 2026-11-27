@@ -410,7 +410,9 @@ class CrawlTools:
             try:
                 since = (self.live.events(0) or {}).get('seq', 0)
                 self.live.changing('crawl quest')
-                out = self.live.console('SetStage %s %d' % (q['formId'], int(stage)))
+                self.live.journal.add({'kind': 'quest', 'action': 'SetStage', 'quest': q['formId'],
+                                       'stage': int(stage), 'undo': None})
+                out =self.live.console('SetStage %s %d' % (q['formId'], int(stage)))
                 row['accepted'] = bool(out.get('accepted'))
                 self._settle(settle_frames)
                 row['stageNow'], row['running'] = self.live.values(['GetStage %s' % q['formId'],
@@ -483,11 +485,14 @@ class CrawlTools:
             return []
 
     def _rewear(self, worn):
+        failed = []
         for form in worn or []:
             try:
                 self.live.console('player.EquipItem %s 0 1' % form)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001 - try every item, then report
+                failed.append('%s: %s' % (form, str(e)[:60]))
+        if failed:
+            raise RuntimeError('could not re-equip %s' % '; '.join(failed))
 
     def _items_rows(self, rows, found, limit, photos, target):
         worn_now = self._worn_items()
