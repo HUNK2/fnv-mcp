@@ -428,7 +428,7 @@ def select_units(units, only=(), limit=None):
     """Units whose source contains any --only text (case-insensitive), then the first `limit` of them."""
     only = [t.lower().replace('\\', '/') for t in only or ()]
     chosen = [u for u in units if not only or any(t in u['source'].lower() for t in only)]
-    return chosen[:limit] if limit else chosen
+    return chosen[:limit] if limit is not None else chosen
 
 
 def unit_keys(units):
