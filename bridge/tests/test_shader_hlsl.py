@@ -28,6 +28,28 @@ class ShaderHlslTests(unittest.TestCase):
             self.assertNotIn(':\\', x['text'])
             self.assertNotIn(os.getcwd(), x['text'])
 
+    def test_clean_strips_paths(self):
+        raw = ('D:\\some dir\\effect.hlsl(3,5-9): error X3004: undeclared identifier \'q\'\n'
+               'error X3501: cannot open C:\\x\\y.fx\n\0')
+        out = H._clean(raw)
+        self.assertNotIn(':\\', out)
+        self.assertNotIn('\0', out)
+        self.assertIn('effect.hlsl(3,5-9): error X3004', out)
+        errors, _ = H._messages(raw)
+        self.assertEqual([(e['line'], e['col'], e['code']) for e in errors], [(3, 5, 'X3004'), (0, 0, 'X3501')])
+        for e in errors:
+            self.assertNotIn(':\\', e['text'])
+
+    def test_entrypoint_not_found(self):
+        r = H.compile_hlsl('float4 f():COLOR0{return 0;}')
+        self.assertFalse(r['ok'])
+        e = r['errors'][0]
+        self.assertEqual(e['code'], 'X3501')
+        self.assertNotIn('\0', e['text'])
+        self.assertNotIn('\n', e['text'])
+        self.assertIn('entrypoint not found', e['text'])
+        self.assertFalse(e['text'].startswith('error'))
+
     def test_include_refused(self):
         with self.assertRaises(ConvError) as c:
             H.compile_hlsl('#include "x.h"\nfloat4 main():COLOR0{return 0;}')

@@ -14,7 +14,8 @@ PROFILES = ('vs_2_0', 'vs_3_0', 'ps_2_0', 'ps_2_a', 'ps_2_b', 'ps_3_0')
 SOURCE_NAME = b'effect.hlsl'
 _REGSETS = {0: 'bool', 1: 'int4', 2: 'float4', 3: 'sampler'}
 _INCLUDE_RE = re.compile(r'^\s*#\s*include\b', re.M)
-_ERR_RE = re.compile(r'effect\.hlsl\((\d+)(?:,(\d+)(?:-\d+)?)?\):\s*(error|warning)\s+([A-Za-z]\d+):\s*(.*)')
+_ERR_RE = re.compile(r'(?:effect\.hlsl\((\d+)(?:,(\d+)(?:-\d+)?)?\):\s*)?(error|warning)\s+([A-Za-z]\d+):\s*(.*)')
+_PATH_RE = re.compile(r'[A-Za-z]:[\\/][^\s:"\'<>|*?]*')
 _DLL = None
 
 
@@ -58,7 +59,10 @@ def _blob_bytes(blob):
 
 
 def _clean(text):
-    return re.sub(r'(?m)^.*?effect\.hlsl\(', 'effect.hlsl(', text)
+    """Drop NULs, cut any path before `effect.hlsl(`, and replace remaining drive-letter paths."""
+    text = text.replace('\0', '')
+    text = re.sub(r'(?m)^.*?effect\.hlsl\(', 'effect.hlsl(', text)
+    return _PATH_RE.sub('<path>', text)
 
 
 def _messages(text):
@@ -67,7 +71,7 @@ def _messages(text):
         m = _ERR_RE.search(line)
         if not m:
             continue
-        item = {'line': int(m.group(1)), 'col': int(m.group(2) or 0), 'code': m.group(4),
+        item = {'line': int(m.group(1) or 0), 'col': int(m.group(2) or 0), 'code': m.group(4),
                 'text': m.group(5).strip()}
         (errors if m.group(3) == 'error' else warnings).append(item)
     return errors, warnings
