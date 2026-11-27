@@ -204,6 +204,8 @@ class LiveService:
             return [('time', undo['what'])]
         if op in ('fly_set', 'hud_set'):
             return [(op,)]
+        if op in ('probe_remove', 'probe_disarm'):
+            return [('probe',)]     # one probe set at a time, and disarm is global: the newest goes first (U8)
         return []
 
     @staticmethod
@@ -271,13 +273,11 @@ class LiveService:
             return a[1] < b[2] and b[1] < a[2]
         return a == b
 
-    def _later_open(self, entry):
+    def _later_open(self, entry, index=None):
         mine = self._order_targets(entry)
         if not mine:
             return []
-        return [e['id'] for e in self.journal.entries(process=self.game_identity(), undoable=True)
-                if e['id'] != entry['id'] and (e.get('seq') or 0) > (entry.get('seq') or 0)
-                and any(self._targets_meet(t, u) for t in mine for u in self._order_targets(e))]
+        return (index or _OpenTargets(self)).later(entry, mine)
 
     def engine(self):
         if self._engine is None:
@@ -1787,7 +1787,17 @@ class LiveService:
             entries = [e for e in entries if not e['undone']]
         return {'count': len(entries), 'entries': entries[-limit:], 'path': str(self.journal.path)}
 
-    def _apply_undo(self, entry):
+    @staticmethod
+    def _outcome_unknown(entry):
+        """A pending entry whose op is only right when the change happened: the executor refuses it (S3.2)."""
+        undo = entry.get('undo') or {}
+        op = UNDO_OPS.get(undo.get('op'))
+        if op is None or entry.get('state') != 'pending':
+            return False
+        repeatable_if = getattr(op, 'repeatable_if', None)
+        return not (op.repeatable or repeatable_if and repeatable_if(undo))
+
+    def _apply_undo(self, entry, index=None):
         undo = entry.get('undo')
         if not undo:
             return {'id': entry['id'], 'undone': False, 'reason': 'not undoable (%s)' % entry['kind']}
@@ -1798,12 +1808,11 @@ class LiveService:
         if op is None:   # never mark a change undone that nothing reverted (N1)
             return {'id': entry['id'], 'undone': False, 'kind': entry.get('kind'),
                     'error': {'code': 'UNKNOWN_UNDO_OP', 'message': 'No undo op %r in this bridge' % undo.get('op')}}
-        later = self._later_open(entry)
+        later = self._later_open(entry, index)
         if later:
             return {'id': entry['id'], 'undone': False, 'kind': entry.get('kind'),
                     'reason': 'undo the later change first', 'later': later}
-        repeatable_if = getattr(op, 'repeatable_if', None)
-        if entry.get('state') == 'pending' and not (op.repeatable or repeatable_if and repeatable_if(undo)):
+        if self._outcome_unknown(entry):
             # The tool failed between its intent and its confirm: the change may or may not be in the game, and
             # this op is only right when it is (S3.2).
             return {'id': entry['id'], 'undone': False, 'kind': entry.get('kind'),
@@ -1814,6 +1823,7 @@ class LiveService:
 
     def undo(self, count=1, journal_id=None):
         self.ready()
+        skipped = []
         if journal_id:
             entries = [e for e in self.journal.entries() if not e['undone'] and e['id'] == journal_id]
             if not entries:
@@ -1821,14 +1831,26 @@ class LiveService:
         else:
             if int(count) < 1:      # bug hunt 2026-11-18: [-0:] is the whole list: count=0 undid everything
                 raise ValueError('count must be at least 1')
-            entries = self.journal.entries(process=self.game_identity(), undoable=True)[-int(count):]
+            entries = self.journal.entries(process=self.game_identity(), undoable=True)
+            # U5: a pending entry the executor refuses (outcome unknown) would be picked by every count=1 undo and
+            # block the older ones: pass over it, and list it
+            unknown = [e for e in entries if self._outcome_unknown(e)]
+            entries = [e for e in entries if not self._outcome_unknown(e)][-int(count):]
+            oldest = (entries[0].get('seq') or 0) if entries else 0
+            skipped = [{'id': e['id'], 'kind': e.get('kind'),
+                        'reason': 'outcome unknown: the change may not have happened'}
+                       for e in reversed(unknown) if (e.get('seq') or 0) > oldest]
         results = self._apply_undos(reversed(entries))
-        return {'results': results, 'changed': any(r['undone'] for r in results)}
+        out = {'results': results, 'changed': any(r['undone'] for r in results)}
+        if skipped:
+            out['skipped'] = skipped
+        return out
 
     def _apply_undos(self, entries):
         """Apply undos newest first, marking each one undone as soon as it lands (a later failure must not make
         a retry apply the earlier ones twice). A failing entry is reported and the rest still run."""
         results = []
+        index = None        # the open entries' undo targets, read once for the whole run (V6)
         for e in entries:
             try:
                 # Under the journal's lock: another server may have undone it since the list was read (S2.3).
@@ -1837,9 +1859,13 @@ class LiveService:
                     if now.get('undone'):
                         r = {'id': e['id'], 'undone': False, 'kind': e.get('kind'), 'reason': 'already undone'}
                     else:
-                        r = self._apply_undo(now)
+                        if index is None:
+                            index = _OpenTargets(self)
+                        r = self._apply_undo(now, index)
+                        seen = r.pop('changeSeen', False)
                         if r['undone']:
-                            self.journal.mark_undone([r['id']])
+                            self.journal.mark_undone([r['id']], landed=[r['id']] if seen else ())
+                            index.drop(r['id'])
             except Exception as exc:
                 r = {'id': e['id'], 'undone': False, 'kind': e.get('kind'),
                      'error': {'code': getattr(exc, 'code', type(exc).__name__), 'message': str(exc)}}
@@ -1864,6 +1890,56 @@ class LiveService:
         return {'reverted': sum(r['undone'] for r in results), 'results': shown['items'], 'total': shown['total'],
                 'truncated': shown['truncated'], 'failed': [r['id'] for r in failed], 'notUndoable': skipped,
                 'changed': any(r['undone'] for r in results)}
+
+
+class _OpenTargets:
+    """The open entries of this game process with their undo targets, for the U1 order check (V6: it once read and
+    copied the whole journal for every undo, which made revert_all quadratic). Read once per _apply_undos run; then
+    only the entries added since (by any server) are read, an entry undone here is dropped, and a hit is checked
+    against the journal (another server may have undone it)."""
+
+    def __init__(self, live):
+        self.live = live
+        self.ident = GameIdentity.parse(live.game_identity())
+        self.count = 0
+        self.targets = {}       # id -> (seq, targets), in journal order (seq order)
+        self._update()
+
+    def _update(self):
+        self.count, new = self.live.journal.added_since(self.count)
+        for e in new:
+            if not e.get('undo') or e['undone'] or not self.ident:
+                continue
+            here = GameIdentity.parse(e)
+            if not here or not here.same_game(self.ident):
+                continue
+            targets = self.live._order_targets(e)
+            if targets:
+                self.targets.pop(e['id'], None)
+                self.targets[e['id']] = (e.get('seq') or 0, targets)
+
+    def drop(self, entry_id):
+        self.targets.pop(entry_id, None)
+
+    def later(self, entry, mine):
+        """The open entries after `entry` whose targets meet `mine`."""
+        self._update()
+        seq = entry.get('seq') or 0
+        out, gone = [], []
+        for i in reversed(self.targets):            # newest first: stop at the first entry not after this one
+            s, theirs = self.targets[i]
+            if s <= seq:
+                break
+            if i == entry['id'] or not any(self.live._targets_meet(t, u) for t in mine for u in theirs):
+                continue
+            now = self.live.journal.get(i)
+            if now and now.get('undo') and not now['undone']:
+                out.append(i)
+            else:
+                gone.append(i)                      # undone elsewhere since it was read
+        for i in gone:
+            self.drop(i)
+        return out[::-1]
 
 
 # -- Undo ops (PLAN-3 S3.1) -------------------------------------------------------------------------------------
@@ -1893,7 +1969,10 @@ def _console_undo(live, line, ref=0):
 
 @undo_op('write', repeatable=True)
 def _undo_write(live, entry, undo):
-    live.link.write(int(undo['address'], 16), bytes.fromhex(undo['hex']))
+    old = bytes.fromhex(undo['hex'])
+    if live.link.write(int(undo['address'], 16), old) != old:
+        return {'changeSeen': True}     # the change was in the game: a later confirm must not reopen it (U4)
+    return None
 
 
 @undo_op('console')
@@ -1933,8 +2012,11 @@ def _undo_probe_disarm(live, entry, undo):
 
 @undo_op('writes', repeatable=True)
 def _undo_writes(live, entry, undo):
+    seen = False
     for address, data in undo['writes']:
-        live.link.write(int(address, 16), bytes.fromhex(data))
+        old = bytes.fromhex(data)
+        seen = live.link.write(int(address, 16), old) != old or seen
+    return {'changeSeen': True} if seen else None     # U4, as _undo_write
 
 
 @undo_op('probe_remove', repeatable=True)
@@ -1947,12 +2029,14 @@ def _undo_probe_remove(live, entry, undo):
         r = live.link.one('probe', 'disarm')
         if not r.get('ok'):
             return {'undone': False, 'reason': 'probe disarm failed: %s' % r.get('error')}
-    probes = ProbeTools(live)
-    session = probes._load('probe_session.json', None)
+    from .fnv_state import locked, read_json, write_json
     here = GameIdentity.parse(live.game_identity())
-    if session and session.get('armed') and here and here.same_game(GameIdentity.parse(session)):
-        session['armed'] = False
-        probes._save('probe_session.json', session)
+    path = ProbeTools(live)._path('probe_session.json')
+    with locked(path):      # read and written under one lock: a session another server saves meanwhile stays (U8)
+        session = read_json(path, None)
+        if isinstance(session, dict) and session.get('armed') and here and here.same_game(GameIdentity.parse(session)):
+            session['armed'] = False
+            write_json(path, session)
     return None
 
 
@@ -2075,7 +2159,7 @@ def _undo_time_restore(live, entry, undo):
     control, _ = shared_time(live)
     what = undo.get('what')
     if what == 'pause':
-        control.resume()
+        control.resume_entry()      # V5: not resume(), whose "not paused by this tool" left the clock stopped
     elif what == 'hold':
         control.release()
     elif what == 'fixed':

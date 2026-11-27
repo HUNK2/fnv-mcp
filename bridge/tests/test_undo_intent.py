@@ -61,10 +61,14 @@ class IntentTests(unittest.TestCase):
     def test_pending_non_repeatable_reports_unknown(self):
         e = self.live.journal.add({'kind': 'script_hot_swap', 'state': 'pending',
                                    'undo': {'op': 'swap_script', 'target': '0x1000', 'holder': '0x2000'}})
-        r = self.live.undo()['results'][0]
+        r = self.live.undo(journal_id=e['id'])['results'][0]
         self.assertFalse(r['undone'])
         self.assertEqual(r['reason'], 'outcome unknown: the change may not have happened')
         self.assertFalse(self.live.journal.get(e['id'])['undone'])
+        out = self.live.undo()          # U5: count undo passes over it and lists it
+        self.assertEqual(out['results'], [])
+        self.assertEqual(out['skipped'], [{'id': e['id'], 'kind': 'script_hot_swap',
+                                           'reason': 'outcome unknown: the change may not have happened'}])
 
     def test_confirmed_non_repeatable_still_runs(self):
         from fnv_mcp import fnv_live

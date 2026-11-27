@@ -404,14 +404,18 @@ class ProcState:
     def _ident(rec):
         return GameIdentity.parse(rec) if isinstance(rec, dict) else None
 
-    def load(self, section, pid, start):
+    def load(self, section, pid, start, unreadable=None):
         """The stored value of a section for this game process, or None. A start time that could not be read on
-        either side still matches the pid (R20)."""
+        either side still matches the pid (R20). unreadable: returned instead when the file is there but could not
+        be read or parsed (V5: a read that failed, or met a write in place, is not a file that says nothing)."""
         path = self._path()
         if path is None or not pid:
             return None
         with _STATE_LOCK:
-            rec = read_json(path, {}).get(section)
+            data = read_json(path, None)
+            if not isinstance(data, dict):
+                return unreadable if data is not None or path.exists() else None
+            rec = data.get(section)
         ident = self._ident(rec)
         if not ident or not ident.same_game(GameIdentity.parse((pid, start))):
             return None

@@ -105,15 +105,20 @@ class Journal:
             for record in self._records[done:]:
                 kind = record.get('kind')
                 if kind == UNDONE:
+                    landed = record.get('landed')
+                    landed = set(i for i in landed if isinstance(i, str)) if isinstance(landed, list) else set()
                     for i in record.get('ids') or []:
                         if i in by_id:
                             by_id[i]['undone'] = True
                             by_id[i].setdefault('undoneAt', record.get('time'))
+                            if i in landed:     # the undo saw the change in the game: it ran after the change (U4)
+                                by_id[i]['undoneAfterChange'] = True
                 elif kind == CONFIRM:
                     e = by_id.get(record.get('id'))
                     if e is not None:
-                        if e.get('state') == 'pending' and e.get('undone'):
-                            # another server undid the intent before the change landed (S3 review I1)
+                        if e.get('state') == 'pending' and e.get('undone') and not e.get('undoneAfterChange'):
+                            # another server undid the intent before the change landed (S3 review I1); an undo
+                            # that saw the change already reverted it, so the confirm keeps it undone (U4)
                             e['undone'] = False
                             e.pop('undoneAt', None)
                         e['state'] = 'confirmed'
@@ -212,12 +217,27 @@ class Journal:
             ids.append(record['id'])
         return record
 
-    def mark_undone(self, ids):
+    def mark_undone(self, ids, landed=()):
+        """landed: the ids whose undo saw their change in the game (U4: a later confirm of a pending entry then
+        keeps it undone, instead of reopening it as an undo that ran before the change)."""
         ids = [i for i in dict.fromkeys(ids) if i]
         if not ids:
             return
+        record = {'kind': UNDONE, 'ids': ids, 'time': time.time()}
+        landed = [i for i in dict.fromkeys(landed) if i in ids]
+        if landed:
+            record['landed'] = landed
         with self.locked(ADD_TIMEOUT):
-            self._append({'kind': UNDONE, 'ids': ids, 'time': time.time()})
+            self._append(record)
+
+    def added_since(self, count):
+        """(V6) The entries after the first `count` in journal order, and the new count: a reader that keeps its own
+        index reads only what was added since it last looked. A journal compacted since (fewer entries) starts over."""
+        by_id, order = self._folded()
+        with self._mutex:
+            if count > len(order):
+                count = 0
+            return len(order), [dict(by_id[i]) for i in order[count:]]
 
     def confirm(self, entry_id, after=None):
         """The change of a pending entry (added with state 'pending' before the game was touched) landed; `after`
