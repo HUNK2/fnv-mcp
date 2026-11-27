@@ -29,6 +29,7 @@ HOLD_MAX_S = 3600              # the longest dead-man time a call may ask for
 STEP_MAX = 10000               # 0x2710 frames
 UNTIL_MAX = 0x2710             # most frames one `until` runs (the companion answers bad_arguments above it)
 FORCE_RESUME_MAX = 16          # most Enable calls one force_resume makes
+_UNREADABLE = object()         # the pause flag's state file could not be read (V5)
 FPS_MAX = 1000
 SPEED_MIN, SPEED_MAX = 0.05, 10.0
 STATUS_WINDOW = 0.5            # seconds between the two frame readings of a real frame rate
@@ -166,7 +167,10 @@ class TimeControl:
         # The pause flag is shared by every server process (the state file): another one may have paused, or
         # resumed (an undo), since this one last looked (U2). A flag read from the file is checked against the
         # counter before an Enable (restored).
-        saved = bool(self.state.load('time_pause', self.pid, self.start))
+        saved = self.state.load('time_pause', self.pid, self.start, unreadable=_UNREADABLE)
+        if saved is _UNREADABLE:     # V5: a failed read keeps the flag; only a file that says so changes it
+            return proc[0]
+        saved = bool(saved)
         if self.state._path() is not None and saved != self.paused_by_us:   # no state folder: nothing shared
             self.paused_by_us = self.restored = saved
         return proc[0]
@@ -262,6 +266,27 @@ class TimeControl:
         reason = 'Clock counter now %d.' % counter + (' Something else still holds the clock (focus loss or another '
                                                     'user), so it stays stopped.' if counter else '')
         return verdict('The game clock runs again', reason, changed=True, pausedByUs=False, clockCounter=counter)
+
+    def resume_entry(self):
+        """The undo of a journaled pause (V5). resume() trusts the shared pause flag, which a failed save can leave
+        False while this tool's Disable still holds the clock; then resume() changes nothing. An open pause entry
+        means no resume of this tool closed it, so while the clock counter is not 0 it gets one Enable of its own."""
+        r = self.resume()
+        if r.get('changed'):
+            return r
+        counter = _u32(self.batch([('rd', w(TIME_GLOBAL), '4')])[0], 'the clock counter')
+        if not counter:
+            return r
+        call, after = self.batch([('call', w(self.functions()['enable']), 'v', w(TIME_GLOBAL), '0'),
+                                  ('rd', w(TIME_GLOBAL), '4')])
+        if not call.get('ok'):
+            raise _refused('The clock resume', call)
+        self.paused_by_us, self.restored = False, False
+        self._remember()
+        self._close('pause')
+        counter = _u32(after, 'the clock counter')
+        return verdict('The game clock runs again', 'The pause flag was lost; the journaled pause got its Enable. '
+                       'Clock counter now %d.' % counter, changed=True, pausedByUs=False, clockCounter=counter)
 
     def force_resume(self):
         """Release the clock counter whoever incremented it (a pause lost to a server restart, or one this tool never
