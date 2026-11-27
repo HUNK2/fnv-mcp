@@ -27,6 +27,9 @@ part that fits what you are doing.
 
 ## Changing the MCP itself
 
+Work on the MCP in a clone of the repository: `CLAUDE.md`, `AGENTS.md` and `history/` are not in the release
+download.
+
 - The repository's [CLAUDE.md](../../CLAUDE.md) (also read by other agents through [AGENTS.md](../../AGENTS.md)): tests,
   live testing, and the traps. `tools/fnv_live_regress.py --suite loop` checks the loop real use is made of
   (native modules, decomp code, console, memory, input) in the running game before a push.
