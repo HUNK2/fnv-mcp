@@ -129,7 +129,7 @@ class PluginTools:
             vsize, va, rsize, raw_ptr = struct.unpack_from('<IIII', data, off + 8)
             if va <= address - base < va + max(vsize, rsize):
                 at = raw_ptr + address - base - va
-                return data[at:at + length], 'local game image'
+                return data[at:at + length]
         raise ConvError('NO_CODE', '0x%08X is outside the game image.' % address)
 
     def _plans(self, hooks):

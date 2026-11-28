@@ -103,6 +103,29 @@ class PluginPlanTests(unittest.TestCase):
             t._image_code = none
         return t
 
+    def test_plan_from_a_real_image_file(self):
+        """_image_code returns the bytes alone; _code_bytes adds where they came from (live 2026-11-28: the two both
+        added the label, so every plan from a local image handed decode_prologue a tuple)."""
+        import struct
+        pe, opt, raw = 0x40, 0xE0, 0x200
+        data = bytearray(raw + 0x100)
+        struct.pack_into('<I', data, 0x3C, pe)
+        data[pe:pe + 4] = b'PE\0\0'
+        struct.pack_into('<H', data, pe + 6, 1)
+        struct.pack_into('<H', data, pe + 20, opt)
+        struct.pack_into('<I', data, pe + 24 + 28, 0x00400000)
+        struct.pack_into('<IIII', data, pe + 24 + opt + 8, 0x100, 0x1000, 0x100, raw)
+        data[raw:raw + len(PROLOGUE)] = PROLOGUE
+        with tempfile.TemporaryDirectory() as d:
+            image = Path(d) / 'FalloutNV.exe'
+            image.write_bytes(bytes(data))
+            t = self.tools(game_running=False)
+            del t._image_code
+            t._image_path = lambda: image
+            _, plans = t._plans(['0x00401000'])
+        self.assertEqual(plans[0]['from'], 'local game image')
+        self.assertEqual(plans[0]['stolen'], 6)
+
     def test_plan_reads_the_clean_image_even_when_the_game_runs(self):
         _, plans = self.tools(hooked=[0x00401000])._plans(['0x00401000'])
         self.assertEqual(plans[0]['from'], 'local game image')
