@@ -72,6 +72,16 @@ class NoGameEffects(E.Harness):
         m = self.manifest()
         self.assertEqual((m['effects'], m['saved']), ({}, {}))
 
+    def test_a_pipe_glitch_with_the_game_running_parks_nothing(self):
+        self.tools.effect_add('x', E.INVERT, photo=False)
+        self.live.game_identity.side_effect = LiveError('PIPE', 'no answer')
+        self.live.ready.side_effect = LiveError('PIPE', 'no answer')
+        with self.assertRaises(LiveError):
+            self.tools.effect_remove('x', photo=False)
+        m = self.manifest()
+        self.assertIn('x', m['effects'])
+        self.assertNotIn('x', m['saved'])
+
     def test_undo_of_a_stale_remove_goes_back_to_saved(self):
         self.tools.effect_add('x', E.INVERT, photo=False)
         close_game(self)

@@ -179,9 +179,15 @@ class ShaderTools:
 
     def _park(self, m, known):
         """With no game the live entries are only saved ones: move them to `saved` / `savedReplacements`, as state()
-        does for another game. The caller holds the lock; the manifest is written when it changed."""
+        does for another game. A running game whose pipe did not answer parks nothing: its effects may still draw.
+        The caller holds the lock; the manifest is written when it changed."""
         if known or not (m['effects'] or m['replacements']):
             return m
+        try:
+            if self.live.game.process(fresh=True):
+                return m
+        except LiveError:
+            pass
         m['saved'].update(m['effects'])
         m['effects'] = {}
         m['savedReplacements'].update(m['replacements'])
