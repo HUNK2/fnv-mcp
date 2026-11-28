@@ -41,6 +41,8 @@ LIST_LIMIT = 300
 REG_LETTER = {'float4': 'c', 'int4': 'i', 'bool': 'b', 'sampler': 's'}
 EXPORT_HOOKS = ['0x0086BA10']
 SHADERFX_SOURCE = Path(__file__).resolve().parents[1] / 'native' / 'modules' / 'fnvmcp_shaderfx.c'
+NOT_LOADED_NOTE = ('live objects unknown: the shader module is not loaded (a read does not load it); effect_add or '
+                   'replace loads it')
 MENU_NOTE = 'pictures need the game out of menus (effects do not draw in menus)'
 
 
@@ -618,9 +620,11 @@ class ShaderTools:
 
     def _live_scan(self):
         """(rows, note): the live objects when the game runs; a failure of the scan other than a wrong package is
-        only a note (the listing itself needs no game)."""
+        only a note (the listing itself needs no game). Without the module loaded: no rows and a note."""
         if self._running() is None:
             return None, None
+        if not self.native.is_loaded(MODULE):     # a read never loads the module (it patches game code)
+            return None, NOT_LOADED_NOTE
         try:
             return self._scan(), None
         except (ConvError, LiveError) as e:

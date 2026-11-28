@@ -364,6 +364,33 @@ class ShowTests(Replace):
         self.assertEqual([r['name'] for r in only['rows']], ['SKYTEST.pso'])
 
 
+class ReadNeverLoadsTests(Replace):
+    """Ruling 15: engine_list and engine_show are reads; they never load the module (it patches game code)."""
+
+    def test_engine_list_without_the_module_uses_the_package_only(self):
+        self.native.loaded = False
+        out = self.tools.engine_list(filter='SKY')
+        self.assertEqual(self.native.bundled_calls, [])
+        self.assertNotIn('sfx_scan', self.exports())
+        row = next(r for r in out['rows'] if r['name'] == 'SKYTEST.pso')
+        self.assertNotIn('liveObjects', row)
+        self.assertIn('not loaded', out['note'])
+        self.assertIsNone(out['unknownObjects'])
+
+    def test_engine_show_without_the_module(self):
+        self.native.loaded = False
+        out = self.tools.engine_show('SKYTEST.pso')
+        self.assertEqual(self.native.bundled_calls, [])
+        self.assertIsNone(out['liveObjects'])
+        self.assertIn('not loaded', out['note'])
+
+    def test_engine_list_with_the_module_scans(self):
+        self.native.loaded = True
+        out = self.tools.engine_list(filter='SKY')
+        self.assertIn('sfx_scan', self.exports())
+        self.assertEqual(next(r for r in out['rows'] if r['name'] == 'SKYTEST.pso')['liveObjects'], 3)
+
+
 class PackageTests(Replace):
     def test_package_from_flags_marks_not_guessed(self):
         pkg = self.tools.package()

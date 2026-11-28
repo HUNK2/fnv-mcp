@@ -111,7 +111,7 @@ READ_LEVEL_CONTROL = {
     'fnv_author': 'export, check, scaffold and package write only into the bridge state folder',
     'fnv_plugin_build': 'scaffold and log only: a starting source in the state folder, or the plugin log',
     'fnv_profile_set': 'dry_run only: shows the changes without writing',
-    'fnv_shader': 'compile, template, the engine listings, effect_list and status only read; effect_remove and restore '
+    'fnv_shader': 'compile, template, engine_list, engine_show, effect_list and status only read (the engine listings use the live scan only when the shader module is already loaded; they never load it); effect_remove and restore '
                   'are in MUTATING_ACTIONS (they take shaders out again); effect_add, effect_set, replace and '
                   'export are in FULL_ONLY_ACTIONS',
     'fnv_window': 'status only; the actions that write game memory are in MUTATING_ACTIONS, persist (Fallout.ini) '

@@ -238,10 +238,12 @@ def run_export(c, base_abs, start):
     """Export with the game closed, relaunch, and look: the baked plugin draws the effect without the live module."""
     s = c.s
     from fnv_mcp.fnv_link import disable_mod
-    q = c.call('fnv_game', {'action': 'quit'})
-    if not q.get('ok'):
-        c.record('quit for export', False, error=q.get('error'))
-        return
+    from fnv_mcp.fnv_game import game_processes
+    if game_processes():
+        q = c.call('fnv_game', {'action': 'quit'})
+        if not q.get('ok'):
+            c.record('quit for export', False, error=q.get('error'))
+            return
     try:
         # the live manifest has no live game now; export offers the saved sources
         r = c.shader(action='export', set='livecheck', install=True)
@@ -282,26 +284,29 @@ def main():
     ap.add_argument('--project', required=True)
     ap.add_argument('--start', default='coc:GoodspringsSource')
     ap.add_argument('--skip-export', action='store_true')
+    ap.add_argument('--export-only', action='store_true', help='only the export step (the manifest of an earlier run)')
     a = ap.parse_args()
     from fnv_mcp import fnv_link
     from fnv_mcp.config import Project
     # The game's pipe takes one client: wait until an MCP server that used it lets go (20 s idle), as the regress
     # runner does, before the session's own link takes it.
-    probe = fnv_link.EngineLink(getattr(Project.load(a.project).fnv, 'engine_pipe', None))
-    try:
-        probe.connect(wait=60)
-    except fnv_link.LinkError as e:
-        print("cannot attach to the game's pipe (%s): stop the other client, then run again" % e)
-        return 2
-    finally:
-        probe.close()
+    from fnv_mcp.fnv_game import game_processes
+    if game_processes():
+        probe = fnv_link.EngineLink(getattr(Project.load(a.project).fnv, 'engine_pipe', None))
+        try:
+            probe.connect(wait=60)
+        except fnv_link.LinkError as e:
+            print("cannot attach to the game's pipe (%s): stop the other client, then run again" % e)
+            return 2
+        finally:
+            probe.close()
     from live.base import Session
     session = Session(a.project, engine_control='full')
     out = Path(session.project.state_dir) / 'fnv' / 'shader-live-check'
     out.mkdir(parents=True, exist_ok=True)
     c = Check(session, out)
     try:
-        base = run_live(c)
+        base = None if a.export_only else run_live(c)
         if not a.skip_export:
             run_export(c, base, a.start)
     except Exception as e:  # noqa: BLE001 - a crash in the run is a failed check
