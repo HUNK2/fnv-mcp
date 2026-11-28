@@ -273,6 +273,34 @@ class SetsAndEmpty(Export):
         out = self.tools.export(set='film')
         self.assertEqual(out['plugin']['name'], 'fnvmcp_shaders_film')
 
+    def test_export_after_removals_bakes_only_what_is_left(self):
+        self.tools.effect_add('tint', TINT, photo=False)
+        self.tools.effect_add('plain', TINT, photo=False)
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.live.game_identity.return_value = {'pid': 1, 'started': '7'}     # restart: all of it is saved only
+        self.tools.state()
+        self.live.game_identity.return_value = None                           # and no game now
+        self.live.ready.side_effect = RuntimeError('no game')
+        self.tools.effect_remove('tint')
+        self.tools.restore('SKYTEST.pso')
+        m = self.manifest()
+        self.assertEqual((sorted(m['saved']), m['savedReplacements']), (['plain'], {}))
+        out = self.tools.export()
+        self.assertEqual(out['packages'], [])
+        header = (self.state / 'fnv/shaders/export/live/sfx_baked.h').read_text('utf-8')
+        self.assertIn('#define SFX_BAKED_COUNT 1', header)
+
+    def test_removed_live_effect_with_saved_copy_is_not_baked(self):
+        self.tools.effect_add('tint', TINT, photo=False)
+        self.live.game_identity.return_value = {'pid': 1, 'started': '7'}
+        self.tools.state()
+        self.tools.effect_add('tint', TINT, photo=False)
+        self.tools.effect_add('plain', TINT, photo=False)
+        self.tools.effect_remove('tint', photo=False)
+        self.tools.export()
+        header = (self.state / 'fnv/shaders/export/live/sfx_baked.h').read_text('utf-8')
+        self.assertIn('#define SFX_BAKED_COUNT 1', header)
+
     def test_bad_set_name(self):
         with self.assertRaises(ConvError) as cm:
             self.tools.export(set='../x')

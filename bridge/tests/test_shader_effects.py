@@ -313,5 +313,87 @@ class UndoTests(Harness):
         self.assertEqual(self.native.slots[0], 0)
 
 
+class SavedCopyTests(Harness):
+    """effect_remove also drops the saved copy that export would bake, and works on saved-only effects with no game."""
+
+    def run_undo(self, journal_index):
+        entry = self.live.journal.add.call_args_list[journal_index][0][0]
+        return UNDO_OPS[entry['undo']['op']](self.live, entry, entry['undo'])
+
+    def restart(self):
+        self.live.game_identity.return_value = dict(OTHER)
+        self.tools.state()
+
+    def no_game(self):
+        self.live.game_identity.return_value = None
+        self.live.ready.side_effect = LiveError('NO_GAME', 'The game is not running')
+
+    def test_live_effect_with_a_saved_copy_drops_both(self):
+        self.tools.effect_add('invert', INVERT, photo=False)
+        self.restart()
+        self.assertIn('invert', self.manifest()['saved'])
+        self.tools.effect_add('invert', INVERT, photo=False)
+        out = self.tools.effect_remove('invert', photo=False)
+        self.assertEqual(out['savedDropped'], ['invert'])
+        m = self.manifest()
+        self.assertEqual((m['effects'], m['saved']), ({}, {}))
+
+    def test_saved_only_effect_removed_without_a_game_and_undo_goes_back_to_saved(self):
+        self.tools.effect_add('invert', INVERT, photo=False)
+        self.restart()
+        self.no_game()
+        self.live.shader_tools = self.tools
+        calls = len(self.native.calls)
+        out = self.tools.effect_remove('invert')
+        self.assertEqual((out['removed'], out['savedDropped']), (['invert'], ['invert']))
+        self.assertEqual(self.manifest()['saved'], {})
+        self.assertEqual(len(self.native.calls), calls)               # the module was not touched
+        self.live.eyes.photo.assert_not_called()
+        self.assertIsNone(self.run_undo(-1))
+        m = self.manifest()
+        self.assertIn('invert', m['saved'])
+        self.assertEqual(m['effects'], {})
+        self.assertNotIn('name', m['saved']['invert'])
+
+    def test_unknown_name_lists_live_and_saved(self):
+        self.tools.effect_add('invert', INVERT, photo=False)
+        self.restart()
+        with self.assertRaises(ConvError) as cm:
+            self.tools.effect_remove('nope', photo=False)
+        self.assertEqual(cm.exception.code, 'NO_EFFECT')
+        self.assertIn('invert', str(cm.exception))
+
+    def test_remove_all_clears_saved(self):
+        self.tools.effect_add('a', INVERT, photo=False)
+        self.restart()
+        self.tools.effect_add('b', INVERT, photo=False)
+        self.tools.effect_add('a', INVERT, photo=False)
+        out = self.tools.effect_remove('all')
+        self.assertEqual(sorted(out['removed']), ['a', 'b'])
+        self.assertEqual(out['savedDropped'], ['a'])
+        m = self.manifest()
+        self.assertEqual((m['effects'], m['saved']), ({}, {}))
+
+    def test_remove_all_with_only_saved_effects_and_no_game(self):
+        self.tools.effect_add('a', INVERT, photo=False)
+        self.restart()
+        self.no_game()
+        out = self.tools.effect_remove('all')
+        self.assertEqual((out['removed'], out['savedDropped']), (['a'], ['a']))
+        self.assertEqual(self.manifest()['saved'], {})
+        self.assertEqual(self.live.journal.add.call_args_list[-1][0][0]['undo']['op'], 'shader_effect_add')
+
+    def test_undo_of_a_live_remove_also_brings_back_the_saved_copy(self):
+        self.tools.effect_add('invert', INVERT, photo=False)
+        self.restart()
+        self.tools.effect_add('invert', INVERT, photo=False)
+        self.tools.effect_remove('invert', photo=False)
+        self.live.shader_tools = self.tools
+        self.assertIsNone(self.run_undo(-1))
+        m = self.manifest()
+        self.assertIn('invert', m['effects'])
+        self.assertIn('invert', m['saved'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fnv_mcp.fnv_conv import ConvError  # noqa: E402
 from fnv_mcp.fnv_layout import DIRECT, MO2, Layout  # noqa: E402
-from fnv_mcp.fnv_live import UNDO_OPS  # noqa: E402
+from fnv_mcp.fnv_live import LiveError, UNDO_OPS  # noqa: E402
 from fnv_mcp.fnv_shader import ShaderTools  # noqa: E402
 from fnv_mcp.fnv_shader_hlsl import compile_hlsl  # noqa: E402
 from fnv_mcp.fnv_shader_pkg import Package, fnv1a32, write_sdp  # noqa: E402
@@ -286,6 +286,66 @@ class RestoreTests(Replace):
             self.tools.restore('SKYTEST.pso')
         self.assertEqual(cm.exception.code, 'NOT_REPLACED')
 
+    def restart(self):
+        self.live.game_identity.return_value = dict(OTHER)
+        self.tools.state()
+
+    def no_game(self):
+        self.live.game_identity.return_value = None
+        self.live.ready.side_effect = LiveError('NO_GAME', 'The game is not running')
+
+    def test_restore_drops_the_saved_copy_too(self):
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.restart()
+        self.assertEqual(len(self.manifest()['savedReplacements']), 1)
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        out = self.tools.restore('SKYTEST.pso')
+        self.assertEqual(out['savedDropped'], ['SKYTEST.pso'])
+        m = self.manifest()
+        self.assertEqual((m['replacements'], m['savedReplacements']), ({}, {}))
+
+    def test_saved_only_restore_works_without_a_game_and_undo_goes_back_to_saved(self):
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.restart()
+        self.no_game()
+        calls = len(self.native.calls)
+        out = self.tools.restore('SKYTEST.pso')
+        self.assertEqual((out['restored'], out['savedDropped']), (['SKYTEST.pso'], ['SKYTEST.pso']))
+        self.assertEqual(self.manifest()['savedReplacements'], {})
+        self.assertEqual(len(self.native.calls), calls)
+        self.assertEqual(self.live.journal.add.call_args_list[-1][0][0]['undo']['op'], 'shader_replace')
+        self.assertIsNone(self.run_undo(-1))
+        m = self.manifest()
+        self.assertEqual(len(m['savedReplacements']), 1)
+        self.assertEqual(m['replacements'], {})
+        (saved,) = m['savedReplacements'].values()
+        self.assertEqual(saved['names'], ['SKYTEST.pso'])
+        self.assertNotIn('from', saved)
+
+    def test_restore_all_clears_saved(self):
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.restart()
+        out = self.tools.restore('all')
+        self.assertEqual(out['savedDropped'], ['SKYTEST.pso'])
+        self.assertEqual(self.manifest()['savedReplacements'], {})
+
+    def test_restore_all_saved_only_without_a_game(self):
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.restart()
+        self.no_game()
+        out = self.tools.restore('all')
+        self.assertEqual(out['restored'], ['SKYTEST.pso'])
+        self.assertEqual(self.manifest()['savedReplacements'], {})
+
+    def test_undo_of_a_live_restore_also_brings_back_the_saved_copy(self):
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.restart()
+        self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.tools.restore('SKYTEST.pso')
+        self.assertIsNone(self.run_undo(-1))
+        m = self.manifest()
+        self.assertEqual((len(m['replacements']), len(m['savedReplacements'])), (1, 1))
+
     def test_undo_replace_restores_the_original(self):
         self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
         self.assertIsNone(self.run_undo(0))
@@ -318,9 +378,11 @@ class RestoreTests(Replace):
     def test_restart_forgets_replacements(self):
         self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
         self.live.game_identity.return_value = dict(OTHER)
+        self.assertEqual(self.tools.state()[0]['replacements'], {})       # not live any more, only saved for export
         with self.assertRaises(ConvError) as cm:
-            self.tools.restore('SKYTEST.pso')
+            self.tools.restore('OTHER.pso')
         self.assertEqual(cm.exception.code, 'NOT_REPLACED')
+        self.assertEqual(self.tools.restore('SKYTEST.pso')['savedDropped'], ['SKYTEST.pso'])
 
 
 class ShowTests(Replace):

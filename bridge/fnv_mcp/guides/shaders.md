@@ -15,7 +15,8 @@ HUD), or a swap of one of the engine's own pixel shaders. Everything runs throug
    Both take a picture before and after (`photo=false` skips them): look at them.
 4. **Tune.** `effect_set name=... params={"tint": [1, 0.8, 0.6, 1]}`; `order` changes the draw order, `enabled=false`
    turns it off. `effect_list` shows the live effects and their cost; `status` shows the renderer.
-5. **Undo.** Every change is journaled: `fnv_undo`. `effect_remove`, `restore name=all` do the same by name.
+5. **Undo.** Every change is journaled: `fnv_undo`. `effect_remove`, `restore name=all` do the same by name. `effect_remove` and `restore` also drop the saved copy
+   that `export` would bake, and that works with the game closed (`effect_remove name=all` clears every saved effect).
 6. **Export.** `export set=<name>` saves the state as a set and builds an xNVSE plugin (`fnvmcp_shaders_<set>`) and
    patched shader packages; `install=true` copies them into the mod profile (the game must be closed).
 

@@ -394,28 +394,47 @@ class ShaderTools:
         return out
 
     def effect_remove(self, name, photo=True):
-        self.live.ready()
+        """Drop an effect from the running game and the saved copy export would bake. A saved-only effect needs no
+        game: it is dropped from the manifest and undo puts it back into `saved`."""
         m, _ = self.state()
-        names = list(m['effects']) if name == 'all' else [name]
-        if name != 'all' and name not in m['effects']:
-            raise ConvError('NO_EFFECT', 'No live effect %r. Live effects: %s.' % (name, ', '.join(m['effects'])
-                                                                                    or 'none'))
-        blind = name == 'all'
+        every = name == 'all'
+        if m['effects'] and (every or name in m['effects']):
+            self.live.ready()
+            m, _ = self.state()
+        live_names = list(m['effects']) if every else ([name] if name in m['effects'] else [])
+        saved_only = [n for n in m['saved'] if n not in live_names and (every or n == name)]
+        if not every and not live_names and not saved_only:
+            raise ConvError('NO_EFFECT', 'No effect %r. Live effects: %s. Saved effects: %s.' % (
+                name, ', '.join(m['effects']) or 'none', ', '.join(m['saved']) or 'none'))
+        blind = every or not live_names
         before, note = (None, None) if blind else self._look(photo)
-        loaded = self.native.is_loaded(MODULE)
-        for n in names:
+        loaded = self.native.is_loaded(MODULE) if live_names else False
+        dropped = []
+        for n in live_names:
             e = m['effects'].pop(n)
             if loaded:
                 self._c('sfx_effect_free', e['slot'])
+            kept = m['saved'].pop(n, None)
+            if kept is not None:
+                dropped.append(n)
             m['counter'] += 1
             rid = '%s#%d' % (n, m['counter'])
-            m['removed'][rid] = {**e, 'name': n, 'game': m['game']}
+            m['removed'][rid] = {**e, 'name': n, 'game': m['game'], **({'savedCopy': kept} if kept else {})}
             self._write(m)
             self._journal('remove', n, {'op': 'shader_effect_add', 'id': rid}, slot=e['slot'])
+        for n in saved_only:
+            e = m['saved'].pop(n)
+            dropped.append(n)
+            m['counter'] += 1
+            rid = '%s#%d' % (n, m['counter'])
+            m['removed'][rid] = {**e, 'name': n, 'from': 'saved'}
+            self._write(m)
+            self._journal('remove', n, {'op': 'shader_effect_add', 'id': rid}, slot=e.get('slot'))
         after, note2 = (None, None) if blind else self._look(photo and before is not None,
                                                              before['path'] if before else None)
+        names = live_names + saved_only
         out = verdict('%d effect(s) removed' % len(names), 'Undo adds one back from the saved source.',
-                      removed=names, **self._pictures(before, after))
+                      removed=names, savedDropped=dropped, **self._pictures(before, after))
         out.setdefault('before', None)
         out.setdefault('after', None)
         out.setdefault('changedPercent', None)
@@ -443,6 +462,13 @@ class ShaderTools:
         if e is None:
             return {'undone': False, 'reason': 'the saved effect %s is gone from the manifest' % rid}
         name = e['name']
+        if e.get('from') == 'saved':        # a saved-only removal goes back into `saved`, never into the game
+            if name in m['saved'] or name in m['effects']:
+                return {'undone': False, 'reason': 'an effect named %r exists again' % name}
+            m['saved'][name] = {k: v for k, v in e.items() if k not in ('name', 'game', 'from', 'savedCopy')}
+            del m['removed'][rid]
+            self._write(m)
+            return None
         if not known:
             return {'undone': False, 'reason': 'no running game'}
         if name in m['effects']:
@@ -456,10 +482,12 @@ class ShaderTools:
             return {'undone': False, 'reason': 'the game restarted since: effect_add the source again'}
         self._module()
         m, _ = self.state()
-        entry = {k: v for k, v in e.items() if k not in ('name', 'game')}
+        entry = {k: v for k, v in e.items() if k not in ('name', 'game', 'from', 'savedCopy')}
         entry['slot'] = self._free_slot(m)
         self._push(entry)
         m['effects'][name] = entry
+        if e.get('savedCopy') and name not in m['saved']:
+            m['saved'][name] = e['savedCopy']
         del m['removed'][rid]
         self._write(m)
         return None
@@ -780,34 +808,57 @@ class ShaderTools:
         return out
 
     def restore(self, name):
-        self.live.ready()
+        """Put engine shaders back and drop the saved replacements export would bake. A saved-only replacement needs
+        no game: undo puts it back into `savedReplacements`."""
         m, _ = self.state()
-        if name == 'all':
+        every = name == 'all'
+        if m['replacements'] and (every or self._find(m, name)[0] is not None):
+            self.live.ready()
+            m, _ = self.state()
+        if every:
             keys = list(m['replacements'])
+            saved_keys = list(m['savedReplacements'])
         else:
             key, _e = self._find(m, name)
-            if key is None:
-                replaced = sorted({n for e in m['replacements'].values() for n in e['names']})
-                raise ConvError('NOT_REPLACED', 'No replacement of %r is in the running game. Replaced: %s.' % (
+            skey = next((k for k, e in m['savedReplacements'].items() if name in e['names']), None)
+            keys = [key] if key is not None else []
+            saved_keys = [skey] if skey is not None else []
+            if not keys and not saved_keys:
+                replaced = sorted({n for d in (m['replacements'], m['savedReplacements']) for e in d.values()
+                                   for n in e['names']})
+                raise ConvError('NOT_REPLACED', 'No replacement of %r is live or saved. Replaced: %s.' % (
                     name, ', '.join(replaced) or 'none'))
-            keys = [key]
-        loaded = self.native.is_loaded(MODULE)
-        if name == 'all' and loaded:
+        loaded = self.native.is_loaded(MODULE) if keys else False
+        if every and loaded:
             self._c('sfx_restore_all')
         names = []
+        dropped = []
         for key in keys:
             e = m['replacements'].pop(key)
-            if name != 'all' and loaded:
+            if not every and loaded:
                 self._c('sfx_restore', e['hash'])
+            kept = m['savedReplacements'].pop(key, None)
+            if kept is not None:
+                dropped += kept['names']
             m['counter'] += 1
             rid = '%s#%d' % (key, m['counter'])
-            m['restored'][rid] = {**e, 'game': m['game']}
+            m['restored'][rid] = {**e, 'game': m['game'], **({'savedCopy': kept} if kept else {})}
+            self._write(m)
+            self._journal('restore', e['names'][0], {'op': 'shader_replace', 'id': rid})
+            names += e['names']
+        saved_only = [k for k in saved_keys if k in m['savedReplacements']]
+        for key in saved_only:
+            e = m['savedReplacements'].pop(key)
+            dropped += e['names']
+            m['counter'] += 1
+            rid = '%s#%d' % (key, m['counter'])
+            m['restored'][rid] = {**e, 'from': 'saved', 'key': key}
             self._write(m)
             self._journal('restore', e['names'][0], {'op': 'shader_replace', 'id': rid})
             names += e['names']
         self._write(m)
-        return verdict('%d engine shader replacement(s) restored' % len(keys), 'Undo puts the replacement back.',
-                       restored=names)
+        return verdict('%d engine shader replacement(s) restored' % (len(keys) + len(saved_only)),
+                       'Undo puts the replacement back.', restored=names, savedDropped=dropped)
 
     # ------------------------------------------------------------------ undo (called by the ops in fnv_live)
     def undo_replace(self, name, prior):
@@ -839,6 +890,14 @@ class ShaderTools:
         e = m['restored'].get(rid)
         if e is None:
             return {'undone': False, 'reason': 'the saved replacement %s is gone from the manifest' % rid}
+        if e.get('from') == 'saved':        # a saved-only restore goes back into `savedReplacements`
+            key = e.get('key') or '%08X' % e['hash']
+            if key in m['savedReplacements'] or key in m['replacements']:
+                return {'undone': False, 'reason': 'the shader is replaced again by another call'}
+            m['savedReplacements'][key] = {k: v for k, v in e.items() if k not in ('from', 'key', 'game', 'savedCopy')}
+            del m['restored'][rid]
+            self._write(m)
+            return None
         if not known:
             return {'undone': False, 'reason': 'no running game'}
         game = GameIdentity.parse(e.get('game'))
@@ -853,7 +912,9 @@ class ShaderTools:
         n = self._swap(e['hash'], (self.folder / e['bytecode_file']).read_bytes())
         if n == 0:
             return {'undone': False, 'reason': 'no shader object in the game has that code any more'}
-        m['replacements'][key] = {**e, 'objects': n}
+        m['replacements'][key] = {k: v for k, v in {**e, 'objects': n}.items() if k != 'savedCopy'}
+        if e.get('savedCopy') and key not in m['savedReplacements']:
+            m['savedReplacements'][key] = e['savedCopy']
         del m['restored'][rid]
         self._write(m)
         return None
