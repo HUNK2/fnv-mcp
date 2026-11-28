@@ -43,7 +43,7 @@ def parse(image):
     cols = {}
     for s in data_sections:
         raw = image.data[s['raw']: s['raw'] + s['rawsize']]
-        for off in range(0, len(raw) - 20, 4):
+        for off in range(0, len(raw) - 19, 4):
             sig, offset, cd, td, chd = struct.unpack_from('<IIIII', raw, off)
             if sig or td not in tds:
                 continue
@@ -71,7 +71,7 @@ def parse(image):
     vtables = []
     for s in data_sections:
         raw = image.data[s['raw']: s['raw'] + s['rawsize']]
-        for off in range(0, len(raw) - 8, 4):
+        for off in range(0, len(raw) - 7, 4):
             col = struct.unpack_from('<I', raw, off)[0]
             if col not in cols:
                 continue

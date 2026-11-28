@@ -22,7 +22,7 @@ from collections import Counter
 from .fnv_agent import TRACE_PREFIX, clean_type, decode_word, layout_args, param_kind, parse_signature
 from .fnv_deep import HF_EXIT, HF_RECORD, HookError, decode_prologue
 from .fnv_link import LinkError, hexs, word
-from .fnv_live import LiveError
+from .fnv_live import LiveError, LiveService
 
 HF_STACK = 8
 ACT = {'off': 0, 'skip': 1, 'skip_float': 2, 'result': 3, 'arg': 4, 'script': 5}
@@ -236,6 +236,10 @@ class ControlTools:
         elif action == 'script':
             if not script:
                 raise ValueError('script (one console/script line) is required')
+            refused = LiveService.console_refused(script) or LiveService.script_refused(script)
+            if refused:                # the same commands fnv_console and fnv_run_script refuse (BUG-027)
+                raise LiveError('CONSOLE_REFUSED', '%s is not run from a hook script. Next: use %s.'
+                                % (refused, LiveService.CONSOLE_INSTEAD[refused]), {'command': refused})
             value = 0
         if script and len(script.encode('cp1252', 'replace')) >= 255:
             raise ValueError('script must be shorter than 255 bytes')

@@ -111,6 +111,9 @@ static void op_inpcfg(int argc, char **argv) {
         return fail("not_executable");
     for (int i = 0; i < hook_count; i++)
         if (hooks[i]->target == poll && hooks[i]->stolen) return fail("already_hooked");
+    /* (BUG-012) as `code patch` does: no live int3, hook, probe or earlier patch in the bytes, no coverage 0xCC saved */
+    if (isite_in(poll, stolen) || patched_range(poll, stolen)) return fail("in_use");
+    cov_release_range(poll, stolen);
     if (!read_bytes(poll, original, stolen)) return fail("unreadable");
     if (!hook_code) hook_code = VirtualAlloc(NULL, 65536, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!hook_code || hook_code_used + 32 > 65536) return fail("out_of_memory");
@@ -133,6 +136,7 @@ static void op_inpcfg(int argc, char **argv) {
     probe_resume();
     if (busy) return fail("busy");
     if (!written) return fail("unwritable");
+    code_site_note(poll, stolen, original, patch); /* later hooks, probes, breakpoints and coverage refuse these bytes */
     inp_installed = true;
     emit("{\"ok\":true,\"installed\":true}");
 }

@@ -543,7 +543,7 @@ class LiveService:
         Accepts: player | crosshair | form id hex (0x00000014, 14, 000A3E7C) | Plugin.esp:LOCALID |
         an EditorID from the record index (looked up, never evaluated: W2)."""
         ref = (ref or '').strip()
-        if ref.startswith('@') and EDITOR_ID.match(ref[1:]):     # fnv_spec's "@EditorID" form (live check 2026-11-18)
+        if ref.startswith('@') and EDITOR_ID.fullmatch(ref[1:]):     # fnv_spec's "@EditorID" form (live check 2026-11-18)
             ref = ref[1:]
         if not ref:
             raise ValueError('ref is required')
@@ -557,7 +557,7 @@ class LiveService:
         elif is_form_id(ref):          # one parser with the record tools (T6)
             value = form_id(ref)
             expr = '(BuildRef %d %d)' % (value >> 24, value & 0xFFFFFF)
-        elif EDITOR_ID.match(ref):
+        elif EDITOR_ID.fullmatch(ref):
             # A bare name is looked up in the EditorID index, never evaluated: eval "QuitGame" ran QuitGame from a read
             # tool (W2), and plugin commands are not in the engine map to refuse them by name (review I4).
             found = self.editor_id(ref)
@@ -667,14 +667,17 @@ class LiveService:
             try:
                 entries = data._active()[0]
                 files = ','.join(str(e['fileId']) for e in entries)
-                row = data.index.db.execute('select owner, local, type, full from records where edid = ? collate nocase '
-                                            'and file in (%s) limit 1' % files, (edid,)).fetchone()
+                found = data.index.db.execute('select owner, local, type, full, file from records where edid = ? '
+                                              'collate nocase and file in (%s)' % files, (edid,)).fetchall()
+                position = {e['fileId']: e['index'] for e in entries}
+                best = max(found, key=lambda r: position.get(r[4], -1)) if found else None   # the later plugin wins
+                row = best[:4] if best else None
+                cache[edid.lower()] = row       # cached only on success: a transient failure is not remembered
             except Exception:
                 row = None
             finally:
                 if data._index is not None:
                     data._index.db.close()  # never keep the SQLite file open between calls
-            cache[edid.lower()] = row
         if not row:
             return None
         owner, local, rtype, name = row
@@ -1052,10 +1055,22 @@ class LiveService:
 
     @classmethod
     def console_refused(cls, line):
-        """The refused command word of a console line, or None."""
-        first = (line or '').strip().split(None, 1)[0] if (line or '').strip() else ''
-        command = first.rsplit('.', 1)[-1].lower()
-        return command if command in cls.CONSOLE_REFUSED else None
+        """The refused command word of a console line, or None. Every command in the line counts: it is split on
+        `;` and line breaks, leading parentheses and quotes are dropped, and after `eval` / `runscript` / `call`
+        every word is looked at (BUG-027)."""
+        for segment in re.split(r'[;\r\n\x0b\x0c\x85\u2028\u2029]', line or ''):
+            words = re.findall(r'[A-Za-z_][A-Za-z0-9_.]*', segment)
+            if not words:
+                continue
+            first = words[0].rsplit('.', 1)[-1].lower()
+            if first in cls.CONSOLE_REFUSED:
+                return first
+            if first in ('eval', 'runscript', 'call'):
+                for word in words[1:]:
+                    word = word.rsplit('.', 1)[-1].lower()
+                    if word in cls.CONSOLE_REFUSED:
+                        return word
+        return None
 
     @classmethod
     def script_refused(cls, source):
@@ -1070,7 +1085,7 @@ class LiveService:
         return None
 
     def run_console(self, line, ref=None):
-        if '\n' in line or len(line) > 500:
+        if '\n' in line or '\r' in line or len(line) > 500:
             raise ValueError('One console line of at most 500 characters')
         refused = self.console_refused(line)
         if refused:
@@ -1462,20 +1477,23 @@ class LiveService:
         undo_value = old if string else repr(float(old))
         undo = put.replace(str(value) if string else str(float(value)), str(undo_value)) if not string else \
             'SetGS %s "%s"' % (name, old)
-        entry = self.journal.add({'kind': 'setting', 'name': name, 'old': old, 'new': new, 'undo': {'op': 'console', 'line': undo}})
+        # an old string with a double quote cannot be written back through SetGS "...": no undo rather than a broken line
+        quoted = string and '"' in str(old)
+        entry = self.journal.add({'kind': 'setting', 'name': name, 'old': old, 'new': new,
+                                  'undo': None if quoted else {'op': 'console', 'line': undo}})
         info = None
         try:
             info = self.engine().statics_find(name.split(':')[0], 'Setting', 1)
         except Exception:
             pass
         return {'name': name, 'old': old, 'new': new, 'accepted': result['accepted'], 'journalId': entry['id'],
-                'engineMap': info, 'changed': old != new}
+                'engineMap': info, 'changed': old != new, **({'undoable': False} if quoted else {})}
 
     def script_set(self, target, kind, value, name=None, index=None):
         """kind: stage | objective_completed | objective_displayed | variable | global."""
         self.in_game()
         if kind == 'global':
-            if not EDITOR_ID.match(target):
+            if not EDITOR_ID.fullmatch(target):
                 raise ValueError('A global is given by its EditorID')
             old = fnv_link.value_of(self.link.eval('GetGlobalValue %s' % target))
             if old is None:     # bug hunt 2026-11-18: no such global: the undo line read "set X to None"
@@ -1499,14 +1517,14 @@ class LiveService:
             line = 'SetObjective%s %s %d %d' % (fn, q['formId'], int(index), 1 if flag else 0)
             undo = 'SetObjective%s %s %d %d' % (fn, q['formId'], int(index), 1 if old else 0)
         elif kind == 'variable':
-            if not name or not EDITOR_ID.match(name):
+            if not name or not EDITOR_ID.fullmatch(name):
                 raise ValueError('variable needs the variable name')
             r = self.resolve(target)
             current = {v['name'].lower(): v for v in self.variables(target)['variables'] if v['name']}
             if name.lower() not in current:
                 raise LiveError('NO_VARIABLE', '%s has no variable %s' % (target, name), {'variables': sorted(current)})
             old = current[name.lower()]['value']
-            if not EDITOR_ID.match(target):
+            if not EDITOR_ID.fullmatch(target):
                 raise LiveError('NEEDS_EDITOR_ID', 'Setting a variable needs the quest or reference EditorID (console '
                                 '"set X.var to")', {'formId': r['formId']})
             try:
@@ -1562,7 +1580,7 @@ class LiveService:
         elif action in self.TARGET_ACTIONS:
             if not target:
                 raise ValueError('%s needs a target' % action)
-            t = target if EDITOR_ID.match(target) and not FORM_ID.match(target) else self.resolve(target)['formId']
+            t = target if EDITOR_ID.fullmatch(target) and not FORM_ID.match(target) else self.resolve(target)['formId']
             command = self.TARGET_ACTIONS[action] % t
             count = 1
             if action in ('add_item', 'remove_item') and value is not None:
@@ -1619,6 +1637,9 @@ class LiveService:
                 raise ValueError('set_position needs value=[x, y, z]: three numbers (got %r)' % (value,)) from None
             value = [x, y, z]
             old = self.values(['GetPos X', 'GetPos Y', 'GetPos Z'], r['ptr'])
+            if any(not isinstance(o, (int, float)) or isinstance(o, bool) for o in old):
+                raise LiveError('POSITION_UNREADABLE', 'Could not read the position of %s (%s), so the move could not '
+                                'be undone; nothing was changed' % (r['formId'], old))
             self.changing('actor_control')
             # Journaled before the moves: if a later axis fails, the axes already moved can still be undone.
             entry = self.journal.add({'kind': 'actor', 'ref': r['formId'], 'action': action, 'old': old, 'new': value,
@@ -1934,6 +1955,8 @@ class _OpenTargets:
                 continue
             now = self.live.journal.get(i)
             if now and now.get('undo') and not now['undone']:
+                if self.live._outcome_unknown(now):
+                    continue    # its change may never have happened: it must not block an older entry (BUG-105)
                 out.append(i)
             else:
                 gone.append(i)                      # undone elsewhere since it was read
@@ -1998,9 +2021,12 @@ def _undo_console_ref(live, entry, undo):
 
 @undo_op('unhook', repeatable=True)
 def _undo_unhook(live, entry, undo):
+    seen = False
     for h in live.link.one('hooks').get('hooks') or []:
         if h.get('label') == undo['label'] and h.get('stolen'):
             live.link.one('unhook', word(h['id']))
+            seen = True
+    return {'changeSeen': True} if seen else None
 
 
 @undo_op('probe_disarm', repeatable=True)
@@ -2060,10 +2086,12 @@ def _undo_probe_remove(live, entry, undo):
     stub code stays in the companion's heap, unreachable; the next install starts a new code area."""
     from .fnv_probe import ProbeTools
     info = live.link.one('probe', 'info')
+    seen = False
     if info.get('ok') and info.get('armed'):
         r = live.link.one('probe', 'disarm')
         if not r.get('ok'):
             return {'undone': False, 'reason': 'probe disarm failed: %s' % r.get('error')}
+        seen = True
     from .fnv_state import locked, read_json, write_json
     here = GameIdentity.parse(live.game_identity())
     path = ProbeTools(live)._path('probe_session.json')
@@ -2072,7 +2100,7 @@ def _undo_probe_remove(live, entry, undo):
         if isinstance(session, dict) and session.get('armed') and here and here.same_game(GameIdentity.parse(session)):
             session['armed'] = False
             write_json(path, session)
-    return None
+    return {'changeSeen': True} if seen else None
 
 
 @undo_op('dbg_clear', repeatable=True)
@@ -2150,7 +2178,7 @@ def _undo_ref_enabled(live, entry, undo):
         return _undo_unreadable('GetDisabled')
     if bool(disabled) != bool(undo['on']):
         return None
-    return _console_undo(live, 'Enable' if undo['on'] else 'Disable', ref['ptr'])
+    return _console_undo(live, 'Enable' if undo['on'] else 'Disable', ref['ptr']) or {'changeSeen': True}
 
 
 ACTOR_FLAGS = {'unconscious': ('GetUnconscious', 'SetUnconscious %d'),
@@ -2168,7 +2196,7 @@ def _undo_actor_flag(live, entry, undo):
         return _undo_unreadable(getter)
     if bool(now) == bool(undo['on']):
         return None
-    return _console_undo(live, setter % int(bool(undo['on'])), ref['ptr'])
+    return _console_undo(live, setter % int(bool(undo['on'])), ref['ptr']) or {'changeSeen': True}
 
 
 @undo_op('item_count', repeatable=True)
@@ -2183,7 +2211,7 @@ def _undo_item_count(live, entry, undo):
     if not diff:
         return None
     return _console_undo(live, '%s %s %d' % ('AddItem' if diff > 0 else 'RemoveItem', undo['item'], abs(diff)),
-                         ref['ptr'])
+                         ref['ptr']) or {'changeSeen': True}
 
 
 @undo_op('time_restore', repeatable=True)

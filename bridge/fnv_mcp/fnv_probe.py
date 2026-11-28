@@ -398,6 +398,10 @@ class ProbeTools:
             index = {p[0]: k for k, p in enumerate(keep)}
             sites = [(index[probes[i][0]], kind, at) for i, kind, at in sites if probes[i][0] in index]
             probes = keep
+            if not probes:
+                raise ProbeError('NOTHING_TO_PROBE', 'Every chosen function already has a watch hook, so nothing is left '
+                                 'to probe. Next: choose other functions, or remove the watch hooks (fnv_hooks).',
+                                 {'skippedWatchHooks': out['skippedWatchHooks']})
         # Intent first (S3.2): a failure in add/site/arm leaves patched probes that undo must still see.
         entry = self.live.journal.add({'kind': 'probe', 'state': 'pending', 'probes': len(probes), 'sites': len(sites),
                                        'undo': {'op': 'probe_remove'}})
@@ -431,7 +435,7 @@ class ProbeTools:
             time.sleep(0.05)
         info = self.link.one('probe', 'info')
         session['code'], session['codeSize'] = info.get('code'), info.get('codeSize')
-        session['armed'] = True
+        session['armed'] = bool(info.get('armed', True))     # what the companion says, not an assumption
         self._save('probe_session.json', session)
         self.live.journal.confirm(entry['id'])
         out.update({'armed': info.get('armed'), 'staged': info.get('staged'), 'changed': info.get('changed'),

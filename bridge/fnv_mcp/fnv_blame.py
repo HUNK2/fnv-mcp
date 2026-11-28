@@ -248,6 +248,8 @@ class BlameTools:
     def ref(self, ref, what=None, seconds=0.0):
         if not ref:
             raise ConvError('BAD_ARGUMENTS', 'A reference is needed: player, a form id, or Plugin.esp:LOCALID.')
+        if isinstance(what, str):
+            what = None if what.strip().lower() in ('', 'all') else [x.strip() for x in what.split(',') if x.strip()]
         names = list(what or PRESET_NAMES)
         unknown = [n for n in names if n not in PRESET_NAMES]
         if unknown:
@@ -404,7 +406,7 @@ class BlameTools:
         new = []
         for h in self.live.deep.hooks():
             label = h.get('label') or ''
-            if not label.startswith(LABEL):
+            if not label.startswith(LABEL) or label == LABEL + 'form':      # blame.form belongs to form()
                 continue
             meta = self.armed.get(label, {})
             last = self.seen.get(label)

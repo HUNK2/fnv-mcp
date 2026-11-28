@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .fnv_probe import CALLER_SLOTS, WORDS, ProbeError, call_kind, decode_sample, vtable_class
 from .fnv_state import atomic_write
+from .safe_paths import no_unc
 
 
 class ProofFolderError(Exception):
@@ -158,7 +159,12 @@ def register_source(image, site, reg, window=40):
         if insns and insns[-1][0] + insns[-1][1] == site and (best is None or len(insns) > len(best)):
             best = insns
     for at, _size, mnemonic, op_str in reversed(best or []):
-        dest = op_str.split(',')[0].strip()
+        parts = [p.strip() for p in op_str.split(',')]
+        dest = parts[0]
+        if _writes_reg_unseen(reg, mnemonic, parts):
+            return None  # the register was written in a way this scan cannot read: leave the source unconfirmed
+        if mnemonic in ('cmp', 'test', 'push'):
+            continue  # the first operand is only read
         if dest != reg and not (mnemonic in ('pop',) and op_str.strip() == reg):
             continue
         if mnemonic != 'mov':
@@ -467,7 +473,10 @@ class NamingTools:
         map). An existing file is replaced only when it is an earlier fnv-mcp export."""
         if not path:
             return fnvsym_root() / 'traces' / ('fnvmcp-%s.json' % time.strftime('%Y%m%d'))
-        target = Path(path).resolve()
+        try:
+            target = no_unc(path, 'path').resolve()       # a network path is refused before it is touched (BUG-029)
+        except ValueError as e:
+            raise ProbeError('BAD_PATH', str(e)) from None
         fnvsym = fnvsym_root(required=False)
         roots = [(fnvsym / 'traces').resolve()] if fnvsym else []
         state = getattr(self.live.project, 'state_dir', None)
@@ -744,6 +753,29 @@ def community_layouts():
     return _LAYOUTS
 
 
+_SUBREGS = {'eax': ('al', 'ah', 'ax'), 'ebx': ('bl', 'bh', 'bx'), 'ecx': ('cl', 'ch', 'cx'),
+            'edx': ('dl', 'dh', 'dx'), 'esi': ('si',), 'edi': ('di',)}
+_IMPLICIT_WRITERS = ('cdq', 'cwd', 'cwde', 'cbw', 'mul', 'div', 'idiv', 'cmpxchg', 'xadd', 'cpuid', 'rdtsc', 'xlatb',
+                     'in', 'lahf', 'loop', 'leave', 'enter')
+
+
+def _writes_reg_unseen(reg, mnemonic, parts):
+    """True when this instruction writes `reg` other than as a plain full-register first operand: a sub-register
+    write, xchg, an implicit writer (cdq, mul, div, string moves, a call that clobbers it)."""
+    m = mnemonic.split()[-1] if mnemonic else ''
+    if parts and parts[0] in _SUBREGS.get(reg, ()):
+        return True
+    if m == 'xchg' and reg in parts:
+        return True
+    if m == 'call' and reg in ('eax', 'ecx', 'edx'):
+        return True
+    if m in _IMPLICIT_WRITERS or (m == 'imul' and len(parts) == 1):
+        return reg in ('eax', 'edx', 'ecx', 'esp', 'ebp')
+    if m.startswith(('movs', 'lods', 'stos', 'cmps', 'scas')) or mnemonic.startswith(('rep', 'repne')):
+        return reg in ('ecx', 'esi', 'edi', 'eax')
+    return False
+
+
 def this_offsets(engine, image, address, max_size=4000):
     """Field offsets the body reads or writes through `this` (ecx at entry, and registers copied from it until
     they are overwritten), from a linear scan of its machine code. Conservative: stops tracking a register at the
@@ -775,6 +807,19 @@ def this_offsets(engine, image, address, max_size=4000):
             tracked.discard(dst)
         elif ops and ops[0].type == x86.X86_OP_REG and (ops[0].access & 2):
             tracked.discard(i.reg_name(ops[0].reg))
+        # any register the instruction writes, explicit or implicit (cl, xchg, cdq, mul, rep movs ...), is forgotten
+        try:
+            written = [i.reg_name(r) for r in i.regs_access()[1]]
+        except capstone.CsError:
+            written = []
+        for r in written:
+            for full, subs in _SUBREGS.items():
+                if r == full or r in subs:
+                    tracked.discard(full)
+        if i.mnemonic == 'xchg' or i.mnemonic.startswith(('rep', 'movs', 'stos', 'lods', 'cmps', 'scas')):
+            tracked -= {'eax', 'ecx', 'edx', 'esi', 'edi'}
+        if i.mnemonic in ('cdq', 'cwd', 'cwde', 'mul', 'div', 'idiv'):
+            tracked -= {'eax', 'edx'}
         if i.mnemonic == 'call':
             tracked -= {'eax', 'ecx', 'edx'}
         if not tracked:

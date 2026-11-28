@@ -34,7 +34,10 @@ def vanilla(image, param_names=None):
             params = []
             if params_p and nparams < 64:
                 for k in range(nparams):
-                    p_str, p_type, p_opt = struct.unpack('<III', image.read(params_p + 12 * k, 12))
+                    praw = image.read(params_p + 12 * k, 12)
+                    if len(praw) < 12:
+                        break  # the parameter table runs off the image: a corrupt record
+                    p_str, p_type, p_opt = struct.unpack('<III', praw)
                     params.append({'label': image.cstr(p_str, 80), 'typeId': p_type,
                                    'type': (param_names or {}).get(p_type), 'optional': bool(p_opt)})
             handlers = {role: '0x%08X' % h for role, h in (('execute', ex), ('parse', pa), ('eval', ev))
@@ -62,11 +65,24 @@ def param_types(nvse_root):
 
 def _split_args(text):
     args, depth, cur = [], 0, ''
+    quote, prev = None, ''
     for c in text:
+        if quote:  # inside a string or char literal: no brackets or commas count
+            cur += c
+            if c == quote and prev != '\\':
+                quote = None
+            prev = '' if prev == '\\' else c
+            continue
+        if c in '"\'':
+            quote = c
+            cur += c
+            prev = ''
+            continue
         if c in '(<[{':
             depth += 1
-        elif c in ')>]}':
+        elif c in ')>]}' and not (c == '>' and prev == '-'):  # '->' is not a closing bracket
             depth -= 1
+        prev = c
         if c == ',' and depth == 0:
             args.append(cur.strip())
             cur = ''
@@ -78,8 +94,13 @@ def _split_args(text):
 
 
 def _strip_comments(text):
-    text = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
-    return re.sub(r'//[^\n]*', '', text)
+    def drop(m):
+        t = m.group(0)
+        if t[0] in '"\'':
+            return t  # a string or char literal: '//' inside it is not a comment
+        return '\n' * t.count('\n') if t.startswith('/*') else ''
+    pattern = r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|/\*.*?\*/|//[^\n]*'
+    return re.sub(pattern, drop, text, flags=re.S)
 
 
 def plugin(root, label, param_names=None):

@@ -221,13 +221,14 @@ class ExperimentTools:
     # one hook per candidate for a whole battery: installed once, its skip switched on only around the trigger
     # (each install allocates stub memory the companion never frees, so calls already inside can finish)
     def _arm(self, function):
-        from .fnv_control import ACT_PREFIX
+        from .fnv_control import ACT, ACT_PREFIX
         pop = ret_pop(self.live.engine(), self.live.deep._image(required=True), int(function, 16))
-        self.control.hook_set(function, action='skip', value=0, pop_bytes=pop, allow_unproven=True)
+        installed = self.control.hook_set(function, action='skip', value=0, pop_bytes=pop, allow_unproven=True)
+        mode = ACT.get((installed or {}).get('action'), ACT['skip'])      # skip_float for a float-returning function
         try:
             # The skip is live from the moment the hook exists: any failure before it is switched off removes it.
             h = self.control.deep.hook(ACT_PREFIX + '%08X' % int(function, 16))
-            hook = {'id': h['id'], 'pop': pop}
+            hook = {'id': h['id'], 'pop': pop, 'mode': mode}
             self._switch(hook, False)
         except BaseException:
             self._disarm(function)
@@ -236,7 +237,7 @@ class ExperimentTools:
 
     def _switch(self, hook, on):
         from .fnv_link import word
-        r = self.link.one('hookact', word(hook['id']), word(1 if on else 0), word(0), word(hook['pop'] if on else 0),
+        r = self.link.one('hookact', word(hook['id']), word(hook.get('mode', 1) if on else 0), word(0), word(hook['pop'] if on else 0),
                           word(0), '-')
         if not r.get('ok'):
             raise LinkError('HOOK_SWITCH_FAILED', 'hookact failed: %s' % r.get('error'))
@@ -305,7 +306,7 @@ class ExperimentTools:
         predict = h.get('predict', 'blocked')
         reps = max(3, int(h.get('reps', 3)))
         targets = self.targets()
-        ptr = targets.get(spec['target']) if spec['target'] in ('player', 'npc', 'creature') else \
+        ptr = targets.get(spec['target']) if spec['target'] in ('player', 'npc', 'creature', 'door') else \
             self.live.resolve(spec['target'])['ptr']
         if not ptr:
             raise ValueError('No %s target near the player' % spec['target'])
@@ -352,6 +353,8 @@ class ExperimentTools:
         every repetition while the control worked. Names are looked up only to score, after all runs."""
         self.live.in_game()
         engine = self.live.engine()
+        if int(reps) < 1:
+            raise ValueError('reps must be at least 1')
         names = functions or sorted(BATTERY_KEY)
         cands = [engine.resolve(n) for n in names]
         import random

@@ -91,6 +91,7 @@ def gated_kind(name, action, kind):
 # MUTATING_ACTIONS ('*' = every call).
 FULL_ONLY_ACTIONS = {
     'fnv_plugin_build': {'build', 'install'},   # agent C becomes a DLL in the game
+    'fnv_author': {'package_build'},            # package with a module and build=true compiles agent C (BUG-023)
     'fnv_install': '*',                         # a plugin file of the caller's choice into the dev profile
     'fnv_profile_set': {'apply'},               # which mods and plugins load (dry_run stays a read)
     'fnv_asset': {'make_nif', 'make_kf', 'make_dds'},   # files of the caller's making into a mod folder (gaps 3)
@@ -108,7 +109,8 @@ READ_LEVEL_CONTROL = {
                              "explicit target=game the one DLL in Data\\NVSE\\Plugins), not agent code",
     'fnv_scripts_compile': "compiles the project spec's scripts into the bridge's script cache",
     'fnv_name_export': 'writes the runtime evidence the bridge recorded into the fnvsym traces folder',
-    'fnv_author': 'export, check, scaffold and package write only into the bridge state folder',
+    'fnv_author': 'export, check, scaffold and package write only into the bridge state folder (package with a '
+                  'module and build=true compiles C: package_build in FULL_ONLY_ACTIONS)',
     'fnv_plugin_build': 'scaffold and log only: a starting source in the state folder, or the plugin log',
     'fnv_profile_set': 'dry_run only: shows the changes without writing',
     'fnv_shader': 'compile, template, engine_list, engine_show, effect_list and status only read (the engine listings use the live scan only when the shader module is already loaded; they never load it); effect_remove and restore '
@@ -736,6 +738,12 @@ def register(server, project, annotations, result_type, maintain=False, offline=
                 where = 'mo2'
             if where == 'mo2' and not has_mo2:
                 raise ValueError('target=mo2 needs fnv.mo2_root and fnv.mo2_profile in the project file')
+            if where == 'game':       # the real Data folder: the same guard as fnv_install (BUG-024)
+                from types import SimpleNamespace
+                from .fnv_layout import DIRECT
+                live.game.guard_direct('%s the companion in your real Data folder' % action,
+                                       SimpleNamespace(kind=DIRECT, changes_allowed=bool(
+                                           getattr(fnv, 'allow_direct_install_changes', False))))
             if action == 'uninstall':
                 if where == 'game':
                     return {'uninstall': fnv_link.uninstall_game(project.game_root, project.state_dir)}
@@ -2809,6 +2817,7 @@ def register(server, project, annotations, result_type, maintain=False, offline=
         code or a path of this machine."""
         args = {'plugin': plugin, 'kind': kind, 'name': name, 'cell': cell, 'module': module, 'build': build,
                 'version': version}
-        return await invoke('fnv_author', lambda: author_tools.run(action, **args), 'control')
+        label = 'package_build' if action == 'package' and module and build else action     # BUG-023
+        return await invoke('fnv_author', lambda: author_tools.run(action, **args), 'control', action=label)
 
     return live

@@ -165,7 +165,7 @@ static void gate_park(void) {
             serve_request(request); /* may open the gate again (step, until, hold off) */
             continue;
         }
-        ULONGLONG idle = GetTickCount64() - last_contact, limit = gate_timeout;
+        ULONGLONG idle = GetTickCount64() - TICK_GET(last_contact), limit = gate_timeout;
         if (idle >= limit) {
             gate_deadman();
             return;
@@ -242,7 +242,7 @@ static void op_gate(int argc, char **argv) {
     if (argc != 1) return fail("bad_arguments");
     emit("{\"held\":%s,\"clockPausedByUs\":%s,\"timeout\":%u,\"msSinceContact\":%llu,\"stepLeft\":%ld,\"untilPred\":",
          gate_held ? "true" : "false", gate_clock_paused ? "true" : "false", (unsigned)gate_timeout,
-         now - last_contact, (long)step_left);
+         now - TICK_GET(last_contact), (long)step_left);
     if (suspend_kind == SUSP_UNTIL) emit("%d", until_pred);
     else emit("null");
     emit("}");

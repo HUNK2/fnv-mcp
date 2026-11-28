@@ -234,12 +234,13 @@ class Purity:
             if m in ('ret', 'retn'):
                 pops.add(int(i.op_str, 0) if i.op_str else 0)
                 continue
-            if m == 'call' or (m == 'jmp' and i.operands and i.operands[0].type == x86.X86_OP_IMM):
+            is_jump = m == 'jmp' or (m.startswith('j') and m != 'jmp')
+            if m == 'call' or (is_jump and i.operands and i.operands[0].type == x86.X86_OP_IMM):
                 op = i.operands[0]
                 if op.type != x86.X86_OP_IMM:
                     return {'pure': False, 'why': 'indirect call at %s' % hx(i.address)}
                 target = op.imm & 0xFFFFFFFF
-                if m == 'jmp' and address <= target < end:
+                if is_jump and address <= target < end:
                     continue
                 if depth <= 0:
                     return {'pure': False, 'why': 'callee %s beyond the depth limit' % hx(target)}
@@ -247,6 +248,8 @@ class Purity:
                 if not sub['pure']:
                     return {'pure': False, 'why': 'callee %s: %s' % (hx(target), sub['why'])}
                 calls.append(hx(target))
+                if is_jump:  # a tail call: the callee's ret pops for us
+                    pops.add(sub.get('pops', 0))
                 continue
             if m == 'jmp':  # indirect: only a switch table inside the function
                 op = i.operands[0]
@@ -445,7 +448,7 @@ class OracleTools:
             raise ValueError('%s pops %d argument bytes: only zero-argument getters are called' % (f['name'], p['pops']))
         sig = f.get('signature') or ''
         bits = return_width(sig)
-        floaty = kind == 'float' or re.match(r'^(public|private|protected)?:?\s*(virtual\s+)?(float|double)\b', sig.strip())
+        floaty = kind == 'float' or re.match(r'^(public|private|protected)?:?\s*(virtual\s+)?(float|double)\b(?!\s*[*&])', sig.strip())
         code = 'f' if floaty else 'i'
         ops = [('call', word(address), code, word(ptr), word(0)) for ptr in objects]
         out = {}
@@ -554,9 +557,17 @@ class OracleTools:
         used = mode
         if mode == 'auto':
             used = 'call' if p['pure'] and not p['pops'] and '__thiscall' in (f.get('signature') or '') else 'sampled'
+        cls = None
         if used == 'call':
             cls = self._this_class(address, harvest)
-            chosen = {ptr: o for ptr, o in objs.items() if o.get('class') and (not cls or is_a(engine, o['class'], cls))}
+            if not cls:
+                if mode == 'auto':
+                    used = 'sampled'  # no known class: never call with every RTTI object as this
+                else:
+                    raise ValueError('%s has no known this class (no samples, no Class:: name, no vtable slot): '
+                                     'harvest samples first or use the sampled mode' % f['name'])
+        if used == 'call':
+            chosen = {ptr: o for ptr, o in objs.items() if o.get('class') and is_a(engine, o['class'], cls)}
             values = self.call_values(address, chosen)
             objs = chosen
         else:
@@ -964,4 +975,4 @@ def _equal(a, b, kind):
         return abs(a - b) <= 1e-4 * max(1.0, abs(b))
     if kind == 'form':
         return str(a).upper().zfill(8) == str(b).upper().zfill(8)
-    return int(a) == int(b)
+    return int(a) & 0xFFFFFFFF == int(b) & 0xFFFFFFFF

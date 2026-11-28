@@ -90,7 +90,7 @@ class FakeLink:
         if name == 'hooks':
             return {'ok': True, 'hooks': list(self.hooks)}
         if name == 'hook':
-            hook = {'id': 3, 'label': 'dbg', 'target': op[1], 'stolen': int(op[2], 16), 'calls': 0}
+            hook = {'id': 3, 'label': bytes.fromhex(op[-1]).decode('cp1252'), 'target': op[1], 'stolen': int(op[2], 16), 'calls': 0}
             self.hooks.append(hook)
             return {'ok': True, 'hook': hook}
         if name == 'hookact':

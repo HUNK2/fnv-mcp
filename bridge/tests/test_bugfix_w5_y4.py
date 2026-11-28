@@ -43,9 +43,10 @@ class FailedLaunchNoteTests(unittest.TestCase):
 
 class PerkEvaluateTests(unittest.TestCase):
     def tools(self, hooks):
-        removed, started = [], []
+        removed, started, stopped = [], [], []
         deep = SimpleNamespace(hooks=lambda: list(hooks), remove=lambda hid: removed.append(hid))
-        live = SimpleNamespace(in_game=lambda: None, resolve=lambda name: {'ptr': 0x1000})
+        live = SimpleNamespace(in_game=lambda: None, resolve=lambda name: {'ptr': 0x1000},
+                               u32s=lambda addrs: [11] * len(addrs))
         ai = fnv_engine_ai.EngineAITools(SimpleNamespace(live=live, link=SimpleNamespace(one=lambda *a: {}), deep=deep,
                                                          _buffer=lambda: 0x2000))
         ai._call = lambda *a: None
@@ -56,27 +57,34 @@ class PerkEvaluateTests(unittest.TestCase):
             if action == 'start':
                 started.append(True)
                 return {'started': True}
+            if action == 'stop':
+                stopped.append(True)
+                return {'stopped': True}
             if action == 'read':
                 ai._perk_since = (99, 99)       # what a real read does: moves the read position
                 return {'calls': [], 'uses': []}
             return real(action, *a, **kw)
         ai.perk_entries = perk_entries
+        ai.stopped = stopped
         return ai, removed, started
 
     def test_y4_evaluate_keeps_a_running_recording(self):
         labels = (fnv_engine_ai.PERK_PREFIX + 'apm', fnv_engine_ai.PERK_PREFIX + 'fn')
-        ai, removed, started = self.tools([{'id': 1, 'label': labels[0]}, {'id': 2, 'label': labels[1]}])
+        ai, removed, started = self.tools([{'id': 1, 'label': labels[0], 'seqAddress': '0x3000'},
+                                           {'id': 2, 'label': labels[1], 'seqAddress': '0x3004'}])
         ai._perk_since = (5, 7)
         out = ai._perk_evaluate(9, 100, 'player', [])
         self.assertEqual(out['valueAfter'], 42.0)
         self.assertEqual(started, [], 'a running recording is not restarted')
         self.assertEqual(removed, [], 'nor are its hooks removed')
+        self.assertEqual(ai.stopped, [], 'and it is not stopped')
         self.assertEqual(ai._perk_since, (5, 7), "the caller's next read still sees its checks")
 
     def test_y4_evaluate_without_a_recording_cleans_up(self):
         ai, removed, started = self.tools([])
         ai._perk_evaluate(9, 100, 'player', [])
         self.assertEqual(started, [True])
+        self.assertEqual(ai.stopped, [True], 'the recording evaluate started is stopped again')
 
 
 if __name__ == '__main__':

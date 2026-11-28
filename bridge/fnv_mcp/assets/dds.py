@@ -110,6 +110,8 @@ def make(src, out, options=None):
     normal = bool(options.get('normal'))
     spec = open_image(options['specular']) if options.get('specular') else None
     warnings = []
+    if spec is not None and not normal:
+        warnings.append('options.specular is only used with options.normal; it was ignored')
     rgba = rgba_of(open_image(src), normal, spec)
     fmt, w, h, levels = write(out, rgba, 'DXT5' if normal else (fmt and str(fmt).upper()), warnings)
     return {'format': fmt, 'width': w, 'height': h, 'mipLevels': levels, 'bytes': Path(out).stat().st_size,

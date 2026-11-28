@@ -92,7 +92,7 @@ class OracleSmoke(ContractCase):
         from fnv_mcp.fnv_oracle import OracleTools
         t = OracleTools(self.live, naming=None, agent=None)
         self.check({
-            'purity': lambda: t.purity,
+            'purity': lambda: t.purity(),
             'run unknown function': lambda: t.run('NoSuchFunction'),
             'sweep': lambda: t.sweep(limit=1),
             'calibrate': lambda: t.calibrate(limit=1),

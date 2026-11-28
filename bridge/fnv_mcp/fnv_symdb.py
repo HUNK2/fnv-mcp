@@ -316,6 +316,9 @@ class SymbolDb:
                             (name,))
         if not row:   # exact case failed: try any case
             row = self._one(sql.replace('t.name = ?', 'lower(t.name) = lower(?)') % marks, (name,) + DEFINITION_KINDS)
+        if not row:
+            row = self._one("SELECT id FROM types WHERE lower(name) = lower(?) AND kind = 'enum' ORDER BY seen DESC, id LIMIT 1",
+                            (name,))
         found = row['id'] if row else None
         self._best[name] = found
         return found

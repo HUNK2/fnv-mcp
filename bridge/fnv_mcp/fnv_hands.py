@@ -598,8 +598,6 @@ class HandsTools:
             routes.append([[round(p[0]), round(p[1]), round(p[2])] for p in route])
             stop_reason = None
             for wp in route[1:]:
-                if wp[3]:
-                    used_doors.append(self._through_door(wp[3], doors))
                 last_wp = wp is route[-1]
                 best = math.dist(self._pos(player)[:2], wp[:2])
                 no_gain = 0
@@ -656,6 +654,9 @@ class HandsTools:
                         else:
                             stop_reason = 'menu_opened'
                         break
+                if wp[3] and not stop_reason:
+                    # the door node is reached: open the door now (the crosshair must be on it), not before the walk
+                    used_doors.append(self._through_door(wp[3], doors))
                 if stop_reason:
                     break
             if stop_reason in (None, 'timeout', 'menu_opened'):
@@ -695,7 +696,10 @@ class HandsTools:
     def _through_door(self, door_ptr, doors):
         door = next((d for d in doors if d['ptr'] == door_ptr), None)
         state = self.live.values(['GetOpenState'], door_ptr)[0]
-        form = self.live.form_ids([door_ptr])[0]['formId']
+        ids = self.live.form_ids([door_ptr])[0]
+        if ids is None:
+            return {'formId': door['formId'] if door else None, 'opened': None, 'refused': 'door unreadable'}
+        form = ids['formId']
         if state in (3, 4):
             act = self.activate(form)
             self._frames(30)
@@ -806,6 +810,7 @@ class HandsTools:
     def _tiles(self, root, depth=12, limit=1500):
         """[(tile, path)] breadth first."""
         out, level, total = [], [(root, '')], 0
+        self._tile_parents = {}
         for _ in range(depth + 1):
             if not level or total >= limit:
                 break
@@ -817,7 +822,10 @@ class HandsTools:
                 path = (parent + '/' + name) if parent else name
                 out.append((t, path))
                 total += 1
-                nxt += [(c, path) for c in self.agent._children(t)]
+                kids = self.agent._children(t)
+                for c in kids:
+                    self._tile_parents[c] = t
+                nxt += [(c, path) for c in kids]
             level = nxt
         return out
 
@@ -859,14 +867,17 @@ class HandsTools:
             matches = [(t, p) for t, p in tiles if (strings.get(t) or '').lower().strip() == want]
             matches += [(t, p) for t, p in tiles if want in (strings.get(t) or '').lower() and (t, p) not in matches]
             # The button is the text tile or its nearest ancestor with an id.
-            by_path = {p: t for t, p in tiles}
+            # Walk up by tile pointer: list rows are clones sharing a path, so a path lookup would
+            # resolve every row to the last sibling.
+            path_of = {t: p for t, p in tiles}
+            parents = getattr(self, '_tile_parents', {})
             for t, p in matches:
-                parts = p.split('/')
-                for cut in range(len(parts), 0, -1):
-                    cand = by_path.get('/'.join(parts[:cut]))
-                    if cand and TRAIT_ID in values.get(cand, {}):
-                        found = (cand, '/'.join(parts[:cut]))
+                cand, seen = t, 0
+                while cand and seen < 64:
+                    if TRAIT_ID in values.get(cand, {}):
+                        found = (cand, path_of.get(cand, p))
                         break
+                    cand, seen = parents.get(cand), seen + 1
                 if found:
                     break
         else:
@@ -950,7 +961,7 @@ class HandsTools:
         if action == 'button':
             return self.click(None, label or target, menu)
         if action in ('wait', 'sleep'):
-            return self.wait(hours or 1, sleep=action == 'sleep')
+            return self.wait(1 if hours is None else hours, sleep=action == 'sleep')
         if action == 'fast_travel':
             return self.fast_travel(marker or target)
         if action == 'message':

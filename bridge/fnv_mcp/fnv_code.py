@@ -211,6 +211,8 @@ class CodeTools:
         return start + 1, end
 
     def edit(self, function, find, replace):
+        from .safe_paths import check_includes
+        check_includes(replace)         # no #include outside the include folders in the new text (BUG-028)
         address, _, _ = self._target(function)
         meta = self._meta(address)
         copy = Path(meta['copy'])

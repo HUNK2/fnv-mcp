@@ -74,15 +74,40 @@ def _members(body, first_line):
     fields, virtuals = [], []
     depth = 0
     pending = ''
+    vpend = None   # a virtual declaration continued over several lines: [text, first line, comment]
+    # block comments hold braces and declarations that are not code (a '//' comment wins when it comes first)
+    body = re.sub(r'//[^\n]*|/\*.*?\*/', lambda m: m.group(0) if m.group(0).startswith('//')
+                  else '\n' * m.group(0).count('\n'), body, flags=re.S)
     for index, raw in enumerate(body.split('\n')):
         line_no = first_line + index
         line = _strip_strings(raw)
         code, _, comment = line.partition('//')
         comment = '//' + comment if comment else ''
         stripped = ACCESS.sub('', code).strip()
+        if vpend is not None and depth == 0:
+            vpend[0] += ' ' + stripped
+            vpend[2] += ' ' + comment
+            if vpend[0].count('(') <= vpend[0].count(')'):
+                slot = SLOT_COMMENT.search(vpend[2])
+                virtuals.append({'slot': _num(slot.group(1)) if slot else None,
+                                 'declaration': re.sub(r'\s+', ' ', vpend[0].rstrip(';').strip()),
+                                 'line': vpend[1]})
+                vpend = None
+            continue
         opens, closes = code.count('{'), code.count('}')
         nested_named = re.match(r'^(class|struct|union|enum)\s+[A-Za-z_]', stripped) and opens
         anonymous = re.match(r'^(union|struct)\s*\{', stripped)
+        if anonymous and opens == closes and depth == 0:   # a one-line `union { int a; float b; };`
+            for piece in stripped[stripped.index('{') + 1:stripped.rindex('}')].split(';'):
+                m = MEMBER.match(piece.strip() + ';') if piece.strip() else None
+                if m:
+                    fields.append({'name': m.group('name'),
+                                   'type': (m.group('type') + m.group('ptr')).strip() + (m.group('array') or ''),
+                                   'offset': None, 'bits': int(m.group('bits')) if m.group('bits') else None,
+                                   'line': line_no})
+        if depth == 0 and stripped.startswith('virtual') and stripped.count('(') > stripped.count(')'):
+            vpend = [stripped, line_no, comment]
+            continue
         if depth == 0 and stripped and not nested_named and not anonymous:
             if stripped.startswith('virtual') or ('(' in stripped and stripped.endswith(';')):
                 slot = SLOT_COMMENT.search(comment)
@@ -216,7 +241,8 @@ def _infer_offsets(layout):
         size = type_size(f['type'])
         if f['offset'] is None and prev is not None:
             p_off, p_size = prev
-            align = min(4, size or 4)
+            elem = type_size(re.sub(r'(\[[^\]]*\])+$', '', f['type'].strip()))
+            align = min(8, elem or 4)   # a field aligns to its element size, not the whole array's
             if p_size is not None and size is not None:
                 f['offset'] = (p_off + p_size + align - 1) // align * align
                 f['inferred'] = True

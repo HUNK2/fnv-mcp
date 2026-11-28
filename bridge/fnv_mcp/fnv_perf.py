@@ -23,7 +23,7 @@ from pathlib import Path
 from . import fnv_procmem
 from .fnv_conv import ConvError, verdict
 from .fnv_link import hexs, word
-from .safe_paths import plain_name
+from .safe_paths import no_unc, plain_name
 
 kernel32 = fnv_procmem.kernel32
 ntdll = ctypes.WinDLL('ntdll') if fnv_procmem.kernel32 is not None else None     # the server imports off Windows too (N22)
@@ -265,7 +265,10 @@ class ProfileTools:
             samples={'before': na, 'after': nb}, changes=rows[:int(top)])
 
     def _load(self, ref):
-        p = Path(ref)
+        try:
+            p = no_unc(ref, 'profile')      # before any file system call: a network path would start a log-in (BUG-029)
+        except ValueError as e:
+            raise ConvError('BAD_PATH', str(e)) from None
         if not p.is_file():
             p = self.folder / ref
             if not p.is_file():
@@ -285,7 +288,7 @@ class ProfileTools:
         if action == 'diff':
             if not a.get('before') or not a.get('after'):
                 raise ConvError('BAD_ARGUMENTS', 'diff needs before and after (saved profile names or paths).')
-            return self.diff(a['before'], a['after'])
+            return self.diff(a['before'], a['after'], a.get('top') or 20)
         raise ConvError('UNKNOWN_ACTION', 'Unknown action %r. Valid: sample, diff.' % action)
 
 
@@ -412,7 +415,10 @@ class MemoryTools:
             time.sleep(float(seconds))
             rows = self.deep.table(hook) if self.deep else []
         finally:
-            self.live.link.one('unhook', word(hook['id']))
+            try:
+                self.live.link.one('unhook', word(hook['id']))
+            except Exception:  # noqa: BLE001 - a dead pipe here must not replace the error of the run
+                pass
         engine = self.live.engine()
         out = []
         for r in sorted(rows, key=lambda r: -r['count'])[:int(top)]:

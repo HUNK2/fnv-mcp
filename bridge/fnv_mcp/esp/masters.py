@@ -29,7 +29,7 @@ class MasterError(ValueError):
 
 def scan_offsets(data):
     """(masters, {form_id: (type, offset)}) of one plugin's records, from a flat walk over the headers."""
-    if data[:4] != b'TES4':
+    if data[:4] != b'TES4' or len(data) < 24:
         raise MasterError('not a TES4 plugin')
     header_size = struct.unpack_from('<I', data, 4)[0]
     masters = [codec.cstring(s.data) for s in codec.parse_subrecords(data[24:24 + header_size]) if s.tag == 'MAST']

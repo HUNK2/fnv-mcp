@@ -184,7 +184,9 @@ def settings_from_exe(image, statics, functions):
         init = int(s['initializer'], 16)
         code = image.read(init, 64)
         pushes, fld = [], None
-        for i in range(len(code) - 4):
+        i = -1
+        while i + 1 < len(code) - 4:
+            i += 1
             op = code[i]
             if op == 0xB9:                        # mov ecx, imm32: the setting object
                 obj = struct.unpack_from('<I', code, i + 1)[0]
@@ -193,10 +195,13 @@ def settings_from_exe(image, statics, functions):
                 break
             if op == 0x68:                        # push imm32
                 pushes.append(('imm32', struct.unpack_from('<I', code, i + 1)[0]))
+                i += 4  # skip the operand: its bytes are not opcodes
             elif op == 0x6A and i + 1 < len(code):  # push imm8 (sign-extended)
                 pushes.append(('imm8', struct.unpack_from('<b', code, i + 1)[0]))
-            elif op == 0xD9 and code[i + 1] == 0x05:  # fld dword [imm32]
+                i += 1
+            elif op == 0xD9 and code[i + 1] == 0x05 and i + 6 <= len(code):  # fld dword [imm32]
                 fld = struct.unpack_from('<I', code, i + 2)[0]
+                i += 5
         name = None
         if pushes and pushes[-1][0] == 'imm32':
             text = image.cstr(pushes[-1][1], 96)
@@ -213,6 +218,10 @@ def settings_from_exe(image, statics, functions):
             if prefix == 's' and kind == 'imm32':
                 s['default'] = image.cstr(value, 200)
             elif prefix in ('i', 'u', 'b'):
+                if prefix == 'i' and kind == 'imm32' and value >= 1 << 31:
+                    value -= 1 << 32  # an int setting is signed
+                elif prefix == 'u' and value < 0:
+                    value &= 0xFFFFFFFF  # an unsigned setting pushed as a sign-extended imm8
                 s['default'] = bool(value) if prefix == 'b' else value
     targets = {int(s['address'], 16): s for s in statics if s['kind'] == 'Setting' and s.get('address')}
     users = {}

@@ -19,7 +19,7 @@ if sys.platform == 'win32':
     except (AttributeError, OSError):
         _undecorate = None
 
-_C_SYMBOL = re.compile(r'^[_@]?([A-Za-z_][A-Za-z0-9_]*)(?:@\d+)?$')
+_C_SYMBOL = re.compile(r'^[_@]?([A-Za-z_][A-Za-z0-9_]*)(@\d+)?$')
 _SPECIAL = {'0': 'ctor', '1': 'dtor', '_G': "`scalar deleting destructor'", '_E': "`vector deleting destructor'"}
 
 
@@ -55,7 +55,8 @@ def demangle(symbol):
     """(qualified_name, signature or None) for one linker symbol."""
     m = _C_SYMBOL.match(symbol)
     if m and not symbol.startswith('?'):
-        conv = '__fastcall' if symbol.startswith('@') else '__cdecl' if symbol.startswith('_') else None
+        conv = '__fastcall' if symbol.startswith('@') else \
+            ('__stdcall' if m.group(2) else '__cdecl') if symbol.startswith('_') else None
         return m.group(1), None if conv is None else '%s %s(...)' % (conv, m.group(1))
     if symbol.startswith('?'):
         if _undecorate:

@@ -1271,7 +1271,7 @@ class Game:
             raise GameError('GAME_RUNNING', 'Quit the game before installing (plugins load at startup)')
         if not source.is_file() or source.suffix.lower() not in ('.esp', '.esm'):
             raise GameError('BAD_PLUGIN', 'Not a plugin file: %s' % source)
-        if not fnv_link.SAFE_NAME.match(mod):
+        if not fnv_link.SAFE_NAME.fullmatch(mod):
             raise GameError('BAD_NAME', 'Mod name may use letters, digits, space and _ . \' - only')
         layout = self.layout()
         if layout.kind == fnv_layout.DIRECT:
@@ -1423,7 +1423,7 @@ def parse_start(start, saves_dir):
         raise GameError('CELL_START_UNSUPPORTED', 'Starting straight in a cell (SStartingCell) crashes the game at '
                         'startup; use coc:%s, which goes through the main menu' % value, {'use': 'coc:%s' % value})
     if kind == 'coc':
-        if not CELL_NAME.match(value):
+        if not CELL_NAME.fullmatch(value):
             raise GameError('BAD_CELL', 'A cell is given by its EditorID (letters, digits, _)')
         return kind, value
     raise GameError('BAD_START', 'start must be menu, continue, save:<name> or coc:<cell EditorID>')

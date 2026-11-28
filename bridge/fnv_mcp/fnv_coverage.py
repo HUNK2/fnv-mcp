@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .fnv_conv import ConvError, verdict
 from .fnv_link import word
+from .safe_paths import no_unc
 
 CHUNK = 3000
 
@@ -43,7 +44,8 @@ class CoverageTools:
         for name in functions or []:
             address = engine.resolve(name)
             rows += db._all('SELECT l.func_addr + l.offset AS a, l.line, p.path, l.func_addr FROM lines l '
-                            'JOIN files p ON p.id = l.file_id WHERE l.func_addr = ?', (address,))
+                            'JOIN files p ON p.id = l.file_id JOIN functions fn ON fn.addr = l.func_addr '
+                            'WHERE fn.verified = 1 AND l.func_addr = ?', (address,))
         sites = {}
         for r in rows:
             sites.setdefault(int(r['a']), (r['path'], int(r['line']), int(r['func_addr'])))
@@ -65,7 +67,11 @@ class CoverageTools:
         sites = self._sites(files, functions)
         if not sites:
             raise ConvError('NO_LINES', 'No verified line starts for that selection.')
-        self.live.link.one('cov', 'reset')
+        # the companion keeps its armed state when this server restarts or reloads: adopt an orphaned run first
+        self.live.link.one('cov', 'disarm')
+        reset = self.live.link.one('cov', 'reset')
+        if not reset.get('ok'):
+            raise ConvError('COV_REFUSED', 'The companion could not reset coverage (%s).' % reset.get('error'), reset)
         addresses = sorted(sites)
         added = skipped = 0
         for i in range(0, len(addresses), CHUNK):
@@ -101,9 +107,16 @@ class CoverageTools:
     def stop(self):
         self.live.ready()
         if not self.active:
-            raise ConvError('NOT_STARTED', 'No coverage run. Next: fnv_coverage start.')
+            # an armed run left by a server restart or reload: put its bytes back
+            self.live.link.one('cov', 'disarm')
+            self.live.link.one('cov', 'reset')
+            raise ConvError('NOT_STARTED', 'No coverage run (traps left armed by an earlier server were removed). '
+                                           'Next: fnv_coverage start.')
         hits = self._hits()
-        self.live.link.one('cov', 'disarm')
+        disarmed = self.live.link.one('cov', 'disarm')
+        if not disarmed.get('ok'):
+            raise ConvError('COV_REFUSED', 'The companion did not disarm (%s); call stop again.' % disarmed.get('error'),
+                            disarmed)
         self.live.link.one('cov', 'reset')
         run, self.active = self.active, None
         engine = self.live.engine()
@@ -139,7 +152,10 @@ class CoverageTools:
 
     def diff(self, a, b):
         def load(ref):
-            p = Path(ref)
+            try:
+                p = no_unc(ref, 'coverage')      # BUG-029: no network path
+            except ValueError as e:
+                raise ConvError('BAD_PATH', str(e)) from None
             if not p.is_file():
                 p = self.folder / (ref if str(ref).endswith('.json') else '%s.json' % ref)
             if not p.is_file():

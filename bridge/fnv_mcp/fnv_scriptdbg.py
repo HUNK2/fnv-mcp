@@ -114,7 +114,10 @@ class EvalHook:
     def remove(self):
         h = self.existing()
         if h is not None:
-            self.link.one('unhook', word(h['id']))
+            out = self.link.one('unhook', word(h['id']))
+            if not out.get('ok') and out.get('error') not in ('already_removed', 'unknown_hook'):
+                # still patched: keep the state, so the hold is not forgotten while the hook stays
+                raise ConvError('UNHOOK_FAILED', 'The statement hook could not be removed (%s).' % out.get('error'), out)
         self.hook_id = None
         self.holding = False
 
@@ -604,6 +607,11 @@ class ScriptDebugger:
     def eval_(self, expression):
         if not expression:
             raise ConvError('BAD_EXPRESSION', 'An expression is needed, such as GetStage QuestName.')
+        from .fnv_live import LiveService       # the commands fnv_console and fnv_run_script refuse (BUG-027)
+        refused = LiveService.console_refused(expression) or LiveService.script_refused(expression)
+        if refused:
+            raise ConvError('CONSOLE_REFUSED', '%s is not run from script_debug eval. Next: use %s.'
+                            % (refused, LiveService.CONSOLE_INSTEAD[refused]), {'command': refused})
         stop = self._current()
         st = self._state(stop)
         reply = self.link.eval(expression, st['reference'] or 0)
@@ -850,8 +858,11 @@ class ScriptLog:
             for r in recs:
                 rows.append(self._event(label, r))
         rows.sort(key=lambda x: x['seq'])
+        # the two rings count on their own: one cursor that loses neither is the smaller one (a repeat is possible)
         return verdict('%d block events.' % len(rows), 'A flag is raised on the target; the block runs when that script '
-                       'next runs.', rows=rows[-limit:], next=nexts)
+                       'next runs. Pass nextSince as since to continue (the two rings count separately, so an event '
+                       'can come twice).', rows=rows[-limit:], next=nexts,
+                       nextSince=min((v[0] for v in nexts.values()), default=since))
 
     def _event(self, label, r):
         caller = self.dbg._symbol(r[5], return_address=True) if r[5] else {}

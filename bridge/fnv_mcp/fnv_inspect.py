@@ -15,6 +15,7 @@ import time
 
 from .fnv_conv import ConvError, verdict
 from .fnv_link import hexs, word
+from .fnv_live import LiveError
 
 ANIM_GROUPS, ANIM_GROUP_SIZE, ANIM_GROUP_COUNT = 0x011977D8, 0x24, 245
 GET_ANIMATION = 0x008B70D0
@@ -141,7 +142,10 @@ def record_hooks(live, deep, targets, seconds):
             records += [(label, r) for r in got]
     finally:
         for _, h in hooks:
-            live.link.one('unhook', word(h['id']))
+            try:
+                live.link.one('unhook', word(h['id']))
+            except Exception:    # one failed unhook must not leave the later hooks installed
+                pass
     records.sort(key=lambda lr: (lr[1][22], lr[1][0]))
     return records
 
@@ -258,8 +262,8 @@ class AnimTools:
             raise ConvError('NO_ANIMATION', '%s has no controller manager.' % r['formId'])
         from .fnv_inject import shared_time
         control, _ = shared_time(self.live)
-        held = control.hold(30).get('changed')
         self.live.changing('anim play kf')
+        held = control.hold(30).get('changed')
         try:
             name = self.live._game_string(path)
             seq = self._call(LOOKUP_SEQUENCE, mgr, [self.live.scratch(struct.pack('<I', name))], 'ptr')
@@ -379,8 +383,8 @@ class AnimTools:
         names = self._group_names()
         # Values are AnimSequenceBase: a single one holds its BSAnimGroupSequence at +4 (a multiple one a list there).
         seqs = [v for _, v in items if v]
-        inner = self.live.u32s([s + 4 for s in seqs]) if seqs else []
-        name_ptrs = self.live.u32s([p + 0x08 for p in inner]) if inner else []
+        inner = [p or 0 for p in self.live.u32s([s + 4 for s in seqs])] if seqs else []
+        name_ptrs = [p or 0 for p in self.live.u32s([p + 0x08 for p in inner])] if inner else []
         texts = self.live.reads([(p, 96) for p in name_ptrs]) if name_ptrs else []
         file_of = {}
         for s, t in zip(seqs, texts):
@@ -489,9 +493,9 @@ class AnimTools:
                 ev = self.live.agent.condition_eval(row['idle'], r['formId'], t['formId'] if t else None,
                                                     only_failed=True)
                 row['failing'] = [{'index': c['index'], 'function': c.get('function'), 'value': c.get('value'),
-                                   'compare': c.get('compare')} for lst in ev['lists']
+                                   'compare': c.get('comparison'), 'compareTo': c.get('compareTo')} for lst in ev['lists']
                                   for c in lst['conditions'] if not c.get('passed')][:4]
-            except ConvError as exc:
+            except (ConvError, LiveError) as exc:
                 row['failing'] = exc.code
         ids = self.live.form_ids([x for x in (engine, walked) if x])
         names = dict(zip([x for x in (engine, walked) if x], [i['formId'] for i in ids]))
@@ -870,7 +874,7 @@ class AudioTools:
         if action == 'stop':
             return self.stop(a.get('sound'), a.get('sound_id'))
         if action == 'music':
-            return self.music(a.get('file'), bool(a.get('stop')), a.get('fade_ms') or 1000)
+            return self.music(a.get('file'), bool(a.get('stop')), 1000 if a.get('fade_ms') is None else a.get('fade_ms'))
         if action == 'radio':
             return self.radio(a.get('enable'))
         if action == 'subtitles':

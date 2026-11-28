@@ -16,7 +16,7 @@ static unsigned char *cov_orig;
  * byte until it is put back, and any other trap there meanwhile re-runs the int3 until it is (R1). */
 static volatile LONG *cov_state;
 static uint32_t *cov_order;      /* hit order */
-static volatile LONG cov_count, cov_hits;
+static volatile LONG cov_count, cov_hits, cov_reserve; /* reserve: order slots taken; hits: slots published */
 static bool cov_armed;
 
 static int cov_find(uint32_t address) {
@@ -91,8 +91,11 @@ static bool cov_on_breakpoint(EXCEPTION_POINTERS *e, LONG *result) {
     if (state == 1) {
         SEAM(1);
         cov_restore(i, true);
-        LONG n = InterlockedIncrement(&cov_hits);
+        /* (BUG-013) the slot is written before the count that publishes it; counts publish in order */
+        LONG n = InterlockedIncrement(&cov_reserve);
         cov_order[(uint32_t)(n - 1) % COV_MAX] = address;
+        MemoryBarrier();
+        while (InterlockedCompareExchange(&cov_hits, n, n - 1) != n - 1) YieldProcessor();
         InterlockedExchange(&cov_state[i], 2);
     } else if (state == 3) {
         /* Another thread (a hit or a release) owns the byte and is putting it back: run the int3 again. */
@@ -152,7 +155,15 @@ static void op_cov(int argc, char **argv) {
         cov_orig = VirtualAlloc(NULL, COV_MAX, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         cov_state = VirtualAlloc(NULL, COV_MAX * 4, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         cov_order = VirtualAlloc(NULL, COV_MAX * 4, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!cov_addr || !cov_orig || !cov_state || !cov_order) return fail("out_of_memory");
+        if (!cov_addr || !cov_orig || !cov_state || !cov_order) {
+            /* (BUG-022) all or nothing: a half-allocated set would be taken for a ready one by the next call */
+            if (cov_addr) VirtualFree(cov_addr, 0, MEM_RELEASE);
+            if (cov_orig) VirtualFree(cov_orig, 0, MEM_RELEASE);
+            if (cov_state) VirtualFree((void *)cov_state, 0, MEM_RELEASE);
+            if (cov_order) VirtualFree(cov_order, 0, MEM_RELEASE);
+            cov_addr = NULL; cov_orig = NULL; cov_state = NULL; cov_order = NULL;
+            return fail("out_of_memory");
+        }
     }
     if (argc == 3 && !strcmp(argv[1], "add")) {
         if (cov_armed) return fail("armed");
@@ -218,6 +229,7 @@ static void op_cov(int argc, char **argv) {
         if (!cov_quiesce()) return fail("busy");
         cov_count = 0;
         cov_hits = 0;
+        cov_reserve = 0;
         emit("{\"ok\":true}");
         return;
     }

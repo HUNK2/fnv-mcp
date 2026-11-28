@@ -23,6 +23,7 @@ from .esp import assets
 from .esp.codec import inflate
 from .fnv_data import DataError, NOT_FORMS, STRING_TAGS, load_order, read_record
 from .fnv_state import locked
+from .safe_paths import no_unc
 from .fnv_state import atomic_write, write_txn
 
 REFS_VERSION = 4  # 3: text-or-form tags (RNAM...) are scanned when they are not text; 4: or when the 4 bytes name a record (R9)
@@ -62,7 +63,7 @@ def scan_references(path, exists, condition_params=None):
     """[(from raw id, from type, record offset, tag, to raw id)] for a plugin. `exists(raw_id)` says whether a
     raw form id (as written in this plugin) names a record in its masters or itself."""
     data = Path(path).read_bytes()
-    if data[:4] != b'TES4':
+    if data[:4] != b'TES4' or len(data) < 24:
         raise DataError('NOT_A_PLUGIN', '%s is not a TES4 plugin' % path)
     header_size = struct.unpack_from('<I', data, 4)[0]
     out, pos, end = [], 24 + header_size, len(data)
@@ -426,7 +427,10 @@ class RecordsTools:
         entries = load_order(project, self.data._live_plugins())
         target = next((e for e in entries if e['name'].lower() == plugin.lower()), None)
         if target is None:
-            path = Path(plugin)
+            try:
+                path = no_unc(plugin, 'plugin')       # text only, before resolve() touches the path (BUG-029)
+            except ValueError as e:
+                raise DataError('BAD_PATH', str(e)) from None
             # a file outside the load order: only under the game Data folder or the dev profile's mods (T7); checked
             # before the file is looked at, so a refusal does not tell whether a path exists (X2)
             allowed = [Path(project.game_root) / 'Data']
@@ -569,7 +573,11 @@ class RecordsTools:
         backup = None
         if changes and not dry_run:
             backup = Path(project.state_dir) / 'fnv' / 'profile-backups' / time.strftime('%Y%m%d-%H%M%S')
-            backup.mkdir(parents=True, exist_ok=True)
+            serial = 1
+            while backup.exists():          # two changes in one second must not overwrite the first backup (BUG-123)
+                serial += 1
+                backup = backup.with_name('%s-%d' % (time.strftime('%Y%m%d-%H%M%S'), serial))
+            backup.mkdir(parents=True)
             for n, p in files.items():
                 if p.exists():
                     shutil.copy2(p, backup / n)
