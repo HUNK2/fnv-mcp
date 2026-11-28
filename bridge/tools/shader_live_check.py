@@ -108,19 +108,46 @@ def band_diff(a, b, box=(0, 0.3, 1, 0.82)):
     return n / float(len(pa) or 1)
 
 
-def red_tinted(path, box=(0, 0.3, 1, 0.82)):
-    """Mean red over mean green in the band: the TINT effect keeps red and cuts green and blue to 40%."""
+def band_means(path, box=(0, 0.3, 1, 0.82)):
+    """Mean red, green and blue of the band."""
     from PIL import Image
     im = Image.open(path).convert('RGB')
     w, h = im.size
     px = list(im.crop((int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))).getdata())
-    r = sum(p[0] for p in px) / float(len(px))
-    g = sum(p[1] for p in px) / float(len(px))
+    return tuple(sum(p[i] for p in px) / float(len(px)) for i in range(3))
+
+
+def red_tinted(path, box=(0, 0.3, 1, 0.82)):
+    """Mean red over mean green in the band: the TINT effect keeps red and cuts green and blue to 40%."""
+    r, g, _b = band_means(path, box)
     return r / (g or 1)
+
+
+def red_correlation(a, b, box=(0, 0.45, 1, 0.82)):
+    """Pearson correlation of the red channel of two pictures below the sky (64 x 24 samples). TINT keeps red, so
+    the tinted view correlates with the plain one; an inverted view correlates negatively."""
+    from PIL import Image
+    chans = []
+    for path in (a, b):
+        im = Image.open(path).convert('RGB')
+        w, h = im.size
+        im = im.crop((int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))).resize((64, 24))
+        chans.append([p[0] for p in im.getdata()])
+    x, y = chans
+    mx, my = sum(x) / len(x), sum(y) / len(y)
+    sxy = sum((u - mx) * (v - my) for u, v in zip(x, y))
+    sx = sum((u - mx) ** 2 for u in x) ** 0.5
+    sy = sum((v - my) ** 2 for v in y) ** 0.5
+    return sxy / (sx * sy) if sx and sy else 0.0
 
 
 def magenta(p):
     return p[0] > 180 and p[2] > 180 and p[1] < 90
+
+
+def tinted_magenta(p):
+    """Magenta (1, 0, 1) under the TINT effect: (1, 0, 0.4)."""
+    return p[0] > 180 and p[1] < 60 and 50 < p[2] < 160
 
 
 def hud_on_top(hud_on, hud_off):
@@ -259,18 +286,24 @@ def run_export(c, base_abs, start):
         time.sleep(5)
         unpaused(c)
         mods = c.ok('fnv_native', {'action': 'list'})
-        loaded = json.dumps(mods)
+        # loaded modules only: the built-DLL list always names fnvmcp_shaderfx
+        loaded = [m.get('name', '') for m in mods.get('modules') or []]
         now = c.photo()
         now_abs = str(abs_path(s, now))
         ratio = red_tinted(now_abs)
-        mt = fraction(now_abs, magenta, (0, 0, 1, 0.25))
-        c.record('the exported plugin draws the tint effect without fnvmcp_shaderfx',
-                 'fnvmcp_shaderfx' not in loaded and ratio > 1.8, redOverGreen=round(ratio, 2), picture=now)
-        c.record('the exported Shaders folder draws the magenta sky', mt > 0.3, magentaTop=round(mt, 3))
+        corr = red_correlation(base_abs, now_abs) if base_abs and Path(base_abs).is_file() else None
+        mt = fraction(now_abs, tinted_magenta, (0, 0, 1, 0.25))
+        # only TINT is baked (invert was removed live): red follows the plain view; an inverted one would not
+        c.record('the exported plugin draws only the tint effect, without fnvmcp_shaderfx loaded',
+                 not any(n.startswith('fnvmcp_shaderfx') for n in loaded) and ratio > 1.8
+                 and (corr is None or corr > 0.5), redOverGreen=round(ratio, 2),
+                 redCorrelation=None if corr is None else round(corr, 2), baseline=base_abs, loaded=loaded,
+                 picture=now)
+        c.record('the exported Shaders folder draws the magenta sky (tinted)', mt > 0.3, magentaTop=round(mt, 3))
     finally:
         fnv = s.project.fnv
         if getattr(fnv, 'mo2_root', None):
-            for mod in ('fnvmcp shaders livecheck', 'fnvmcp_shaders_livecheck'):
+            for mod in ('fnvmcp shaders livecheck', 'fnvmcp plugin fnvmcp_shaders_livecheck'):
                 try:
                     disable_mod(fnv.mo2_root, fnv.mo2_profile, mod)
                 except Exception as e:  # noqa: BLE001 - cleanup reports, never hides the results
@@ -306,7 +339,12 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     c = Check(session, out)
     try:
-        base = None if a.export_only else run_live(c)
+        keep = out / 'baseline.txt'      # the plain view of the last full run, for --export-only
+        if a.export_only:
+            base = keep.read_text(encoding='utf-8').strip() if keep.is_file() else None
+        else:
+            base = run_live(c)
+            keep.write_text(base, encoding='utf-8')
         if not a.skip_export:
             run_export(c, base, a.start)
     except Exception as e:  # noqa: BLE001 - a crash in the run is a failed check
