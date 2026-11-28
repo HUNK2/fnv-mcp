@@ -37,7 +37,7 @@ class Export(Replace):
         self.plugins.build.side_effect = self.fake_build
         self.plugins.install.return_value = {'summary': 'installed'}
         self.tools.plugins = self.plugins
-        self.live.game.process.return_value = None
+        self.live.game.process.return_value = {'pid': 1}      # the game runs; install tests quit it first
         self.root = Path(self.tmp.name)
 
     def fake_build(self, name, source=None, hooks=None):
@@ -118,6 +118,7 @@ class PackageExport(Export):
     def test_direct_install_never_writes_game_folder(self):
         self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
         before = self.tree(self.game)
+        self.live.game.process.return_value = None            # install needs the game closed
         out = self.tools.export(install=True)
         self.assertEqual(self.tree(self.game), before)
         self.assertTrue(out['installed'] is False)
@@ -130,6 +131,7 @@ class PackageExport(Export):
         (mo2 / 'profiles' / 'dev' / 'modlist.txt').write_text('# header\n+other\n', encoding='utf-8')
         self.live.game.layout.return_value = self.layout(kind=MO2, mo2_root=mo2, profile='dev')
         self.tools.replace('SKYTEST.pso', OK_SRC, photo=False)
+        self.live.game.process.return_value = None            # install needs the game closed
         out = self.tools.export(set='film', install=True)
         mod = mo2 / 'mods' / 'fnvmcp shaders film' / 'Shaders' / 'shaderpackage003.sdp'
         self.assertTrue(mod.exists())
@@ -195,6 +197,7 @@ class EffectExport(Export):
 
     def test_plugin_install(self):
         self.tools.effect_add('tint', TINT, photo=False)
+        self.live.game.process.return_value = None            # install needs the game closed
         out = self.tools.export(set='film', install=True)
         self.plugins.install.assert_called_once_with('fnvmcp_shaders_film')
         self.assertTrue(out['installed'])
@@ -228,6 +231,7 @@ class PluginBuildErrors(Export):
     def test_install_failure_leaks_no_user_path(self):
         self.plugins.install.side_effect = ConvError('NOT_BUILT', 'missing C:/' + 'Users/Some Name/x.dll')
         self.tools.effect_add('tint', TINT, photo=False)
+        self.live.game.process.return_value = None            # install needs the game closed
         with self.assertRaises(ConvError) as cm:
             self.tools.export(install=True)
         self.assertNotIn('Some Name', str(cm.exception))

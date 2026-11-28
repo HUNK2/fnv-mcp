@@ -568,10 +568,15 @@ static Swap *find_swap(uint32_t obj, uint32_t off, uint32_t live) {
  * swapped keep the hash, size and version of the original. Returns the number of objects. */
 FNVMCP_EXPORT int sfx_scan(void) {
     MEMORY_BASIC_INFORMATION mi;
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);       /* the top of the address space: 2 GB, or 4 GB for a large-address-aware exe */
+    uintptr_t top = (uintptr_t)si.lpMaximumApplicationAddress;
     EnterCriticalSection(&g_cs);
     g_nrow = 0;
-    for (uintptr_t a = 0x10000; a < 0x7FFF0000 && VirtualQuery((void *)a, &mi, sizeof mi);
-         a = (uintptr_t)mi.BaseAddress + mi.RegionSize) {
+    for (uintptr_t a = 0x10000; a <= top && VirtualQuery((void *)a, &mi, sizeof mi); ) {
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= a) break;                                  /* wrapped past 4 GB */
+        a = next;
         if (mi.State != MEM_COMMIT || (mi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) continue;
         if (!(mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE))) continue;
         uint32_t *p = (uint32_t *)mi.BaseAddress, *e = (uint32_t *)((char *)mi.BaseAddress + mi.RegionSize);

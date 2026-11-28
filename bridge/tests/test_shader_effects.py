@@ -69,6 +69,10 @@ class FakeNative:
     def exports(self):
         return [c[0] for c in self.calls]
 
+    def sent(self):
+        """The calls that change the module: the per-call sfx_effect_state check of the manifest is left out."""
+        return [c for c in self.calls if c[0] != 'sfx_effect_state']
+
 
 class Harness(unittest.TestCase):
     def setUp(self):
@@ -148,7 +152,7 @@ class EffectTests(Harness):
         self.tools.effect_add('x', TINTED, photo=False)
         self.native.calls.clear()
         self.tools.effect_set('x', params={'tint': [1, 0.5, 0]}, photo=False)
-        self.assertEqual(self.native.calls[0], ('sfx_effect_param', [0, 2, 1.0, 0.5, 0.0, 0.0]))
+        self.assertEqual(self.native.sent()[0], ('sfx_effect_param', [0, 2, 1.0, 0.5, 0.0, 0.0]))
         self.assertEqual(self.manifest()['effects']['x']['params']['tint'], [1.0, 0.5, 0.0, 0.0])
 
     def test_unset_param_uses_ctab_default_else_zero(self):
@@ -161,8 +165,8 @@ class EffectTests(Harness):
         self.assertEqual(out['paramsNotSet'], ['bare'])
         self.native.calls.clear()
         self.tools.effect_set('d', params={'bare': 1}, photo=False)        # only the named param is sent
-        self.assertEqual(self.native.calls[0], ('sfx_effect_param', [0, 3, 1.0, 0.0, 0.0, 0.0]))
-        self.assertEqual([c for c in self.native.calls if c[0] == 'sfx_effect_param'], [self.native.calls[0]])
+        self.assertEqual(self.native.sent()[0], ('sfx_effect_param', [0, 3, 1.0, 0.0, 0.0, 0.0]))
+        self.assertEqual([c for c in self.native.calls if c[0] == 'sfx_effect_param'], [self.native.sent()[0]])
 
     def test_scalar_param_becomes_x(self):
         self.tools.effect_add('x', TINTED, params={'tint': 2}, photo=False)
@@ -180,7 +184,7 @@ class EffectTests(Harness):
             self.assertIn('c2', str(cm.exception))
         with self.assertRaises(ConvError):
             self.tools.effect_add('y', TINTED, params={'nope': 1}, photo=False)
-        self.assertEqual(self.native.calls, [])
+        self.assertEqual(self.native.sent(), [])
         self.live.journal.add.assert_not_called()
 
     def test_ninth_effect_refused(self):

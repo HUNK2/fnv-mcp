@@ -13,6 +13,8 @@ import re
 import json
 import struct
 import difflib
+import functools
+import threading
 import fnmatch
 import math
 import shutil
@@ -75,12 +77,22 @@ def _rel(path, base):
         return p.name
 
 
+def _serial(method):
+    """Hold the tool's lock from the manifest read to its write: parallel calls take turns (the file lock inside
+    state() is for other processes)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class ShaderTools:
     def __init__(self, live, native, plugins=None):
         self.live = live
         self.native = native
         self.plugins = plugins      # PluginTools, made on the first export that builds a plugin
-        self._verified = None       # the game key whose manifest effects were checked against the module
+        self._lock = threading.RLock()   # one manifest read-modify-write at a time in this process
         self._pkg = None            # (key, mtime, Package): the package in use for one game session
         self._scanned = None        # (game key, rows): the engine shader objects of one game session
 
@@ -121,7 +133,13 @@ class ShaderTools:
         write_json(self.manifest_path, m, indent=1)
 
     def _identity(self):
-        return GameIdentity.parse(self.live.game_identity())
+        """The running game, or None: no process (the pipe is not pinged then) or a pipe that does not answer."""
+        try:
+            if not self.live.game.process(fresh=True):
+                return None
+            return GameIdentity.parse(self.live.game_identity())
+        except LiveError:
+            return None
 
     def _c(self, export, *args):
         """One module export; its integer result."""
@@ -145,7 +163,7 @@ class ShaderTools:
                 m['savedReplacements'].update(m['replacements'])   # the swaps died with that game; export keeps them
                 m['replacements'] = {}
                 m['game'] = here.as_dict()
-            elif (m['effects'] or m['replacements']) and self._verified != here.key():
+            elif m['effects'] or m['replacements']:       # every call: the module may have been unloaded or reloaded
                 loaded = self.native.is_loaded(MODULE)
                 if m['replacements'] and not loaded:
                     m['savedReplacements'].update(m['replacements'])
@@ -155,10 +173,21 @@ class ShaderTools:
                     if not loaded or not self._c('sfx_effect_state', m['effects'][name]['slot']) & 1:
                         m['saved'][name] = m['effects'].pop(name)
                         changed = True
-            self._verified = here.key()
             if changed:
                 self._write(m)
             return m, True
+
+    def _park(self, m, known):
+        """With no game the live entries are only saved ones: move them to `saved` / `savedReplacements`, as state()
+        does for another game. The caller holds the lock; the manifest is written when it changed."""
+        if known or not (m['effects'] or m['replacements']):
+            return m
+        m['saved'].update(m['effects'])
+        m['effects'] = {}
+        m['savedReplacements'].update(m['replacements'])
+        m['replacements'] = {}
+        self._write(m)
+        return m
 
     # ------------------------------------------------------------------ params
     @staticmethod
@@ -276,6 +305,7 @@ class ShaderTools:
         return out
 
     # ------------------------------------------------------------------ actions
+    @_serial
     def effect_add(self, name, source, order=None, params=None, photo=True):
         if not isinstance(name, str) or not NAME_RE.match(name) or name == 'all':
             raise ConvError('BAD_NAME', 'name is 1-40 letters, digits, _ . - (and not "all"); got %r.' % (name,))
@@ -339,6 +369,7 @@ class ShaderTools:
             out['note'] = 'params with no default start at zero: %s' % ', '.join(unset)
         return out
 
+    @_serial
     def effect_set(self, name, params=None, order=None, enabled=None, photo=True):
         self.live.ready()
         m, live_game = self.state()
@@ -393,10 +424,12 @@ class ShaderTools:
                           'unloaded): effect_add them again.'
         return out
 
+    @_serial
     def effect_remove(self, name, photo=True):
         """Drop an effect from the running game and the saved copy export would bake. A saved-only effect needs no
         game: it is dropped from the manifest and undo puts it back into `saved`."""
-        m, _ = self.state()
+        m, known = self.state()
+        m = self._park(m, known)
         every = name == 'all'
         if m['effects'] and (every or name in m['effects']):
             self.live.ready()
@@ -442,6 +475,7 @@ class ShaderTools:
         return out
 
     # ------------------------------------------------------------------ undo (called by the ops in fnv_live)
+    @_serial
     def undo_add(self, name):
         """Undo of an add: free the slot. {'undone': False, 'reason'} when the game restarted or the effect is gone."""
         m, known = self.state()
@@ -455,6 +489,7 @@ class ShaderTools:
         self._write(m)
         return None
 
+    @_serial
     def undo_remove(self, rid):
         """Undo of a remove: put the effect back from the manifest entry `rid`."""
         m, known = self.state()
@@ -492,6 +527,7 @@ class ShaderTools:
         self._write(m)
         return None
 
+    @_serial
     def undo_params(self, name, params, order, enabled):
         m, known = self.state()
         e = m['effects'].get(name)
@@ -736,8 +772,15 @@ class ShaderTools:
 
     @staticmethod
     def _find(m, name):
-        return next(((k, e) for k, e in m['replacements'].items() if name in e['names']), (None, None))
+        return ShaderTools._named(m['replacements'], name)
 
+    @staticmethod
+    def _named(entries, name):
+        """(key, entry) of the replacement holding the shader `name` (case does not matter), else (None, None)."""
+        low = str(name).lower()
+        return next(((k, e) for k, e in entries.items() if any(n.lower() == low for n in e['names'])), (None, None))
+
+    @_serial
     def replace(self, name, source, photo=True):
         if not isinstance(source, str) or not source.strip():
             raise ConvError('NO_SOURCE', 'source is the HLSL text of the replacement (action template gives a '
@@ -798,7 +841,9 @@ class ShaderTools:
         self._journal('replace', name, {'op': 'shader_restore', 'name': name, 'prior': prior_id}, objects=n)
         frame_after = self._frame_ms()
         after, note2 = self._look(photo and before is not None, before['path'] if before else None)
-        out = verdict('%s replaced in %d shader objects' % (name, n), 'Undo restores the engine code.', names=names,
+        out = verdict('%s replaced in %d shader objects' % (name, n), 'Undo restores the engine code. Only the shader objects that exist now were '
+                      'swapped: one the engine creates later keeps the vanilla code until replace runs again or the '
+                      'export is installed.', names=names,
                       objects=n, warnings=warnings or None, frameMs={'before': frame_before, 'after': frame_after},
                       source=entry['source_file'], **self._pictures(before, after))
         out.setdefault('before', None)
@@ -807,10 +852,12 @@ class ShaderTools:
         out['note'] = note or note2
         return out
 
+    @_serial
     def restore(self, name):
         """Put engine shaders back and drop the saved replacements export would bake. A saved-only replacement needs
         no game: undo puts it back into `savedReplacements`."""
-        m, _ = self.state()
+        m, known = self.state()
+        m = self._park(m, known)
         every = name == 'all'
         if m['replacements'] and (every or self._find(m, name)[0] is not None):
             self.live.ready()
@@ -820,7 +867,7 @@ class ShaderTools:
             saved_keys = list(m['savedReplacements'])
         else:
             key, _e = self._find(m, name)
-            skey = next((k for k, e in m['savedReplacements'].items() if name in e['names']), None)
+            skey = self._named(m['savedReplacements'], name)[0]
             keys = [key] if key is not None else []
             saved_keys = [skey] if skey is not None else []
             if not keys and not saved_keys:
@@ -861,6 +908,7 @@ class ShaderTools:
                        'Undo puts the replacement back.', restored=names, savedDropped=dropped)
 
     # ------------------------------------------------------------------ undo (called by the ops in fnv_live)
+    @_serial
     def undo_replace(self, name, prior):
         """Undo of a replace: back to the engine code, or to the replacement it had replaced (`prior`)."""
         m, known = self.state()
@@ -884,6 +932,7 @@ class ShaderTools:
         self._write(m)
         return None
 
+    @_serial
     def undo_restore(self, rid):
         """Undo of a restore: swap the saved replacement back in."""
         m, known = self.state()
@@ -1136,10 +1185,10 @@ class ShaderTools:
             package = {'file': pkg.file, 'guessed': bool(pkg.guessed)}
         except Exception:  # noqa: BLE001 - no package found: status still answers
             package = None
-        effects = len(m['effects'])
+        effects, replacements = (len(m['effects']), len(m['replacements'])) if known else (0, 0)
         out = verdict('Shader module %s, %d live effect(s), %d replacement(s)'
-                      % ('loaded' if loaded else 'not loaded', effects, len(m['replacements'])), None,
-                      module=loaded, effects=effects, replacements=len(m['replacements']), package=package,
+                      % ('loaded' if loaded else 'not loaded', effects, replacements), None,
+                      module=loaded, effects=effects, replacements=replacements, package=package,
                       renderer=renderer, inMenu=self._in_menu() if known else None, costUs=cost,
                       warnings=warnings)
         out['note'] = 'Effects do not draw in menus or the pause menu (inMenu says whether one is open).'

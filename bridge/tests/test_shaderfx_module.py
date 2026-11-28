@@ -89,6 +89,13 @@ class ShaderfxModuleTests(unittest.TestCase):
         self.assertTrue(result['ok'], result['errors'])
         self.assertEqual(embedded, result['bytecode'])
 
+    def test_scan_reaches_the_top_of_the_address_space(self):
+        body = function_body(self.text, 'int sfx_scan(void)')
+        self.assertNotIn('0x7FFF0000', body)                  # a large-address-aware exe reaches 4 GB
+        self.assertIn('GetSystemInfo', body)
+        self.assertIn('lpMaximumApplicationAddress', body)
+        self.assertIn('VirtualQuery', body)
+
     def test_builds_with_zig(self):
         try:
             find_zig(None)

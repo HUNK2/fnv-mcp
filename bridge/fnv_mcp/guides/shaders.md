@@ -55,6 +55,8 @@ HUD), or a swap of one of the engine's own pixel shaders. Everything runs throug
 - Limits: no depth input, no per-object shaders, at most 8 effects.
 - A game restart ends all live effects and replacements; the sources stay saved and `export` still offers them.
 - A replacement must be a drop-in for the original (same inputs and constants): start from `template name=...`.
+- `replace` swaps the engine shader objects that exist at the time of the call. An object the engine creates later
+  keeps the vanilla code until `replace` runs again or the export's packages are installed.
 
 ## Checks that prove the fix
 
