@@ -933,7 +933,7 @@ Example:
 
 **Kind:** act · **Toolset:** game
 
-HLSL shaders in the running game (fnv_guide topic shaders). compile source: errors, version, constants, never the bytes. template [name]: a starting source. effect_add name source: a ps_3_0 screen effect drawn under the HUD (s0 scene, s1 HDR scene, c0 time s, frame delta s, width, height, c1 1/width, 1/height, frame, 0, params at c2 up); effect_set, effect_list, effect_remove. At most 8 effects, no depth, no per-object shaders, nothing in menus. engine_list, engine_show [disasm: game content, never save it], replace, restore (all) work on the engine's own shaders. The module patches 0x00B55AD6: an installed exported plugin (fnvmcp_shaders_<set>) makes effect_add fail with CALL_SITE_TAKEN. status; export [set] [install]. Changes are journaled: fnv_undo.
+HLSL shaders and screen effects (guide: shaders).
 
 **Actions:**
 
@@ -952,18 +952,18 @@ HLSL shaders in the running game (fnv_guide topic shaders). compile source: erro
 
 | Parameter | Type | Allowed | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `action` | string | `compile`, `engine_list`, `engine_show`, `template`, `effect_add`, `effect_set`, `effect_list`, `effect_remove`, `replace`, `restore`, `status`, `export` | required | compile, engine_list, engine_show, template, effect_add, effect_set, effect_list, effect_remove, replace, restore, status or export. |
-| `source` | string | up to 100000 characters |  | HLSL text. compile: any profile; effect_add: a ps_3_0 pixel shader; replace: a drop-in for the engine shader (see template). #include is refused. |
-| `profile` | string | `ps_3_0`, `ps_2_0`, `ps_2_a`, `ps_2_b`, `vs_3_0`, `vs_2_0` |  | For compile: target profile. Default ps_3_0. |
-| `name` | string | up to 80 characters |  | effect_*: the effect name (letters, digits, _ . -). engine_show, replace, restore (or all), template: an engine shader name. |
-| `filter` | string | up to 80 characters |  | For engine_list: part of a name, or a pattern with * or ?. |
-| `order` | integer | 0 to 1000 |  | For effect_add and effect_set: draw order, lowest first. |
-| `enabled` | boolean |  |  | For effect_set: turn the effect on or off. |
-| `params` | object |  |  | For effect_add and effect_set: {name: number or up to 4 numbers} for the float4 constants at c2 and up. Unset ones use their HLSL default. |
-| `disasm` | boolean |  | `false` | For engine_show: add the disassembly. Game content: never save or publish it. |
-| `install` | boolean |  | `false` | For export: copy the plugin and packages into the mod profile (the game must be closed). |
-| `set` | string | up to 40 characters |  | For export: save the live state under this name in sets/ and export it. Left out: the live state. |
-| `photo` | boolean |  | `true` | For effect_add, effect_set, effect_remove, replace: take before and after pictures (skipped in menus). Default true. |
+| `action` | string | `compile`, `engine_list`, `engine_show`, `template`, `effect_add`, `effect_set`, `effect_list`, `effect_remove`, `replace`, `restore`, `status`, `export` | required | See guide shaders. |
+| `source` | string |  |  | HLSL text. |
+| `profile` | string |  |  | For compile. Default ps_3_0. |
+| `name` | string |  |  | Effect or engine shader name. |
+| `filter` | string |  |  | For engine_list. |
+| `order` | integer |  |  | Effect draw order. |
+| `enabled` | boolean |  |  | Effect on or off. |
+| `params` | object |  |  | Effect constants {name: numbers}. |
+| `disasm` | boolean |  | `false` | Add disassembly (game content). |
+| `install` | boolean |  | `false` | Copy into the profile. |
+| `set` | string |  |  | Save and export under this name. |
+| `photo` | boolean |  | `true` | Take pictures. Default true. |
 
 Example:
 

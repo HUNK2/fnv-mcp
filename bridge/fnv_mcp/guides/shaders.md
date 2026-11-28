@@ -19,6 +19,17 @@ HUD), or a swap of one of the engine's own pixel shaders. Everything runs throug
 6. **Export.** `export set=<name>` saves the state as a set and builds an xNVSE plugin (`fnvmcp_shaders_<set>`) and
    patched shader packages; `install=true` copies them into the mod profile (the game must be closed).
 
+## Parameters
+
+- `source`: HLSL text (no `#include`). `compile` takes any `profile` (default ps_3_0); `effect_add` needs a ps_3_0
+  pixel shader; `replace` needs a drop-in for the engine shader (`template name=...`).
+- `name`: the effect name (1-40 letters, digits, `_ . -`) for `effect_*`; an engine shader name for `engine_show`,
+  `replace`, `restore` (`all` restores every one) and `template`.
+- `params`: `{name: number or up to 4 numbers}` for the float4 constants at c2 and up. `order`: draw order, lowest
+  first. `enabled`: effect on or off. `filter` (`engine_list`): part of a name, or a pattern with `*` or `?`.
+- `disasm` (`engine_show`): adds the disassembly. `photo`: before and after pictures (default true).
+- `export`: `set` saves the live state under that name and exports it; `install` copies into the mod profile.
+
 ## What the answers mean
 
 - Effect registers: `s0` is the scene, `s1` the HDR scene (black when the game has none this frame, `status`

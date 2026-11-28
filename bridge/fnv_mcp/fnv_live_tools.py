@@ -2192,25 +2192,18 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_shader(action: Literal['compile', 'engine_list', 'engine_show', 'template', 'effect_add',
                                          'effect_set', 'effect_list', 'effect_remove', 'replace', 'restore',
                                          'status', 'export'],
-                         source: Annotated[str, Field(max_length=100000)] | None = None,
-                         profile: Literal['ps_3_0', 'ps_2_0', 'ps_2_a', 'ps_2_b', 'vs_3_0', 'vs_2_0'] | None = None,
-                         name: Annotated[str, Field(max_length=80)] | None = None,
-                         filter: Annotated[str, Field(max_length=80)] | None = None,
-                         order: Annotated[int, Field(ge=0, le=1000)] | None = None,
+                         source: str | None = None,
+                         profile: str | None = None,
+                         name: str | None = None,
+                         filter: str | None = None,
+                         order: int | None = None,
                          enabled: bool | None = None,
-                         params: dict[str, float | list[float]] | None = None,
+                         params: dict[str, Any] | None = None,
                          disasm: bool = False,
                          install: bool = False,
-                         set: Annotated[str, Field(max_length=40)] | None = None,
+                         set: str | None = None,
                          photo: bool = True) -> result_type:
-        """HLSL shaders in the running game (fnv_guide topic shaders). compile source: errors, version, constants,
-        never the bytes. template [name]: a starting source. effect_add name source: a ps_3_0 screen effect drawn
-        under the HUD (s0 scene, s1 HDR scene, c0 time s, frame delta s, width, height, c1 1/width, 1/height, frame,
-        0, params at c2 up); effect_set, effect_list, effect_remove. At most 8 effects, no depth, no per-object
-        shaders, nothing in menus. engine_list, engine_show [disasm: game content, never save it], replace, restore
-        (all) work on the engine's own shaders. The module patches 0x00B55AD6: an installed exported plugin
-        (fnvmcp_shaders_<set>) makes effect_add fail with CALL_SITE_TAKEN. status; export [set] [install]. Changes
-        are journaled: fnv_undo."""
+        """HLSL shaders and screen effects (guide: shaders)."""
         return await invoke('fnv_shader', lambda: shader_tools.run(
             action, source=source, profile=profile, name=name, filter=filter, order=order, enabled=enabled,
             params=params, disasm=disasm or None, install=install or None, set=set, photo=photo),

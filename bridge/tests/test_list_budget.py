@@ -24,7 +24,7 @@ from fnv_mcp.server import make_server, toolset_list  # noqa: E402
 from fnv_mcp.toolsets import ALWAYS, CORE_TOOLS, registered  # noqa: E402
 
 BEFORE = 231716          # characters at dc21098, the start of the tool quality pass
-BUDGET = 222800          # 222,636 with fnv_shader (12 actions, 11 parameters, all described; 139 tools), plus a little headroom
+BUDGET = 220900          # was 219500 (217,593 measured, plus 1%); fnv_shader (12 actions, 11 parameters, minimal descriptions, detail in the guide) measures 220,833
 CORE_BUDGET = 55800      # the core list of 29: 55,248 measured 2026-11-21 (six engine-loop tools added), about 13,900 tokens
 
 
@@ -47,7 +47,7 @@ class ListBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_whole_list_stays_within_budget(self):
         tools = await self.tools()
         size = listing_size(tools)
-        self.assertLess(BUDGET, BEFORE * 0.97)                     # the list stays at least 3% under the start (was 5% until fnv_shader, 2026-11-28)
+        self.assertLess(BUDGET, BEFORE * 0.955)                     # the list stays at least 4.5% under the start (5% until fnv_shader: its schema alone does not fit)
         self.assertLessEqual(size, BUDGET, 'the tool list grew to %d characters' % size)
 
     async def test_no_annotation_value_equals_the_mcp_default(self):
