@@ -2192,16 +2192,16 @@ def register(server, project, annotations, result_type, maintain=False, offline=
     async def fnv_shader(action: Literal['compile', 'engine_list', 'engine_show', 'template', 'effect_add',
                                          'effect_set', 'effect_list', 'effect_remove', 'replace', 'restore',
                                          'status', 'export'],
-                         source: str | None = None,
-                         profile: str | None = None,
-                         name: str | None = None,
-                         filter: str | None = None,
-                         order: int | None = None,
+                         source: Annotated[str, Field(max_length=100000)] | None = None,
+                         profile: Literal['ps_3_0', 'ps_2_0', 'ps_2_a', 'ps_2_b', 'vs_3_0', 'vs_2_0'] | None = None,
+                         name: Annotated[str, Field(max_length=80)] | None = None,
+                         filter: Annotated[str, Field(max_length=80)] | None = None,
+                         order: Annotated[int, Field(ge=0, le=1000)] | None = None,
                          enabled: bool | None = None,
-                         params: dict[str, Any] | None = None,
+                         params: dict[str, float | list[float]] | None = None,
                          disasm: bool = False,
                          install: bool = False,
-                         set: str | None = None,
+                         set: Annotated[str, Field(max_length=40)] | None = None,
                          photo: bool = True) -> result_type:
         """HLSL shaders and screen effects (guide: shaders)."""
         return await invoke('fnv_shader', lambda: shader_tools.run(
